@@ -1,4 +1,4 @@
-"""入口：默认 RandomBot 整场；--ai 进入 Gemini 交互模式（单步/连续/暂停）。"""
+"""入口：默认 RandomBot 整场；--ai 进入 AI 交互模式（单步/连续/暂停），每玩家独立模型。"""
 
 from __future__ import annotations
 
@@ -208,15 +208,20 @@ def run_bots(seed) -> None:
 def run_ai() -> None:
     config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     llm_config = config.get("llm", {})
-    try:
-        chat_fn = make_chat_fn(
-            base_url=llm_config.get("base_url", "https://generativelanguage.googleapis.com/v1beta/openai/"),
-            model=llm_config.get("model", "gemini-flash-lite-latest"),
-            timeout=llm_config.get("timeout_seconds", 60),
-        )
-    except MissingApiKeyError as exc:
-        print(f"错误：{exc}")
-        return
+    timeout = llm_config.get("timeout_seconds", 60)
+
+    player_configs = config["players"]
+    all_names = [pc["name"] for pc in player_configs]
+
+    chat_fns = {}
+    for pc in player_configs:
+        try:
+            chat_fns[pc["name"]] = make_chat_fn(
+                provider=pc["provider"], model=pc["model"], timeout=timeout
+            )
+        except (MissingApiKeyError, ValueError) as exc:
+            print(f"错误：玩家 {pc['name']} 的 LLM 配置不可用：{exc}")
+            return
 
     run_dir = make_run_dir("ai")
     controller = Controller(mode="step")
@@ -226,19 +231,19 @@ def run_ai() -> None:
         controller.request_pause(detail)
         raise RoundAborted(detail)
 
-    player_configs = config["players"]
-    all_names = [pc["name"] for pc in player_configs]
     players = [
         AIPlayer(
             name=pc["name"],
             persona=pc["persona"],
             all_names=all_names,
-            chat_fn=chat_fn,
+            chat_fn=chat_fns[pc["name"]],
             log_path=run_dir / f"ai_{pc['name']}.jsonl",
             on_double_error=pause_on_double_error,
         )
         for pc in player_configs
     ]
+    for pc in player_configs:
+        print(f"{pc['name']}: {pc['provider']} / {pc['model']}")
 
     controller.start_stdin_reader()
     print("命令：回车=单步推进一次对话 / c=连续模式 / s=单步模式 / p=暂停并回滚本轮 / q=中止比赛")
@@ -278,7 +283,7 @@ def run_ai() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="唯一高价拍卖游戏")
     parser.add_argument("--seed", type=int, default=None, help="随机种子（仅 Bot 模式），用于复现对局")
-    parser.add_argument("--ai", action="store_true", help="AI 模式：读取 config.yaml 人设，走 Gemini")
+    parser.add_argument("--ai", action="store_true", help="AI 模式：读取 config.yaml，每玩家走各自的 provider/model")
     args = parser.parse_args()
 
     if args.ai:

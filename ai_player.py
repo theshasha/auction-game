@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import prompts
-from llm_client import ChatReply
 from models import Observation
 from players import Player
 
@@ -33,7 +32,7 @@ class AIPlayer(Player):
         name: str,
         persona: str,
         all_names: list[str],
-        chat_fn: Callable[[list[dict]], ChatReply],
+        chat_fn: Callable[[list[dict]], str],
         log_path: Optional[Path] = None,
         on_double_error: Optional[Callable[[str], None]] = None,
     ):
@@ -62,22 +61,15 @@ class AIPlayer(Player):
         with self.log_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    def _call(self, user_text: str, phase: str) -> ChatReply:
-        """追加一条 user 消息并调用 LLM，assistant 正文进对话线，思考内容只落日志。"""
+    def _call(self, user_text: str, phase: str) -> str:
+        """追加一条 user 消息并调用 LLM，assistant 正文进对话线。"""
         self.messages.append({"role": "user", "content": user_text})
-        reply = self.chat_fn(self.messages)
-        self.messages.append({"role": "assistant", "content": reply.content})
-        self._write_log(
-            {
-                "phase": phase,
-                "user": user_text,
-                "content": reply.content,
-                "reasoning_content": reply.reasoning_content,
-            }
-        )
-        return reply
+        content = self.chat_fn(self.messages)
+        self.messages.append({"role": "assistant", "content": content})
+        self._write_log({"phase": phase, "user": user_text, "content": content})
+        return content
 
-    def _guarded_call(self, user_text: str, phase: str) -> Optional[ChatReply]:
+    def _guarded_call(self, user_text: str, phase: str) -> Optional[str]:
         """调用 LLM，失败立即重试 1 次（重试前回滚未应答的 user 消息）。
 
         连续两次失败：配置了 on_double_error 钩子则交给钩子（预期抛暂停异常，
@@ -116,19 +108,19 @@ class AIPlayer(Player):
         return data["bid"]
 
     def decide_bid(self, obs: Observation) -> int:
-        reply = self._guarded_call(prompts.bid_request(obs), "bid")
-        if reply is None:  # 无钩子时双失败的兜底：按规则视为出价 0
+        content = self._guarded_call(prompts.bid_request(obs), "bid")
+        if content is None:  # 无钩子时双失败的兜底：按规则视为出价 0
             self._write_log({"phase": "bid", "result": 0, "fallback": "double_error"})
             return 0
 
-        bid = self.parse_bid(reply.content)
+        bid = self.parse_bid(content)
         if bid is PARSE_FAILED:
             # 模型输出格式问题（非基础设施故障）：按规则重试 1 次，仍失败记 0
-            retry_reply = self._guarded_call(prompts.retry_bid_request(), "bid_retry")
-            if retry_reply is None:
+            retry_content = self._guarded_call(prompts.retry_bid_request(), "bid_retry")
+            if retry_content is None:
                 self._write_log({"phase": "bid", "result": 0, "fallback": "double_error"})
                 return 0
-            bid = self.parse_bid(retry_reply.content)
+            bid = self.parse_bid(retry_content)
             if bid is PARSE_FAILED:
                 self._write_log({"phase": "bid", "parse_failed": True, "result": 0})
                 return 0
@@ -141,11 +133,11 @@ class AIPlayer(Player):
 
     def give_speech(self, user_text: str, phase: str) -> Optional[str]:
         """发言：正文截断 500 字，完整进对话线（公开信息）。双失败兜底视为放弃。"""
-        reply = self._guarded_call(user_text, phase)
-        if reply is None:
+        content = self._guarded_call(user_text, phase)
+        if content is None:
             self._write_log({"phase": phase, "absent": True})
             return None
-        speech = reply.content.strip()
+        speech = content.strip()
         truncated = len(speech) > SPEECH_LIMIT
         if truncated:
             self._write_log({"phase": phase, "truncated": True, "original_length": len(speech)})
@@ -161,7 +153,7 @@ class AIPlayer(Player):
         last_error: Optional[Exception] = None
         for attempt in (1, 2):
             try:
-                reply = self.chat_fn(self.messages + [{"role": "user", "content": user_text}])
+                content = self.chat_fn(self.messages + [{"role": "user", "content": user_text}])
                 break
             except Exception as exc:
                 last_error = exc
@@ -174,12 +166,5 @@ class AIPlayer(Player):
                 self.on_double_error(detail)  # 预期抛出暂停异常
             self._write_log({"phase": "final_summary", "absent": True})
             return None
-        self._write_log(
-            {
-                "phase": "final_summary",
-                "user": user_text,
-                "content": reply.content,
-                "reasoning_content": reply.reasoning_content,
-            }
-        )
-        return reply.content.strip()[:SPEECH_LIMIT]
+        self._write_log({"phase": "final_summary", "user": user_text, "content": content})
+        return content.strip()[:SPEECH_LIMIT]

@@ -1,20 +1,31 @@
-# LLM 接入配置：base_url / model 可在此覆盖（不够用可把 model 改成 gemini-flash-latest）
+# LLM 全局配置：timeout 对所有 provider 生效
 llm:
-  base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
-  model: "gemini-flash-lite-latest"
   timeout_seconds: 60
 
-# 6 名 AI 玩家：名字 + 一句话人设（会拼进各自的系统提示词）
+# 6 名 AI 玩家：名字（模型名） + 人设 + 各自的 provider/model
+# provider 可选：modal（Kimi-K3）/ hub（oaifree responses API）/ anthropic（oaifree claude）/ gemini（官方直连）
 players:
-  - name: "Alpha"
-    persona: "你风格激进，相信富贵险中求，敢于用高价抢跑抢胜场。"
-  - name: "Bravo"
-    persona: "你极度保守，把每一枚金币都看得很重，能不出价就不出价。"
-  - name: "Charlie"
-    persona: "你是精打细算的会计，逐字分析每天的公布数据，追求性价比最高的出价。"
-  - name: "Delta"
-    persona: "你喜欢揣摩对手心理，专门研究别人会出什么价，然后针对性错位。"
-  - name: "Echo"
-    persona: "你情绪随排名波动：领先时谨慎守成，落后时不惜一切代价追赶。"
-  - name: "Foxtrot"
-    persona: "你信奉混沌与不可预测，故意让自己的出价没有规律，让别人读不懂你。"
+  - name: "Kimi-K3"
+    persona: "做你心中的自己"
+    provider: "modal"
+    model: "moonshotai/Kimi-K3"
+  - name: "deepseek-v4-pro"
+    persona: "做你心中的自己"
+    provider: "hub"
+    model: "deepseek-v4-pro"
+  - name: "gemini-3.1-pro-preview"
+    persona: "做你心中的自己"
+    provider: "hub"
+    model: "gemini-3.1-pro-preview"
+  - name: "gpt-5.6-sol"
+    persona: "做你心中的自己"
+    provider: "hub"
+    model: "gpt-5.6-sol"
+  - name: "claude-opus-4-6"
+    persona: "做你心中的自己"
+    provider: "anthropic"
+    model: "claude-opus-4-6"
+  - name: "gemini-flash-latest"
+    persona: "做你心中的自己"
+    provider: "gemini"
+    model: "gemini-flash-latest"

@@ -7,7 +7,6 @@ import pytest
 
 from ai_player import AIPlayer, PARSE_FAILED
 from controller import Controller, RoundAborted, RoundTask, TournamentAborted, run_parallel_round
-from llm_client import ChatReply
 from models import Observation
 
 ALL_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
@@ -29,7 +28,7 @@ def make_obs(day=1, coins=6):
 
 
 def fake_chat_fn(script):
-    """script: ChatReply 或异常的有序列表，每次调用弹出下一个。"""
+    """script: 回复文本或异常的有序列表，每次调用弹出下一个。"""
     queue = list(script)
     calls = []
 
@@ -49,8 +48,8 @@ def make_player(chat_fn, tmp_path=None):
     return AIPlayer("Alpha", "测试人设", ALL_NAMES, chat_fn, log_path=log_path)
 
 
-def bid_reply(bid, reasoning="思考内容"):
-    return ChatReply(content=f"我的分析：……\n```json\n{{\"bid\": {bid}}}\n```", reasoning_content=reasoning)
+def bid_reply(bid):
+    return f"我的分析：……\n```json\n{{\"bid\": {bid}}}\n```"
 
 
 class TestBidParsing:
@@ -60,12 +59,12 @@ class TestBidParsing:
 
     def test_uses_last_json_block(self):
         content = "```json\n{\"bid\": 1}\n```\n改主意了\n```json\n{\"bid\": 4}\n```"
-        player = make_player(fake_chat_fn([ChatReply(content=content, reasoning_content="")]))
+        player = make_player(fake_chat_fn([content]))
         assert player.decide_bid(make_obs()) == 4
 
     def test_missing_json_block_retries_once(self):
         script = [
-            ChatReply(content="我忘了给 JSON", reasoning_content=""),
+            "我忘了给 JSON",
             bid_reply(2),
         ]
         chat_fn = fake_chat_fn(script)
@@ -76,7 +75,7 @@ class TestBidParsing:
         assert "缺少合法的 JSON" in retry_user_msg
 
     def test_double_parse_failure_returns_zero(self):
-        script = [ChatReply(content="没有块", reasoning_content=""), ChatReply(content="还是没有", reasoning_content="")]
+        script = ["没有块", "还是没有"]
         player = make_player(fake_chat_fn(script))
         assert player.decide_bid(make_obs()) == 0
 
@@ -140,15 +139,12 @@ class TestConversationLine:
         assert player.messages[: len(mid_snapshot)] == mid_snapshot
         assert player.messages[0]["role"] == "system"
 
-    def test_reasoning_logged_but_not_in_context(self, tmp_path):
-        player = make_player(fake_chat_fn([bid_reply(3, reasoning="秘密思考")]), tmp_path)
+    def test_content_logged_to_jsonl(self, tmp_path):
+        player = make_player(fake_chat_fn([bid_reply(3)]), tmp_path)
         player.decide_bid(make_obs())
 
-        for message in player.messages:
-            assert "秘密思考" not in json.dumps(message, ensure_ascii=False)
-
         log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
-        assert any(entry.get("reasoning_content") == "秘密思考" for entry in log_entries)
+        assert any(entry.get("content") == bid_reply(3) for entry in log_entries)
 
     def test_rollback_truncates_only_tail(self):
         player = make_player(fake_chat_fn([bid_reply(1), bid_reply(2)]))
@@ -163,7 +159,7 @@ class TestConversationLine:
 class TestSpeech:
     def test_speech_truncated_at_500_chars(self, tmp_path):
         long_speech = "很" * 600
-        player = make_player(fake_chat_fn([ChatReply(content=long_speech, reasoning_content="")]), tmp_path)
+        player = make_player(fake_chat_fn([long_speech]), tmp_path)
         speech = player.give_speech("请发言", "opening_speech")
         assert speech is not None and len(speech) == 500
         log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
@@ -174,7 +170,7 @@ class TestSpeech:
         assert player.give_speech("请发言", "opening_speech") is None
 
     def test_final_summary_not_added_to_context(self):
-        player = make_player(fake_chat_fn([ChatReply(content="给观众的话", reasoning_content="")]))
+        player = make_player(fake_chat_fn(["给观众的话"]))
         before = list(player.messages)
         summary = player.final_summary("请写观众总结")
         assert summary == "给观众的话"
