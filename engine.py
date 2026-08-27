@@ -56,11 +56,15 @@ def run_match(
     is_playoff: bool,
     wins_history: dict[str, list[int]],
     past_logs: list[MatchLog],
+    bid_collector=None,
 ) -> MatchLog:
     """运行一局（正赛局或加赛局规则相同），返回完整局日志。
 
     wins_history: 每名玩家在已结束各局的胜场分布，用于构造 Observation 中的排名。
     past_logs: 已结束各局的完整日志，局末公开后玩家可见。
+    bid_collector: 可选，签名为 list[(player, obs)] -> list[原始出价]（顺序对齐），
+    AI 模式注入并行收集；默认逐个顺序调用 decide_bid。收集被暂停打断时抛出
+    controller.RoundAborted，引擎原地重跑同一天（此时尚未结算，状态未被污染）。
     """
     coins = {player.name: INITIAL_COINS for player in players}
     match_wins = {player.name: 0 for player in players}
@@ -68,27 +72,46 @@ def run_match(
     log = MatchLog(match_index=match_index, is_playoff=is_playoff)
     past_log_dicts = [past_log.to_dict() for past_log in past_logs]
 
+    # 延迟导入：Bot 模式不经过 controller 依赖链（ai_player/llm_client）
+    from controller import RoundAborted
+
     day = 1
     while wins_remaining > 0 and day <= MAX_DAYS:
         if all(balance == 0 for balance in coins.values()):
             log.end_reason = "all_coins_zero"
             break
 
-        bids: list[BidRecord] = []
-        for player in players:
-            obs = Observation(
-                my_name=player.name,
-                my_coins=coins[player.name],
-                my_match_wins=match_wins[player.name],
-                my_total_wins=sum(wins_history[player.name]) + match_wins[player.name],
-                day=day,
-                wins_remaining=wins_remaining,
-                max_days=MAX_DAYS,
-                today_history=[day_result.public_view() for day_result in log.days],
-                standings=compute_standings(wins_history, match_wins),
-                past_match_logs=past_log_dicts,
+        observations = [
+            (
+                player,
+                Observation(
+                    my_name=player.name,
+                    my_coins=coins[player.name],
+                    my_match_wins=match_wins[player.name],
+                    my_total_wins=sum(wins_history[player.name]) + match_wins[player.name],
+                    day=day,
+                    wins_remaining=wins_remaining,
+                    max_days=MAX_DAYS,
+                    today_history=[day_result.public_view() for day_result in log.days],
+                    standings=compute_standings(wins_history, match_wins),
+                    past_match_logs=past_log_dicts,
+                ),
             )
-            raw_bid = player.decide_bid(obs)
+            for player in players
+        ]
+
+        while True:
+            try:
+                if bid_collector is None:
+                    raw_bids = [player.decide_bid(obs) for player, obs in observations]
+                else:
+                    raw_bids = bid_collector(observations)
+                break
+            except RoundAborted:
+                continue  # 当天尚未结算，原地重跑
+
+        bids: list[BidRecord] = []
+        for (player, _), raw_bid in zip(observations, raw_bids):
             bid, status = validate_bid(raw_bid, coins[player.name])
             bids.append(BidRecord(player=player.name, raw_bid=raw_bid, bid=bid, status=status))
 
