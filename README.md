@@ -11,7 +11,8 @@ pytest            # 规则正确性测试
 python main.py    # 6 个 RandomBot 跑完整场比赛（含可能的加赛）
 ```
 
-日志输出到 `logs/`：`match_<n>.json`（结构化完整日志）+ `match_<n>.txt`（可读文本）。
+日志按场次输出到 `logs/<时间戳>_<模式>/`：`match_<n>.json`（结构化完整日志）+ `match_<n>.txt`（可读文本），
+AI 模式另有 `ai_<名字>.jsonl`（完整对话 trace）和 `speeches.txt`（发言记录）。`logs/latest` 软链接始终指向最近一次运行的目录。
 
 ## 规则要点
 

@@ -6,6 +6,7 @@ import argparse
 import json
 import random
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -38,6 +39,28 @@ END_REASON_LABELS = {
 ABSENT_SPEECH = "（放弃发言）"
 
 
+def make_run_dir(mode: str) -> Path:
+    """为本场运行创建独立日志目录 logs/<时间戳>_<模式>/，并更新 logs/latest 软链接。"""
+    base_name = f"{datetime.now():%Y%m%d_%H%M%S}_{mode}"
+    run_dir = LOG_DIR / base_name
+    suffix = 2
+    while run_dir.exists():
+        run_dir = LOG_DIR / f"{base_name}_{suffix}"
+        suffix += 1
+    run_dir.mkdir(parents=True)
+
+    latest_link = LOG_DIR / "latest"
+    try:
+        if latest_link.is_symlink() or latest_link.exists():
+            latest_link.unlink()
+        latest_link.symlink_to(run_dir.name)
+    except OSError as exc:
+        print(f"警告：更新 logs/latest 软链接失败（{exc}），不影响日志写入")
+
+    print(f"本场日志目录：{run_dir.relative_to(ROOT_DIR)}")
+    return run_dir
+
+
 def make_publish(log_dir: Path):
     """局末公开：完整出价日志 + 截至当前的累计排名与胜场明细，写 json/txt 并打印。"""
 
@@ -57,7 +80,8 @@ def make_publish(log_dir: Path):
             f"截至本局的累计排名:\n{prompts.render_standings(standings)}\n"
         )
         (log_dir / f"match_{log.match_index}.txt").write_text(text, encoding="utf-8")
-        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 logs/match_{log.match_index}.json/.txt")
+        match_log_path = (log_dir / f"match_{log.match_index}").relative_to(ROOT_DIR)
+        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {match_log_path}.json/.txt")
 
     return publish
 
@@ -79,10 +103,10 @@ def print_final_result(result) -> None:
 class AISpeechDirector:
     """发言编排：开局/局末/终局，所有环节都经过 controller 的单步与暂停控制。"""
 
-    def __init__(self, players: list[AIPlayer], controller: Controller):
+    def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path):
         self.players = players
         self.controller = controller
-        self.speeches_log = LOG_DIR / "speeches.txt"
+        self.speeches_log = log_dir / "speeches.txt"
 
     def _record(self, text: str) -> None:
         with self.speeches_log.open("a", encoding="utf-8") as file:
@@ -176,8 +200,8 @@ class AISpeechDirector:
 def run_bots(seed) -> None:
     rng = random.Random(seed)
     players = [RandomBot(name, random.Random(rng.random())) for name in BOT_NAMES]
-    LOG_DIR.mkdir(exist_ok=True)
-    result = run_tournament(players, on_match_end=make_publish(LOG_DIR))
+    run_dir = make_run_dir("bot")
+    result = run_tournament(players, on_match_end=make_publish(run_dir))
     print_final_result(result)
 
 
@@ -194,7 +218,7 @@ def run_ai() -> None:
         print(f"错误：{exc}")
         return
 
-    LOG_DIR.mkdir(exist_ok=True)
+    run_dir = make_run_dir("ai")
     controller = Controller(mode="step")
 
     def pause_on_double_error(detail: str) -> None:
@@ -210,7 +234,7 @@ def run_ai() -> None:
             persona=pc["persona"],
             all_names=all_names,
             chat_fn=chat_fn,
-            log_path=LOG_DIR / f"ai_{pc['name']}.jsonl",
+            log_path=run_dir / f"ai_{pc['name']}.jsonl",
             on_double_error=pause_on_double_error,
         )
         for pc in player_configs
@@ -237,11 +261,11 @@ def run_ai() -> None:
                 controller.clear_pause()
                 continue
 
-    director = AISpeechDirector(players, controller)
+    director = AISpeechDirector(players, controller, run_dir)
     try:
         result = run_tournament(
             players,
-            on_match_end=make_publish(LOG_DIR),
+            on_match_end=make_publish(run_dir),
             director=director,
             bid_collector=bid_collector,
         )
