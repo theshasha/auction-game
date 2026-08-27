@@ -49,6 +49,14 @@ class Controller:
 
     # ---- 命令入口 ----
 
+    def request_pause(self, reason: str) -> None:
+        """暂停并回滚本轮：唤醒所有等待中的调用，恢复后从单步模式等用户确认。"""
+        with self._lock:
+            self._pause_requested = True
+            self._mode = "step"
+            self._gate.set()
+        self._announce(f"[暂停] {reason}（回车重跑本轮 / q=中止比赛）")
+
     def offer_command(self, command: str) -> None:
         with self._lock:
             if command == "":
@@ -62,14 +70,11 @@ class Controller:
             elif command == "s":
                 self._mode = "step"
                 self._announce("[控制] 切换到单步模式")
-            elif command == "p":
-                self._pause_requested = True
-                self._mode = "step"    # 恢复后从单步开始，等用户确认
-                self._gate.set()       # 唤醒正在等待的调用，让它们看到暂停标志
-                self._announce("[控制] 暂停：本轮对话将被抛弃并回滚")
             elif command == "q":
                 self._quit_requested = True
                 self._gate.set()
+        if command == "p":
+            self.request_pause("用户请求暂停：本轮对话将被抛弃并回滚")
 
     def start_stdin_reader(self) -> None:
         def read_loop() -> None:
@@ -98,7 +103,9 @@ class Controller:
             raise RoundAborted
 
     def clear_pause(self) -> None:
+        """清除暂停标志与残留闸门：恢复后下一次调用必须等用户真正确认。"""
         self._pause_requested = False
+        self._gate.clear()
 
 
 def run_parallel_round(tasks: list[RoundTask], controller: Controller) -> dict[str, Any]:

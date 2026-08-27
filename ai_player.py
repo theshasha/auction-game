@@ -24,6 +24,8 @@ class AIPlayer(Player):
 
     前缀保护：messages 初始化后只 append，唯一的截断是 rollback 到 checkpoint
     （暂停回滚，只动尾部）。chat_fn 可注入，测试零网络。
+    on_double_error: 连续两次调用失败时的钩子（预期抛出暂停异常，见 main.py）；
+    为 None 时按规则兜底：出价记 0、发言视为放弃。
     """
 
     def __init__(
@@ -33,6 +35,7 @@ class AIPlayer(Player):
         all_names: list[str],
         chat_fn: Callable[[list[dict]], ChatReply],
         log_path: Optional[Path] = None,
+        on_double_error: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(name)
         self.messages: list[dict] = [
@@ -40,6 +43,7 @@ class AIPlayer(Player):
         ]
         self.chat_fn = chat_fn
         self.log_path = log_path
+        self.on_double_error = on_double_error
 
     # ---- 对话线维护 ----
 
@@ -73,6 +77,28 @@ class AIPlayer(Player):
         )
         return reply
 
+    def _guarded_call(self, user_text: str, phase: str) -> Optional[ChatReply]:
+        """调用 LLM，失败立即重试 1 次（重试前回滚未应答的 user 消息）。
+
+        连续两次失败：配置了 on_double_error 钩子则交给钩子（预期抛暂停异常，
+        本轮回滚后由用户确认重跑）；未配置则返回 None，由调用方按规则兜底。
+        """
+        last_error: Optional[Exception] = None
+        for attempt in (1, 2):
+            mark = len(self.messages)
+            try:
+                return self._call(user_text, phase)
+            except Exception as exc:
+                last_error = exc
+                self.rollback(mark)  # 丢弃未应答的 user 消息，保持对话线完整
+                self._write_log(
+                    {"phase": phase, "attempt": attempt, "error": f"{type(exc).__name__}: {exc}"}
+                )
+        detail = f"{self.name} 连续两次调用失败（{phase}）：{type(last_error).__name__}: {last_error}"
+        if self.on_double_error is not None:
+            self.on_double_error(detail)  # 预期抛出暂停异常，不会返回
+        return None
+
     # ---- 出价 ----
 
     @staticmethod
@@ -90,20 +116,19 @@ class AIPlayer(Player):
         return data["bid"]
 
     def decide_bid(self, obs: Observation) -> int:
-        try:
-            reply = self._call(prompts.bid_request(obs), "bid")
-        except Exception as exc:  # 超时/API 异常：按规则视为出价 0
-            self._write_log({"phase": "bid", "error": f"{type(exc).__name__}: {exc}", "result": 0})
+        reply = self._guarded_call(prompts.bid_request(obs), "bid")
+        if reply is None:  # 无钩子时双失败的兜底：按规则视为出价 0
+            self._write_log({"phase": "bid", "result": 0, "fallback": "double_error"})
             return 0
 
         bid = self.parse_bid(reply.content)
         if bid is PARSE_FAILED:
-            try:  # 重试 1 次：明确指出问题，让模型修正
-                retry_reply = self._call(prompts.retry_bid_request(), "bid_retry")
-                bid = self.parse_bid(retry_reply.content)
-            except Exception as exc:
-                self._write_log({"phase": "bid_retry", "error": f"{type(exc).__name__}: {exc}", "result": 0})
+            # 模型输出格式问题（非基础设施故障）：按规则重试 1 次，仍失败记 0
+            retry_reply = self._guarded_call(prompts.retry_bid_request(), "bid_retry")
+            if retry_reply is None:
+                self._write_log({"phase": "bid", "result": 0, "fallback": "double_error"})
                 return 0
+            bid = self.parse_bid(retry_reply.content)
             if bid is PARSE_FAILED:
                 self._write_log({"phase": "bid", "parse_failed": True, "result": 0})
                 return 0
@@ -115,11 +140,10 @@ class AIPlayer(Player):
     # ---- 发言与规划 ----
 
     def give_speech(self, user_text: str, phase: str) -> Optional[str]:
-        """发言：正文截断 500 字，完整进对话线（公开信息）。异常视为放弃发言。"""
-        try:
-            reply = self._call(user_text, phase)
-        except Exception as exc:
-            self._write_log({"phase": phase, "error": f"{type(exc).__name__}: {exc}", "absent": True})
+        """发言：正文截断 500 字，完整进对话线（公开信息）。双失败兜底视为放弃。"""
+        reply = self._guarded_call(user_text, phase)
+        if reply is None:
+            self._write_log({"phase": phase, "absent": True})
             return None
         speech = reply.content.strip()
         truncated = len(speech) > SPEECH_LIMIT
@@ -134,10 +158,21 @@ class AIPlayer(Player):
 
     def final_summary(self, user_text: str) -> Optional[str]:
         """终局观众总结：不回喂任何对话线（连自己的也不进），只落日志。"""
-        try:
-            reply = self.chat_fn(self.messages + [{"role": "user", "content": user_text}])
-        except Exception as exc:
-            self._write_log({"phase": "final_summary", "error": f"{type(exc).__name__}: {exc}", "absent": True})
+        last_error: Optional[Exception] = None
+        for attempt in (1, 2):
+            try:
+                reply = self.chat_fn(self.messages + [{"role": "user", "content": user_text}])
+                break
+            except Exception as exc:
+                last_error = exc
+                self._write_log(
+                    {"phase": "final_summary", "attempt": attempt, "error": f"{type(exc).__name__}: {exc}"}
+                )
+        else:
+            detail = f"{self.name} 连续两次调用失败（final_summary）：{type(last_error).__name__}: {last_error}"
+            if self.on_double_error is not None:
+                self.on_double_error(detail)  # 预期抛出暂停异常
+            self._write_log({"phase": "final_summary", "absent": True})
             return None
         self._write_log(
             {

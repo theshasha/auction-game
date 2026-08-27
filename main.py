@@ -195,6 +195,13 @@ def run_ai() -> None:
         return
 
     LOG_DIR.mkdir(exist_ok=True)
+    controller = Controller(mode="step")
+
+    def pause_on_double_error(detail: str) -> None:
+        """连续两次调用失败：报错并暂停，本轮回滚后等用户确认重跑。"""
+        controller.request_pause(detail)
+        raise RoundAborted(detail)
+
     player_configs = config["players"]
     all_names = [pc["name"] for pc in player_configs]
     players = [
@@ -204,11 +211,11 @@ def run_ai() -> None:
             all_names=all_names,
             chat_fn=chat_fn,
             log_path=LOG_DIR / f"ai_{pc['name']}.jsonl",
+            on_double_error=pause_on_double_error,
         )
         for pc in player_configs
     ]
 
-    controller = Controller(mode="step")
     controller.start_stdin_reader()
     print("命令：回车=单步推进一次对话 / c=连续模式 / s=单步模式 / p=暂停并回滚本轮 / q=中止比赛")
 

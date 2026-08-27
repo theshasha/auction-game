@@ -87,9 +87,44 @@ class TestBidParsing:
         assert player.decide_bid(make_obs()) == 9
         assert len(chat_fn.calls) == 1
 
-    def test_api_error_returns_zero(self):
-        player = make_player(fake_chat_fn([RuntimeError("boom")]))
+    def test_error_then_success_recovers(self):
+        # 第一次调用失败（如网络抖动）立即重试，成功后正常出价
+        chat_fn = fake_chat_fn([RuntimeError("timeout"), bid_reply(4)])
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_obs()) == 4
+        assert len(chat_fn.calls) == 2
+        # 失败的 user 消息已回滚，对话线只有 system + 成功的一问一答
+        assert [m["role"] for m in player.messages] == ["system", "user", "assistant"]
+
+    def test_api_error_returns_zero_without_hook(self):
+        # 未配置暂停钩子：连续两次失败按规则兜底记 0
+        chat_fn = fake_chat_fn([RuntimeError("boom"), RuntimeError("boom again")])
+        player = make_player(chat_fn)
         assert player.decide_bid(make_obs()) == 0
+        assert len(chat_fn.calls) == 2
+        assert len(player.messages) == 1  # 两次失败的 user 消息均已回滚
+
+    def test_double_error_invokes_pause_hook(self):
+        # 配置钩子（如 main.py 中的暂停）：双失败时调用钩子并抛出其异常
+        class PauseSignal(Exception):
+            pass
+
+        hook_calls = []
+
+        def hook(detail):
+            hook_calls.append(detail)
+            raise PauseSignal
+
+        player = make_player(
+            fake_chat_fn([RuntimeError("余额不足"), RuntimeError("余额不足")]),
+        )
+        player.on_double_error = hook
+        with pytest.raises(PauseSignal):
+            player.decide_bid(make_obs())
+        assert len(hook_calls) == 1
+        assert "连续两次调用失败" in hook_calls[0]
+        assert "余额不足" in hook_calls[0]
+        assert len(player.messages) == 1  # 对话线未被失败调用污染
 
 
 class TestConversationLine:
@@ -135,7 +170,7 @@ class TestSpeech:
         assert any(entry.get("truncated") for entry in log_entries)
 
     def test_speech_error_means_absent(self):
-        player = make_player(fake_chat_fn([RuntimeError("timeout")]))
+        player = make_player(fake_chat_fn([RuntimeError("timeout"), RuntimeError("timeout")]))
         assert player.give_speech("请发言", "opening_speech") is None
 
     def test_final_summary_not_added_to_context(self):

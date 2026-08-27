@@ -47,7 +47,9 @@ def make_chat_fn(base_url: str = DEFAULT_BASE_URL, model: str = DEFAULT_MODEL, t
             model=model,
             messages=messages,
             timeout=timeout,
-            extra_body={"google": {"thinking_config": {"include_thoughts": True}}},
+            # 官方文档示例为双层嵌套：SDK 把外层 extra_body 并入请求体，
+            # 服务端读取顶层的 extra_body.google.thinking_config
+            extra_body={"extra_body": {"google": {"thinking_config": {"include_thoughts": True}}}},
         )
         message = response.choices[0].message
         return ChatReply(
