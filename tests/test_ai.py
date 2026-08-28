@@ -53,6 +53,11 @@ def bid_reply(bid):
     return f"我的分析：……\n```json\n{{\"bid\": {bid}}}\n```"
 
 
+def speech_reply(speech):
+    """公开发言回复：先规划策略，末尾裸 JSON 给出实际公开发言（示例无围栏，同提示词）。"""
+    return f'发言策略：先放个烟雾弹。\n{{"speech": "{speech}"}}'
+
+
 class TestBidParsing:
     def test_normal_reply_parsed(self):
         player = make_player(fake_chat_fn([bid_reply(3)]))
@@ -186,7 +191,7 @@ class TestMarkdownLog:
 
     def test_error_entry_without_context_keeps_plain_format(self, tmp_path):
         # 不传 context 的发言失败：保持旧的纯 phase 格式
-        chat_fn = fake_chat_fn([RuntimeError("timeout"), "发言内容"])
+        chat_fn = fake_chat_fn([RuntimeError("timeout"), speech_reply("发言内容")])
         player = make_player(chat_fn, tmp_path)
         player.give_speech("请发言", "opening_speech")
 
@@ -198,15 +203,73 @@ class TestMarkdownLog:
 
         assert "> 出价解析失败，按规则记 0" in self.read_md(player)
 
+    def test_speech_result_entry_rendered(self, tmp_path):
+        player = make_player(fake_chat_fn([speech_reply("公开内容")]), tmp_path)
+        player.give_speech("请发言", "opening_speech")
+
+        assert "> 公开发言内容：公开内容" in self.read_md(player)
+
+    def test_speech_fallback_entry_rendered(self, tmp_path):
+        player = make_player(fake_chat_fn(["没有 JSON", "直接就是发言全文"]), tmp_path)
+        player.give_speech("请发言", "opening_speech")
+
+        assert "> 发言 JSON 解析失败，重试回复全文已作为公开发言" in self.read_md(player)
+
 
 class TestSpeech:
-    def test_speech_never_truncated(self, tmp_path):
-        # 发言不再截断：全文返回、全文进对话线，且不产生 truncated 日志
+    """公开发言：先规划策略、末尾 JSON {"speech": ...} 给出实际公开内容。
+
+    只公开 speech 字段；assistant 全文（含规划）照常进自己的对话线与日志。
+    """
+
+    def test_speech_returns_speech_field_only(self, tmp_path):
         long_speech = "很" * 600
-        player = make_player(fake_chat_fn([long_speech]), tmp_path)
+        reply = speech_reply(long_speech)
+        player = make_player(fake_chat_fn([reply]), tmp_path)
+        speech = player.give_speech("请发言", "opening_speech")
+        assert speech == long_speech  # 公开面只有 speech 字段，不含规划部分
+        assert player.messages[-1]["content"] == reply  # 全文（含规划）进自己的对话线
+
+    def test_fenced_json_block_speech_parsed(self):
+        reply = "发言策略：……\n```json\n{\"speech\": \"围栏里的发言\"}\n```"
+        player = make_player(fake_chat_fn([reply]))
+        assert player.give_speech("请发言", "opening_speech") == "围栏里的发言"
+
+    def test_multiline_speech_with_literal_newlines_parsed(self):
+        # 发言常为未转义的多段文本：speech 解析宽容字面换行（strict=False）
+        reply = '策略\n{"speech": "第一段\n第二段"}'
+        player = make_player(fake_chat_fn([reply]))
+        assert player.give_speech("请发言", "match_1_speech") == "第一段\n第二段"
+
+    def test_parse_failure_retries_once(self, tmp_path):
+        chat_fn = fake_chat_fn(["忘了给 JSON", speech_reply("补上的发言")])
+        player = make_player(chat_fn, tmp_path)
+        assert player.give_speech("请发言", "opening_speech") == "补上的发言"
+        assert len(chat_fn.calls) == 2
+        assert "缺少合法的 JSON 发言块" in player.messages[-2]["content"]
+
+    def test_double_parse_failure_falls_back_to_fulltext(self, tmp_path):
+        # 重试仍无合法 speech JSON：把重试回复全文当作公开发言（不丢内容）
+        player = make_player(fake_chat_fn(["没有 JSON", "直接就是发言全文"]), tmp_path)
+        speech = player.give_speech("请发言", "opening_speech")
+        assert speech == "直接就是发言全文"
+        log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
+        fallback = next(entry for entry in log_entries if entry.get("kind") == "speech_fallback")
+        assert fallback["result"] == "直接就是发言全文"
+
+    def test_speech_result_logged(self, tmp_path):
+        player = make_player(fake_chat_fn([speech_reply("公开内容")]), tmp_path)
+        player.give_speech("请发言", "opening_speech")
+        log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
+        result_entry = next(entry for entry in log_entries if entry.get("kind") == "speech")
+        assert result_entry["result"] == "公开内容"
+
+    def test_speech_never_truncated(self, tmp_path):
+        # 发言不再截断：全文进对话线，且不产生 truncated 日志
+        long_speech = "很" * 600
+        player = make_player(fake_chat_fn([speech_reply(long_speech)]), tmp_path)
         speech = player.give_speech("请发言", "opening_speech")
         assert speech == long_speech
-        assert player.messages[-1]["content"] == long_speech
         log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
         assert not any(entry.get("truncated") for entry in log_entries)
 

@@ -72,6 +72,24 @@ def bid_format_hint(bid_cap: int) -> str:
     )
 
 
+def speech_format_hint() -> str:
+    """发言格式提示：先规划发言策略，末尾裸 JSON 给出实际公开发言（示例无围栏，同出价）。
+
+    免责句把「发言」与「后续出价」显式解耦：避免模型把公开发言当成自己
+    接下来要做的事（说出去的话泼出去的水效应）。
+    """
+    return (
+        "请先规划你的发言策略（想对其他玩家释放什么信号、是否放烟雾弹），"
+        "然后在回复末尾用如下 JSON 给出你实际要公开的发言：\n"
+        '{"speech": "<你实际要公开的发言>"}\n'
+        "注意：公开发言只是对其他玩家释放的信号，不构成对你后续出价的任何约束。"
+    )
+
+
+def retry_speech_request() -> str:
+    return "你的上一条回复缺少合法的 JSON 发言块，请重新发言。\n\n" + speech_format_hint()
+
+
 def build_system_prompt(name: str, persona: str, all_names: list[str]) -> str:
     others = "、".join(n for n in all_names if n != name)
     return (
@@ -83,7 +101,10 @@ def build_system_prompt(name: str, persona: str, all_names: list[str]) -> str:
 
 
 def opening_speech_request() -> str:
-    return "比赛即将开始。请向全体玩家发表你的开局发言（纯文本，不超过 300 字）。"
+    return (
+        "比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。\n\n"
+        + speech_format_hint()
+    )
 
 
 def opening_plan_request(others_speeches: dict[str, str]) -> str:
@@ -201,7 +222,8 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], wil
     # 只有正赛打完（或加赛后）第一名仍并列才有信息增量，其余局数无需预告
     if will_continue and log.match_index >= 5:
         lines.append("第一名出现并列，按规则全员将进入加赛局，加赛局胜场计入总胜场。")
-    lines.append("请向全体玩家发表你的局末发言（纯文本，不超过 300 字）。")
+    lines.append("请向全体玩家发表你的局末发言（不超过 300 字）。")
+    lines.append(speech_format_hint())
     return "\n\n".join(lines)
 
 
@@ -223,7 +245,8 @@ def final_speech_request(standings: list[StandingsEntry], log: MatchLog) -> str:
         f"第 {log.match_index} 局（{kind}）结束，这也是最后一局。本局完整出价日志：\n"
         f"{render_match_log(log)}\n\n"
         f"比赛全部结束。最终排名与胜场明细：\n{render_standings(standings)}\n\n"
-        "请向全体玩家发表你的最终感言（纯文本）。"
+        "请向全体玩家发表你的最终感言。\n\n"
+        + speech_format_hint()
     )
 
 

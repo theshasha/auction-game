@@ -58,6 +58,31 @@ class TestSpeechWordLimits:
         assert "300 字" not in prompts.RULES_TEXT
 
 
+class TestSpeechJsonFormat:
+    """公开发言：先规划策略、末尾裸 JSON {"speech": ...}，附发言免责句；观众总结不动。"""
+
+    def test_public_speech_requests_ask_for_speech_json(self):
+        standings = make_standings({n: [0] for n in NAMES})
+        for text in (
+            prompts.opening_speech_request(),
+            prompts.match_end_speech_request(make_log(), standings, True),
+            prompts.final_speech_request(standings, make_log(match_index=5)),
+        ):
+            assert '{"speech":' in text
+            assert "```json" not in text  # 示例无围栏，避免模型误以为必须包代码块
+            assert "不构成对你后续出价的任何约束" in text
+
+    def test_final_summary_stays_plain_text(self):
+        text = prompts.final_summary_request({"乙": "感言"})
+        assert "speech" not in text
+        assert "纯文本" in text
+
+    def test_retry_speech_request(self):
+        text = prompts.retry_speech_request()
+        assert "缺少合法的 JSON 发言块" in text
+        assert '{"speech":' in text
+
+
 class TestPlayoffNotice:
     """加赛预告只在正赛打完（或加赛后）且第一名仍并列时出现。"""
 

@@ -93,6 +93,10 @@ class AIPlayer(Player):
             where = f"{entry['phase']}，{context}" if context else entry["phase"]
             return f"> 调用失败（{where}，第 {entry['attempt']} 次）：{entry['error']}\n\n"
         if "result" in entry:
+            if entry.get("kind") == "speech":
+                return f"> 公开发言内容：{entry['result']}\n\n---\n\n"
+            if entry.get("kind") == "speech_fallback":
+                return "> 发言 JSON 解析失败，重试回复全文已作为公开发言\n\n---\n\n"
             if entry.get("parse_failed"):
                 return "> 出价解析失败，按规则记 0\n\n---\n\n"
             return f"> 出价结果：{entry['result']}\n\n---\n\n"
@@ -132,31 +136,38 @@ class AIPlayer(Player):
     # ---- 出价 ----
 
     @staticmethod
-    def parse_bid(content: str):
-        """解析 bid 字段：优先取最后一个 ```json 围栏块；无围栏块时兜底取
-        全文最后一个合法裸 JSON 对象（提示词示例即无围栏），仍无则返回 PARSE_FAILED。"""
+    def parse_json_field(content: str, key: str, strict: bool = True):
+        """解析指定键的 JSON 字段：优先取最后一个 ```json 围栏块；无围栏块时兜底取
+        全文最后一个合法裸 JSON 对象（提示词示例即无围栏）再查 key，仍无则返回
+        PARSE_FAILED（无 key 即失败，不再向前找）。
+        strict=False 宽容 JSON 字符串内的字面换行（发言常为未转义的多段文本）。"""
         blocks = JSON_BLOCK_PATTERN.findall(content)
         if blocks:
-            return AIPlayer._bid_from_json_text(blocks[-1])
+            return AIPlayer._field_from_json_text(blocks[-1], key, strict)
         for candidate in reversed(BARE_JSON_PATTERN.findall(content)):
             try:
-                data = json.loads(candidate)
+                data = json.loads(candidate, strict=strict)
             except json.JSONDecodeError:
                 continue  # 不是合法 JSON，继续向前找
-            if isinstance(data, dict) and "bid" in data:
-                return data["bid"]
-            return PARSE_FAILED  # 最后一个合法 JSON 对象无 bid 键，不再向前找
+            if isinstance(data, dict) and key in data:
+                return data[key]
+            return PARSE_FAILED  # 最后一个合法 JSON 对象无目标键，不再向前找
         return PARSE_FAILED
 
     @staticmethod
-    def _bid_from_json_text(json_text: str):
+    def parse_bid(content: str):
+        """解析 bid 字段：与 parse_json_field(content, "bid") 等价，严格模式。"""
+        return AIPlayer.parse_json_field(content, "bid")
+
+    @staticmethod
+    def _field_from_json_text(json_text: str, key: str, strict: bool):
         try:
-            data = json.loads(json_text)
+            data = json.loads(json_text, strict=strict)
         except json.JSONDecodeError:
             return PARSE_FAILED
-        if not isinstance(data, dict) or "bid" not in data:
+        if not isinstance(data, dict) or key not in data:
             return PARSE_FAILED
-        return data["bid"]
+        return data[key]
 
     def decide_bid(self, obs: Observation) -> int:
         # 第 1 天信息恒定，出价已在规划环节一并给出：直接消费缓存，不再发 LLM 调用
@@ -186,8 +197,28 @@ class AIPlayer(Player):
     # ---- 发言与规划 ----
 
     def give_speech(self, user_text: str, phase: str, context: str = "") -> str:
-        """发言：不做任何截断，全文进对话线并全文公开。双失败抛 CallFailedError。"""
-        return self._guarded_call(user_text, phase, context).strip()
+        """公开发言：先规划发言策略，末尾 JSON {"speech": ...} 给出实际公开内容。
+
+        返回实际公开的发言文本（其他玩家互看与 speeches.txt 只含此内容）；
+        assistant 全文（含规划部分）照常进自己的对话线与日志，不做任何截断。
+        speech 解析宽容字面换行（strict=False）。解析失败重试 1 次，仍失败
+        则把重试回复全文当作公开发言（不丢内容）。双调用失败抛 CallFailedError。
+        """
+        content = self._guarded_call(user_text, phase, context).strip()
+        speech = self.parse_json_field(content, "speech", strict=False)
+        if speech is PARSE_FAILED:
+            retry_content = self._guarded_call(
+                prompts.retry_speech_request(), f"{phase}_retry", context
+            ).strip()
+            speech = self.parse_json_field(retry_content, "speech", strict=False)
+            if speech is PARSE_FAILED:
+                self._write_log(
+                    {"phase": phase, "kind": "speech_fallback", "result": retry_content}
+                )
+                return retry_content
+        speech_text = speech if isinstance(speech, str) else json.dumps(speech, ensure_ascii=False)
+        self._write_log({"phase": phase, "kind": "speech", "result": speech_text})
+        return speech_text.strip()
 
     def plan_strategy(self, user_text: str, phase: str, context: str = "") -> str:
         """策略规划（与下一局第 1 天出价合并）：规划全文进对话线，只给自己看。
@@ -197,7 +228,7 @@ class AIPlayer(Player):
         解析失败与出价同规则：重试 1 次，仍失败记 0。
         """
         self._pending_day1_bid = None
-        content = self.give_speech(user_text, phase, context)
+        content = self._guarded_call(user_text, phase, context).strip()
         bid = self.parse_bid(content)
         if bid is PARSE_FAILED:
             retry_content = self._guarded_call(
