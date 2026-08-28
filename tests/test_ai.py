@@ -227,6 +227,28 @@ class TestController:
         controller = Controller(mode="continuous", announce=lambda msg: None)
         controller.wait_for_turn("任意调用")  # 不阻塞，直接返回
 
+    def test_stale_enter_does_not_preconfirm_next_round(self):
+        # 单步模式下在上一轮执行期间误按的回车不得预确认下一轮
+        controller = Controller(mode="step", announce=lambda msg: None)
+        done = []
+
+        def run_two_rounds():
+            controller.wait_for_turn("第1轮")
+            controller.offer_command("")  # 模拟执行期间误按的回车
+            controller.wait_for_turn("第2轮")
+            done.append(1)
+
+        thread = threading.Thread(target=run_two_rounds)
+        thread.start()
+        thread.join(timeout=0.2)
+        assert not done
+        controller.offer_command("")  # 放行第1轮
+        thread.join(timeout=0.2)
+        assert not done  # 误按的回车已在第2轮闸门处被丢弃，仍阻塞
+        controller.offer_command("")  # 本轮提示之后的回车才算确认
+        thread.join(timeout=1)
+        assert done == [1]
+
     def test_pause_degenerates_to_step_gate(self):
         # 轮间按 p：不再有 RoundAborted，退化为单步闸门等回车
         controller = Controller(mode="continuous", announce=lambda msg: None)

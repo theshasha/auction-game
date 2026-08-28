@@ -1,6 +1,4 @@
-# 当前进度
-
-> 更新时间：2026-08-28。本文件供新对话快速恢复上下文。
+# 项目说明
 
 ## 项目目标
 
@@ -23,14 +21,15 @@
 ├── main.py         # 入口：默认 Bot 模式；--ai 为 AI 交互模式（每玩家独立模型）
 ├── check_llm.py    # 连通性冒烟测试：对 config.yaml 每个端点发最小请求（真实联网）
 ├── config.yaml     # 6 玩家名字+人设+各自 provider/model
-├── tests/          # test_engine.py / test_tournament.py / test_ai.py（49 项全绿）
+├── tests/          # test_engine.py / test_tournament.py / test_ai.py（54 项全绿）
 └── logs/           # 按场次分目录 <时间戳>_<bot|ai>/，latest 软链接指向最近一场（gitignore）
                     # 每场内含 match_<n>.json/.txt，AI 模式另有 ai_<名字>.jsonl、speeches.txt
+                    # ai_<名字>.md 与 jsonl 同步双写（markdown 视图，VSCode 打开可实时分玩家阅读）
 ```
 
 ```bash
 cd /root/auction_game
-python3 -m pytest tests/ -q     # 49 项测试（全部零网络）
+python3 -m pytest tests/ -q     # 54 项测试（全部零网络）
 python3 main.py --seed 42       # Bot 模式（冠军 Delta，可复现）
 python3 check_llm.py            # 冒烟测试 6 个 LLM 端点（真实联网，--ai 前必跑）
 python3 main.py --ai            # AI 模式，需 .env 配齐 GEMINI_API_KEY / MODAL_* / HUB_API_KEY
@@ -38,7 +37,7 @@ python3 main.py --ai            # AI 模式，需 .env 配齐 GEMINI_API_KEY / M
 
 AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（保留已完成，恢复后仅补跑未完成）/ q=中止。
 
-## 模型分配（2026-08-28 拍板）
+## 模型分配
 
 玩家名 = 模型名（Kimi-K3 去掉 moonshotai/ 前缀），人设统一为「做你心中的自己」。
 
@@ -55,43 +54,42 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 
 ## 关键设计决策（用户已拍板，勿擅自更改）
 
-1. **玩家类名是 AIPlayer**（不是 GeminiPlayer），与厂商无关，模型/端点走配置。
+1. **玩家类名是 AIPlayer**，与厂商无关，模型/端点走配置。
 2. **每局结束公开**：该局完整出价日志 + 当前累计排名 + 每人各局胜场明细。
 3. **AI 输出格式**：自由文本推理 + 末尾 `json {"bid": N}` 块；解析取最后一个 JSON 块。
-4. **对话线只增不改**（保 Gemini 前缀缓存）：system（规则+人设+名单）初始化后永不改，
+4. **对话线只增不改**（保前缀缓存）：system（规则+人设+名单）初始化后永不改，
   所有环节只 append；唯一允许的截断是暂停回滚到本轮 checkpoint。
 5. **每天只发一条 user 消息**：第N局第M天+余额/已胜/剩余胜场，非首日合并昨日公布三项
   （不单独发"昨日结果"消息）。
-6. **不采集推理内容**（2026-08-27 拍板，2026-08-28 已清理完毕）：所有模型均不需要 `reasoning_content`；
-   `ChatReply` 已删除，`chat_fn` 统一返回 `str`（正文），Gemini 的 include_thoughts 嵌套已移除。
-7. **多 provider 架构**（2026-08-28 拍板）：`make_chat_fn(provider, model)` 按 provider 分发四种调用方式
-   （gemini/modal chat completions、hub responses API、anthropic SDK）；每玩家独立配模型，
-   6 人可混合 5 个模型对战；新增端点前先跑 `check_llm.py` 冒烟测试。
+6. **不采集推理内容**：所有模型均不需要 `reasoning_content`，`chat_fn` 统一返回 `str`（正文）。
+7. **多 provider 架构**：`make_chat_fn(provider, model)` 按 provider 分发四种调用方式
+   （gemini/modal chat completions、hub responses API、anthropic SDK）；每玩家独立配模型；
+   新增端点前先跑 `check_llm.py` 冒烟测试。
    各模型输出上限按 https://models.dev/ 官方 provider 数据内置在 `MODEL_OUTPUT_LIMITS`
    （Kimi-K3=131072、deepseek-v4-pro=384000、gpt-5.6-sol/claude-opus-4-6=128000、gemini 系=65536），
    按 API 传参：chat completions 用 max_tokens、responses API 用 max_output_tokens、anthropic 必填 max_tokens。
-8. **单步粒度 = 一轮并发收集**（2026-08-28 重拍）：回车一次放行整轮（某天 6 人出价 / 某轮 6 人发言），
+8. **单步粒度 = 一轮并发收集**：回车一次放行整轮（某天 6 人出价 / 某轮 6 人发言），
   线程池并发执行，全部任务有定论后才进入下一轮；闸门提示只显示轮次说明（如"第1局第1天出价"）。
   暂停 = 等在途调用结束，丢弃暂停后完成的结果并回滚对应玩家，**已完成的结果保留**，
   恢复后仅补跑未完成项；连续/单步随时切换。
 9. **连续两次调用失败（网络/余额等基础设施故障）→ 抛 `CallFailedError` 上报轮级别**
   （玩家内部已自动重试 1 次且对话线回滚到本轮 checkpoint）：一轮收完后打印失败名单与原因，
   回车仅重跑失败的 AI（可反复直到本轮齐全，q 仍可中止），连续模式同样转入等回车。
-  旧架构的 `on_double_error` 钩子、`RoundAborted` 整轮回滚与兜底记 0 已移除。
   注意：解析失败（输出格式问题）仍按规则重试 1 次后记 0，不触发轮级别重跑。
 10. **发言流程**：开局发言→互看他人发言→规划第一局；每局末同上→规划下局；终局感言→互看→
   观众总结（不回喂任何对话线）。发言 500 字截断，缺失视为放弃。
 11. **分红除数恒为 6**（玩家永不退场）；一局结束当天不分红；流局日全额返还无分红。
-12. **日志按场次分目录**（2026-08-28 拍板）：每次运行创建 `logs/<YYYYmmdd_HHMMSS>_<bot|ai>/`，
+12. **日志按场次分目录**：每次运行创建 `logs/<YYYYmmdd_HHMMSS>_<bot|ai>/`，
   该场所有日志直接写入；`logs/latest` 相对软链接指向最近一场；同秒撞名加 `_2` 后缀；
   不放 run_meta.json；旧日志不做移动/删除，清理由用户决定。
+13. **AI 对话日志 md 双写**：`_write_log` 是唯一出口，每条 jsonl 同步渲染追加到
+  同名 `ai_<名字>.md`（路径由 `log_path.with_suffix(".md")` 派生，调用方零改动），
+  供 VSCode 实时分玩家阅读。user/assistant 全文收录，调用失败/出价结果/截断以 `> 引用行` 收录；
+  正文不套代码围栏（assistant 自带 ```json 块原样渲染）；jsonl 仍是结构化源头，md 只是视图可随时重建。
 
 ## 已踩过的坑（重要）
 
 1. **Kimi K3 强制推理，不能关 thinking**：Modal 端点传 `reasoning_effort="none"` 会 400
-   （"Kimi K3 always reasons..."），只能省略该参数或传 low/high/max。已拍板省略（2026-08-28）。
+   （"Kimi K3 always reasons..."），只能省略该参数或传 low/high/max（当前省略）。
 2. **hub 的 claude 走 Anthropic SDK 而非 OpenAI 协议**：`base_url=https://hub.oaifree.com/anthropic`，
    system 提示词必须从 messages[0] 提取到 `system=` 参数，且必须显式传 `max_tokens`。
-3. **暂停闸门残留死循环**（已修）：`wait_for_turn` 消费暂停标志时必须同时 `_gate.clear()`，
-  否则 `request_pause` 残留的闸门会让恢复后不等你确认就空转打 API。
-

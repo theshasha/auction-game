@@ -101,6 +101,8 @@ class Controller:
                     self._gate.clear()
             if self._mode == "continuous":
                 return
+            # 先清掉上一轮执行期间误按的回车：只有本轮提示之后按的回车才算确认
+            self._gate.clear()
             self._announce(f"[单步] 下一步：{label}（回车执行 / c=连续 / p=暂停 / q=中止）")
             self._gate.wait()
             self._gate.clear()
