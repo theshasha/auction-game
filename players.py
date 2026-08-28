@@ -6,7 +6,7 @@ import random
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
-from models import Observation
+from models import MAX_BID, Observation
 
 
 class Player(ABC):
@@ -28,7 +28,7 @@ class RandomBot(Player):
         self.rng = rng or random.Random()
 
     def decide_bid(self, obs: Observation) -> int:
-        return self.rng.randint(0, min(obs.my_coins, obs.bid_cap))
+        return self.rng.randint(0, min(obs.my_coins, MAX_BID))
 
 
 class ScriptedPlayer(Player):

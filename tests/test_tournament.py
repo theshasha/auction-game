@@ -10,10 +10,8 @@ NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 def make_players(match_winners: dict[int, str]):
     """构造 6 个 ScriptedPlayer：每一局由 match_winners[局号] 指定的玩家包揽胜场。
 
-    指定赢家每天出 1、其他人每天出 0（余额可持续、价位唯一），因此赢家 4 天连胜、
-    每天拿走打包的 2 个胜场，一局共 8 个。
-    非赢家出 0 而非 1：0 撞车低于获胜价，避免领先者在后续局触发罚没、
-    破坏本类用例对总胜场的精确断言。
+    指定赢家每天出 1（唯一获胜，每天付 1，工资 +3 足以 sustain），其他人每天出 0
+    （撞车但支付 0，无代价）；赢家 5 天连赢，按奖池 1,1,2,2,2 共拿 8 个胜场。
     局号 = len(obs.past_match_logs) + 1。
     """
     def make_strategy(name):
@@ -45,7 +43,7 @@ class TestRegularSeasonOnly:
         assert ranks(result)["甲"] == 1
 
     def test_tie_below_first_place_does_not_trigger_playoff(self):
-        # 甲乙丙丁戊全部 0 胜场并列，但第一名唯一，不触发加赛，并列保持
+        # 乙丙丁戊己全部 0 胜场并列，但第一名唯一，不触发加赛，并列保持
         players = make_players({1: "甲", 2: "甲", 3: "甲", 4: "甲", 5: "甲"})
         result = run_tournament(players)
 
@@ -54,53 +52,25 @@ class TestRegularSeasonOnly:
             assert ranks(result)[name] == 2  # 第一名以外并列同名次
 
 
-class TestCollisionPenaltyFolding:
-    def test_penalties_reduce_final_standings(self):
-        # 甲每局出 2 包揽胜场；第 3 局乙也出 2 撞车、丙出 1 唯一获胜、其余出 0。
-        # 第 3 局开局甲已攒 16 胜，前 3 天与 0 胜的乙在高于获胜价的 2 撞车，各被罚 1，共 3
-        # （第 4 天甲乙余额耗尽出 2 非法记 0，撞车价位 0 低于获胜价，不再罚）。
-        def make_strategy(name):
-            def strategy(obs):
-                current_match = len(obs.past_match_logs) + 1
-                if current_match == 3:
-                    return {"甲": 2, "乙": 2, "丙": 1}.get(name, 0)
-                return 2 if name == "甲" else 1
-            return strategy
+class TestSalarySustainsBalances:
+    """工资制（每天 +3）的经济效果：低出价玩家的余额跨天可持续。"""
 
-        players = [ScriptedPlayer(name, make_strategy(name)) for name in NAMES]
-        result = run_tournament(players)
-
-        assert result.playoff_count == 0
-        # 甲毛胜场 32（第 1/2/4/5 局各 8），第 3 局被罚 3，净 29；罚没从最近有胜场局折算
-        assert totals(result)["甲"] == 29
-        entry = next(e for e in result.final_standings if e.player == "甲")
-        assert entry.wins_per_match == [8, 5, 0, 8, 8]
-        # 丙第 3 局拿满 8 胜且后续未被罚（除数 6 分红托底下余额可持续，第 4/5 局第 4 天仍出 1、
-        # 获胜价 1 高于 0 撞车，不再触发「非法 0 撞车罚没」）
-        assert totals(result)["丙"] == 8
-        assert ranks(result)["甲"] == 1
-
-
-class TestDividendSustainsBalances:
-    """除数 6 的经济效果：每天总消耗不低于 6 时分红 ≥1 补回出价，余额可持续，不再被耗尽。"""
-
-    def test_daily_dividend_keeps_balance_positive(self):
-        # 甲每天出 2（唯一最高）获胜，其余人每天出 1（低于获胜价、撞车不罚）。
-        # 每天总消耗 2+5 = 7，分红 7 // 6 = 1 恰好补回其余人的出价：余额永续，4 天都出得起。
+    def test_daily_salary_keeps_balance_positive(self):
+        # 甲每天出 2（唯一最高）获胜付 2，其余人每天出 1 撞车各付 1；
+        # 工资 +3 覆盖双方支出：5 天全程无人余额耗尽、无人非法出价
         players = [ScriptedPlayer(n, (lambda b: lambda obs: b)(2 if n == "甲" else 1)) for n in NAMES]
         result = run_tournament(players)
 
-        # 只跑到第 1 局结束即可验证：甲 4 天连赢，8 个胜场拍完，无人余额耗尽
         first_log = result.match_logs[0]
-        assert len(first_log.days) == 4
+        assert len(first_log.days) == 5
         assert all(not day.is_void for day in first_log.days)
         assert all(day.winner == "甲" and day.winning_bid == 2 for day in first_log.days)
-        # 每天分红 1（最后一天结束不分红）
-        assert [day.dividend for day in first_log.days] == [1, 1, 1, 0]
-        # 甲 4 天余额：6-2+1=5, -2+1=4, -2+1=3, -2=1，第 4 天仍能出 2（不非法）
+        assert [day.pool for day in first_log.days] == [1, 1, 2, 2, 2]
+        assert first_log.wins["甲"] == 8
         assert all(
-            next(b for b in day.bids if b.player == "甲").status == "ok"
+            record.status == "ok"
             for day in first_log.days
+            for record in day.bids
         )
 
 
@@ -173,10 +143,10 @@ class TestDirectorWillContinue:
         assert final_log is result.match_logs[-1]
 
     def test_will_continue_respects_playoff_cap(self, monkeypatch):
-        # 上限缩到 2：全员每天出 1 撞车永远流局、人人 0 胜永远并列，直到封顶
+        # 上限缩到 2：全员每天出 0 撞车永远流局、人人 0 胜永远并列，直到封顶
         monkeypatch.setattr(tournament, "MAX_PLAYOFFS", 2)
         director = self.FakeDirector()
-        players = make_players({})  # 无人被指定为赢家，全员每天出 1 撞车流局
+        players = make_players({})  # 无人被指定为赢家，全员每天出 0 撞车流局
         result = run_tournament(players, director=director)
 
         assert result.playoff_cap_hit
@@ -201,8 +171,8 @@ class TestPublicationOnMatchEnd:
         # 正赛后甲乙丙丁戊五人 8 胜并列第一，触发加赛；第 6 局甲包揽后唯一
         assert len(publications) == 6
         first_log, first_standings = publications[0]
-        # 局日志完整：含每天每人出价
-        assert len(first_log.days) == 4
+        # 局日志完整：固定 5 天，含每天每人出价
+        assert len(first_log.days) == 5
         assert len(first_log.days[0].bids) == 6
         # 局末公开排名含胜场明细，且反映该局结果
         first_entry = next(e for e in first_standings if e.player == "甲")

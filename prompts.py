@@ -2,73 +2,66 @@
 
 from __future__ import annotations
 
-from models import WINS_PER_MATCH, MatchLog, Observation, StandingsEntry, bid_limit
+from models import (
+    DAILY_POOL,
+    INITIAL_COINS,
+    MAX_BID,
+    MAX_DAYS,
+    MatchLog,
+    Observation,
+    StandingsEntry,
+)
 
 RULES_TEXT = """\
 【唯一高价拍卖游戏规则】
 
 一、赛制
-1. 共 6 名 AI 玩家参赛，个人赛，各自独立争取排名。
-2. 比赛共 5 局正赛。每局拍卖 8 个胜场，每天打包拍卖 2 个，因流局可顺延，每局最多 5 天。
-   第 5 天结算后无论分出胜负还是流局，本局结束，未拍出的胜场作废。
-3. 每天开局时若全员金币余额均为 0，本局立即结束，未拍出的胜场作废。
+1. 6 名 AI 玩家参赛，个人赛，各自独立争取排名。
+2. 共 5 局正赛，每局固定 5 天，共拍卖 8 个胜场。每天奖池：第 1 天 1 个、第 2 天 1 个、
+   第 3 天 2 个、第 4 天 2 个、第 5 天 2 个。流局当天的奖池并入次日；
+   第 5 天未拍出的胜场作废。
 
 二、金币与出价
-1. 每局开始时每位玩家获得 6 枚金币。金币在局内跨天累积，跨局不继承，局末作废。
-2. 每天所有玩家同时提交秘密出价。出价为 0 到当天出价上限的整数，且不得超过当前余额。
-   出价上限随天数降档：第 1~2 天为 6，第 3~4 天为 5，第 5 天为 4；
-   流局顺延的日子同样计入降档。每局第 1 天的上限重新从 6 开始。
-3. 非法出价（超余额、超上限、非整数、负数）一律视为出价 0。未提交视为出价 0。
-4. 出价即消耗：正常结算当天无论输赢，出价立即被扣除。流局日全员出价全额返还。
+1. 每局开始时每人 6 枚金币；从第 2 天起，每天开始时每人发放 3 枚金币（工资）。
+   金币局内累积，跨局不继承，局末作废。
+2. 每天所有玩家同时提交秘密出价。出价为 0 到 6 的整数，且不得超过当前余额。
+3. 非法出价（超余额、超范围、非整数）与未提交一律视为出价 0。
 
-三、胜负判定（最高唯一出价）
-1. 当天出价最高、且该价位没有任何其他玩家出价的玩家获胜，一次获得当天打包的 2 个胜场。
-2. 两人及以上出价相同的价位作废，系统向下寻找下一个唯一的最高出价。
-3. 0 是合法价位：若出 0 以外的玩家均撞车，唯一出价 0 的玩家获胜。
-4. 若所有出价均撞车、没有任何唯一出价，当天流局：不产生胜场、出价全额返还、无分红。
-5. 获胜者不退场，以剩余金币继续参与后续天数的竞拍。
-6. 胜场罚没判定（每天结算时执行）：
-   第一步（检查范围）：正常分出胜负的当天，只检查高于获胜价的撞车价位，
-     低于或等于获胜价的撞车一律不检查；流局的当天，检查全部撞车价位。
-   第二步（比较口径）：在每个被检查的撞车价位上，比较该价位所有玩家的
-     "累计总胜场"（跨全部已结束局 + 本局已获胜场 − 已被罚没胜场，
-     就是每天出价消息里"你的累计总胜场"那个数字；与本局胜场无关）。
-   第三步（罚没）：若这些玩家的累计总胜场并非全都相同，则其中最多者
-     各被罚没 1 个累计胜场（并列最多都罚；全相同则无人被罚）。
-   记住：罚没只认"累计总胜场"，永不看"本局已获胜场"；
-        正常日低于获胜价的撞车不会被罚。
-7. 罚没只影响累计排名：当天的胜负归属、金币结算与本局拍卖流程均不受罚没影响。
+三、每日结算（按顺序执行四步）
+1. 判定撞车：若某个出价数值被两名及以上玩家出了，该数值即为撞车价位，
+   出了该数值的玩家全部视为撞车。只出现一次的数值为唯一出价。
+2. 判定胜负：所有唯一出价中最高的一个获胜。0 是合法价位：若其他价位全部撞车，
+   唯一的 0 出价也能获胜。若当天没有任何唯一出价，则流局：无人获胜，奖池并入次日。
+3. 冲顶税：若获胜价为 6，获胜者获得的胜场数为当天奖池数减 1（最低为 0），
+   被扣除的 1 个胜场作废。以 0~5 获胜则获得奖池全部胜场。
+4. 金币结算：获胜者扣除其出价；所有撞车的玩家扣除各自出价（流局日同样扣除）；
+   唯一但未获胜的玩家全额退还出价。被扣除的金币由系统没收。
 
-四、每日分红
-1. 每个正常分出胜负的当天结算后，当天全员出价总和平均分给所有在场玩家：
-   总消耗除以 6 向下取整为每人分红，零头由系统没收。
-2. 若当天结算后本局结束（拍出最后 2 个胜场或第 5 天结算），则不再分红。
+   结算示例：六人出价为 6、5、5、3、2、0。两个 5 撞车，各扣 5；6 是最高唯一出价，
+   获胜并扣 6，当天奖池为 2，缴冲顶税后获得 1 个胜场；
+   出 3、2、0 者唯一但未获胜，全额退还。
 
-五、信息公布
-1. 每天结束只公布四项：获胜者身份（或流局）、作废价位数量、当天分红金额、
-   当天胜场罚没情况（若有玩家被罚没，公布其身份与罚没数量）。
-   作废价位数量：正常分出胜负的当天，只统计高于最终获胜价、且因两人及以上撞车而被
-   作废的不同出价数值的个数（低于或等于获胜价的撞车一律不计入）；
-   流局的当天，统计全部撞车价位的个数。
-   系统不公布任何玩家的具体出价与剩余余额。
-2. 每局结束后，公布该局完整出价日志，以及截至当前的累计排名与每人胜场明细。
+四、信息公布
+1. 每天结束公布：获胜者身份与获胜价（或流局），以及当天撞车价位的个数。
+   不公布任何玩家的具体出价与余额。
+2. 每局结束后，公布该局完整出价日志，以及截至当前的累计排名。
 
-六、发言
-1. 开赛前与每局结束后，每位玩家各有一次公开发言机会（同时提交同时公开）。
-2. 发言面向全体玩家公开，内容不产生任何规则上的约束力。除发言环节外禁止任何通信。
+五、发言
+开赛前与每局结束后各一次公开发言，同时提交同时公开，无规则约束力，其余时间禁止通信。
 
-七、排名与加赛
-1. 正赛 5 局结束后比较总胜场数。第一名无并列则直接确定最终排名。
+六、排名与加赛
+1. 正赛 5 局结束后比较总胜场数。第一名唯一则直接确定最终排名。
 2. 第一名有并列则全员进入加赛局（规则与正赛局完全相同），加赛局胜场计入总胜场，
    每局加赛后重新排名，第一名仍并列（包括并列者变化）则继续加赛，直到第一名唯一。
 3. 第一名以外的并列保持并列，不再区分。
 """
 
-def bid_format_hint(bid_cap: int) -> str:
+
+def bid_format_hint() -> str:
     """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。"""
     return (
         "请先分析当前局势，然后在回复末尾用如下 JSON 给出今日出价：\n"
-        f'{{"bid": <0到{bid_cap}的整数，不得超过你的余额>}}'
+        f'{{"bid": <0到{MAX_BID}的整数，不得超过你的余额>}}'
     )
 
 
@@ -107,56 +100,63 @@ def opening_speech_request() -> str:
     )
 
 
+def _day1_constant_info() -> str:
+    """第 1 天信息恒定：初始金币、0 胜场、当天奖池与固定上限都是常量。"""
+    return (
+        f"（第 1 天信息恒定：你的金币 {INITIAL_COINS}，本局已获胜场 0，"
+        f"今日奖池 {DAILY_POOL[0]} 个胜场，出价上限 {MAX_BID}）"
+    )
+
+
 def opening_plan_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家的开局发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价"
-        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}，"
-        f"出价上限 {bid_limit(1)}）。\n\n"
-        + bid_format_hint(bid_limit(1))
+        + _day1_constant_info()
+        + "。\n\n"
+        + bid_format_hint()
     )
 
 
 def bid_request(obs: Observation) -> str:
     match_index = len(obs.past_match_logs) + 1
+    # 第 2 天起每天开始时已发放工资，余额是发放后的值，明示避免模型自己再加一次
+    salary_note = "（已含今日工资）" if obs.day >= 2 else ""
     status_line = (
-        f"今日出价上限：{obs.bid_cap}；"
-        f"你的金币余额：{obs.my_coins}；本局已获胜场：{obs.my_match_wins}；"
-        f"本局剩余待拍胜场：{obs.wins_remaining}；"
-        f"你的累计总胜场：{obs.my_total_wins}（已含罚没）。"
-        "罚没提示：若今日与他人撞车，被罚没的是同价者中\"累计总胜场\"最多的人"
-        "（正常日仅检查高于获胜价的撞车价位，低于获胜价的撞车不罚）；"
-        "每日公布的作废价位同样只统计高于获胜价的撞车。"
+        f"今日奖池：{obs.today_pool} 个胜场；"
+        f"你的金币余额：{obs.my_coins}{salary_note}；本局已获胜场：{obs.my_match_wins}；"
+        f"你的累计总胜场：{obs.my_total_wins}。"
     )
     if not obs.today_history:
         # 首日：单行不换句
-        return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint(obs.bid_cap)}"
+        return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint()}"
 
     yesterday = obs.today_history[-1]
     if yesterday["winner"] == "流局":
-        announcement = f"昨日公布：流局（无分红），作废价位 {yesterday['voided_price_count']} 个"
+        announcement = (
+            f"昨日公布：流局，奖池 {yesterday['pool']} 个胜场并入今日，"
+            f"撞车价位 {yesterday['collision_price_count']} 个。"
+        )
+    elif yesterday["winning_bid"] == MAX_BID:
+        announcement = (
+            f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
+            f"奖池 {yesterday['pool']} 个胜场，缴冲顶税后实得 {yesterday['wins_taken']} 个，"
+            f"撞车价位 {yesterday['collision_price_count']} 个。"
+        )
     else:
         announcement = (
-            f"昨日公布：{yesterday['winner']} 获胜，作废价位 {yesterday['voided_price_count']} 个，"
-            f"分红 {yesterday['dividend']} 金币"
+            f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
+            f"赢得 {yesterday['pool']} 个胜场，"
+            f"撞车价位 {yesterday['collision_price_count']} 个。"
         )
-    penalties = yesterday.get("penalties") or []
-    if penalties:
-        details = "、".join(f"{p['player']} {p['wins']} 胜场" for p in penalties)
-        announcement += f"，胜场罚没：{details}"
-    announcement += "。"
-    # 余额已含昨日分红，放在公布之后并明示，避免模型误再加一次分红
-    status_line = status_line.replace(
-        f"你的金币余额：{obs.my_coins}；", f"你的金币余额：{obs.my_coins}（已含昨日分红）；"
-    )
     lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement, status_line]
-    return "\n".join(lines) + "\n\n" + bid_format_hint(obs.bid_cap)
+    return "\n".join(lines) + "\n\n" + bid_format_hint()
 
 
-def retry_bid_request(bid_cap: int) -> str:
+def retry_bid_request() -> str:
     return (
-        "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + bid_format_hint(bid_cap)
+        "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + bid_format_hint()
     )
 
 
@@ -165,32 +165,23 @@ def render_match_log(log: MatchLog) -> str:
     if not log.days:
         return "  （本局未进行任何拍卖）"
     player_names = [record.player for record in log.days[0].bids]
-    header = "| 天 | " + " | ".join(player_names) + " | 结果 | 作废价位 | 分红 |"
+    header = "| 天 | 奖池 | " + " | ".join(player_names) + " | 结果 | 撞车价位 |"
     separator = "|" + " --- |" * (len(player_names) + 4)
     rows = []
     for day in log.days:
         bid_by_player = {record.player: record.bid for record in day.bids}
         bid_cells = " | ".join(str(bid_by_player[name]) for name in player_names)
         if day.is_void:
-            outcome = "流局（全额返还）"
+            outcome = "流局（奖池作废）" if day.day == MAX_DAYS else "流局（奖池并入次日）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
-        if day.penalties:
-            details = "、".join(f"{name} 被罚 {amount} 胜场" for name, amount in day.penalties)
-            outcome += f"；{details}"
+            if day.winning_bid == MAX_BID:
+                outcome += f"（冲顶税：{day.pool}→{day.wins_taken}）"
         rows.append(
-            f"| {day.day} | {bid_cells} | {outcome} | {day.voided_price_count} | {day.dividend} |"
+            f"| {day.day} | {day.pool} | {bid_cells} | {outcome} | {day.collision_price_count} |"
         )
     wins_text = "、".join(f"{name} {w} 胜" for name, w in log.wins.items())
     lines = [header, separator, *rows, "", f"本局胜场：{wins_text}"]
-    penalty_totals: dict[str, int] = {}
-    for day in log.days:
-        for name, amount in day.penalties:
-            penalty_totals[name] = penalty_totals.get(name, 0) + amount
-    if penalty_totals:
-        lines.append(
-            "本局罚没胜场：" + "、".join(f"{name} {amount}" for name, amount in penalty_totals.items())
-        )
     return "\n".join(lines)
 
 
@@ -232,9 +223,9 @@ def next_match_plan_request(others_speeches: dict[str, str]) -> str:
         "以下是其他玩家的局末发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你下一局的初步策略，并直接给出下一局第 1 天的出价"
-        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}，"
-        f"出价上限 {bid_limit(1)}）。\n\n"
-        + bid_format_hint(bid_limit(1))
+        + _day1_constant_info()
+        + "。\n\n"
+        + bid_format_hint()
     )
 
 

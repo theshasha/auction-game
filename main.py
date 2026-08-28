@@ -20,20 +20,14 @@ from controller import (
     run_parallel_round,
 )
 from llm_client import MissingApiKeyError, make_chat_fn
-from models import WINS_PER_MATCH, MatchLog, StandingsEntry
-from players import RandomBot
+from models import MatchLog, StandingsEntry
+from players import RandomBot, ScriptedPlayer
 from tournament import run_tournament
 
 BOT_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
 ROOT_DIR = Path(__file__).parent
 LOG_DIR = ROOT_DIR / "logs"
 CONFIG_PATH = ROOT_DIR / "config.yaml"
-
-END_REASON_LABELS = {
-    "wins_exhausted": f"{WINS_PER_MATCH} 个胜场全部拍出",
-    "max_days": "达到第 5 天上限",
-    "all_coins_zero": "全员余额归零",
-}
 
 ABSENT_SPEECH = "（放弃发言）"
 
@@ -74,8 +68,7 @@ def make_publish(log_dir: Path):
         kind = "加赛" if log.is_playoff else "正赛"
         text = (
             f"===== 第 {log.match_index} 局（{kind}）=====\n"
-            f"{prompts.render_match_log(log)}\n"
-            f"  结束原因: {END_REASON_LABELS.get(log.end_reason, log.end_reason)}\n\n"
+            f"{prompts.render_match_log(log)}\n\n"
             f"截至本局的累计排名:\n{prompts.render_standings(standings)}\n"
         )
         (log_dir / f"match_{log.match_index}.txt").write_text(text, encoding="utf-8")
@@ -263,13 +256,101 @@ def run_ai() -> None:
     print_final_result(result)
 
 
+def run_benchmark(count: int) -> None:
+    """规则平衡性验证（不写日志）：count 场纯随机 Bot 对战 + count 场鲸鱼探针对照。
+
+    鲸鱼探针：1 个恒出 6 的 ScriptedPlayer + 5 个 RandomBot。若鲸鱼平均总胜场
+    显著高于随机对手，说明「出最大数字」仍是无脑占优策略，规则需要再调。
+    """
+    from collections import Counter
+
+    def play_tournament(seed: int, with_whale: bool):
+        rng = random.Random(seed)
+        players: list = []
+        if with_whale:
+            players.append(ScriptedPlayer.constant("Whale", 6))
+        for name in BOT_NAMES[: 5 if with_whale else 6]:
+            players.append(RandomBot(name, random.Random(rng.random())))
+        return run_tournament(players)
+
+    def aggregate(results) -> dict:
+        stats = {
+            "days": 0,
+            "void_days": 0,
+            "winning_bids": Counter(),
+            "bids_by_day": {},
+            "pools_by_day": {},
+            "playoffs": 0,
+        }
+        for result in results:
+            stats["playoffs"] += result.playoff_count
+            for log in result.match_logs:
+                for day in log.days:
+                    stats["days"] += 1
+                    stats["pools_by_day"].setdefault(day.day, []).append(day.pool)
+                    if day.is_void:
+                        stats["void_days"] += 1
+                        continue
+                    stats["winning_bids"][day.winning_bid] += 1
+                    stats["bids_by_day"].setdefault(day.day, []).extend(
+                        record.bid for record in day.bids
+                    )
+        return stats
+
+    def print_stats(label: str, stats: dict) -> None:
+        days = stats["days"]
+        decided = days - stats["void_days"]
+        print(f"\n===== {label} =====")
+        print(f"总拍卖天数：{days}，流局 {stats['void_days']} 天（{stats['void_days'] / days:.1%}），"
+              f"加赛总局数 {stats['playoffs']}")
+        print("每天平均出价 / 平均奖池：")
+        for day_index in sorted(stats["pools_by_day"]):
+            bids = stats["bids_by_day"].get(day_index, [])
+            pools = stats["pools_by_day"][day_index]
+            avg_bid = f"{sum(bids) / len(bids):.2f}" if bids else "—（全流局）"
+            print(f"  第 {day_index} 天：出价 {avg_bid}，奖池 {sum(pools) / len(pools):.2f}")
+        win_dist = dict(sorted(stats["winning_bids"].items()))
+        cap_wins = stats["winning_bids"][6]
+        print(f"获胜价分布：{win_dist}")
+        print(f"获胜价=6（极点）占比：{cap_wins}/{decided}（{cap_wins / max(decided, 1):.1%}）")
+
+    baseline = [play_tournament(seed=1000 + i, with_whale=False) for i in range(count)]
+    print_stats(f"基准：{count} 场纯随机 Bot 对战", aggregate(baseline))
+
+    probe = [play_tournament(seed=2000 + i, with_whale=True) for i in range(count)]
+    print_stats(f"鲸鱼探针：{count} 场「Whale 恒出 6 + 5 随机」", aggregate(probe))
+    whale_wins = []
+    field_wins = []
+    whale_ranks = []
+    for result in probe:
+        for entry in result.final_standings:
+            if entry.player == "Whale":
+                whale_wins.append(entry.total_wins)
+                whale_ranks.append(entry.rank)
+            else:
+                field_wins.append(entry.total_wins)
+    avg_whale = sum(whale_wins) / len(whale_wins)
+    avg_field = sum(field_wins) / len(field_wins)
+    avg_rank = sum(whale_ranks) / len(whale_ranks)
+    print(f"Whale 平均总胜场 {avg_whale:.2f}（平均排名 {avg_rank:.2f}），"
+          f"随机对手平均 {avg_field:.2f}")
+    if avg_whale > avg_field * 1.2:
+        print("判定：鲸鱼显著领先——「出最大数字」仍是占优策略，规则需要再调。")
+    else:
+        print("判定：鲸鱼未能拉开差距——价格约束生效，极点已拆除。")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="唯一高价拍卖游戏")
     parser.add_argument("--seed", type=int, default=None, help="随机种子（仅 Bot 模式），用于复现对局")
     parser.add_argument("--ai", action="store_true", help="AI 模式：读取 config.yaml，每玩家走各自的 provider/model")
+    parser.add_argument("--benchmark", type=int, metavar="N", default=None,
+                        help="平衡性验证：跑 N 场纯随机 + N 场鲸鱼探针对照（不写日志）")
     args = parser.parse_args()
 
-    if args.ai:
+    if args.benchmark:
+        run_benchmark(args.benchmark)
+    elif args.ai:
         run_ai()
     else:
         run_bots(args.seed)
