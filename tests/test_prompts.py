@@ -50,7 +50,7 @@ class TestSpeechWordLimits:
 
     def test_final_speech_and_summary_have_no_word_limit(self):
         standings = make_standings({n: [0] for n in NAMES})
-        assert "字" not in prompts.final_speech_request(standings)
+        assert "字" not in prompts.final_speech_request(standings, make_log(match_index=5))
         assert "字" not in prompts.final_summary_request({"乙": "感言"})
 
     def test_rules_text_has_no_word_limit(self):

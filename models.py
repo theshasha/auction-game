@@ -10,7 +10,7 @@ INITIAL_COINS = 6      # 每局初始金币
 MAX_DAYS = 5           # 每局最多天数（含顺延）
 WINS_PER_MATCH = 8     # 每局拍卖的胜场数
 WINS_PER_DAY = 2       # 每天打包拍卖的胜场数（8 ÷ 2 整除，不产生零头）
-DIVIDEND_DIVISOR = 8   # 分红除数，固定为 8（大于玩家数，低价苟活无分红）
+DIVIDEND_DIVISOR = 7   # 分红除数，固定为 7（大于玩家数 6，全员极低价苟活时总消耗不足 7、无分红）
 COLLISION_PENALTY = 1  # 高位撞车每次罚没的累计胜场数
 
 

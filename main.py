@@ -171,9 +171,9 @@ class AISpeechDirector:
                 "下一局策略规划（含首日出价）",
             )
 
-    def on_final(self, standings: list[StandingsEntry]) -> None:
+    def on_final(self, standings: list[StandingsEntry], log: MatchLog) -> None:
         speeches = self._run_round(
-            {p: (prompts.final_speech_request(standings), "final_speech") for p in self.players},
+            {p: (prompts.final_speech_request(standings, log), "final_speech") for p in self.players},
             "最终感言",
         )
         self._publish_speeches("最终感言", speeches)

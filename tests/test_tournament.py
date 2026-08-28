@@ -75,10 +75,33 @@ class TestCollisionPenaltyFolding:
         assert totals(result)["甲"] == 29
         entry = next(e for e in result.final_standings if e.player == "甲")
         assert entry.wins_per_match == [8, 5, 0, 8, 8]
-        # 丙第 3 局拿满 8 胜后，第 4/5 局第 4 天出 1 撞车（高于获胜价 0）且总胜场 8 > 其他撞车者的 0，
-        # 各被罚 1：8 - 2 = 6
-        assert totals(result)["丙"] == 6
+        # 丙第 3 局拿满 8 胜且后续未被罚（除数 7 分红托底下余额可持续，第 4/5 局第 4 天仍出 1、
+        # 获胜价 1 高于 0 撞车，不再触发「非法 0 撞车罚没」）
+        assert totals(result)["丙"] == 8
         assert ranks(result)["甲"] == 1
+
+
+class TestDividendSustainsBalances:
+    """除数 7 的经济效果：每天总消耗恰为 7 时分红 1 补回出价，余额可持续，不再被耗尽。"""
+
+    def test_daily_dividend_keeps_balance_positive(self):
+        # 甲每天出 2（唯一最高）获胜，其余人每天出 1（低于获胜价、撞车不罚）。
+        # 每天总消耗 2+5 = 7，分红 7 // 7 = 1 恰好补回其余人的出价：余额永续，4 天都出得起。
+        players = [ScriptedPlayer(n, (lambda b: lambda obs: b)(2 if n == "甲" else 1)) for n in NAMES]
+        result = run_tournament(players)
+
+        # 只跑到第 1 局结束即可验证：甲 4 天连赢，8 个胜场拍完，无人余额耗尽
+        first_log = result.match_logs[0]
+        assert len(first_log.days) == 4
+        assert all(not day.is_void for day in first_log.days)
+        assert all(day.winner == "甲" and day.winning_bid == 2 for day in first_log.days)
+        # 每天分红 1（最后一天结束不分红）
+        assert [day.dividend for day in first_log.days] == [1, 1, 1, 0]
+        # 甲 4 天余额：6-2+1=5, -2+1=4, -2+1=3, -2=1，第 4 天仍能出 2（不非法）
+        assert all(
+            next(b for b in day.bids if b.player == "甲").status == "ok"
+            for day in first_log.days
+        )
 
 
 class TestPlayoff:
@@ -123,23 +146,31 @@ class TestDirectorWillContinue:
 
     class FakeDirector:
         def __init__(self):
-            self.will_continue_flags = []
+            self.match_end_calls = []  # [(log, will_continue)]
+            self.final_calls = []      # [(standings, log)]
 
         def on_opening(self):
             pass
 
         def on_match_end(self, log, standings, will_continue):
-            self.will_continue_flags.append(will_continue)
+            self.match_end_calls.append((log, will_continue))
 
-        def on_final(self, standings):
-            pass
+        def on_final(self, standings, log):
+            self.final_calls.append((standings, log))
 
     def test_will_continue_false_on_last_match_when_decided(self):
         director = self.FakeDirector()
         players = make_players({i: "甲" for i in range(1, 6)})
-        run_tournament(players, director=director)
+        result = run_tournament(players, director=director)
 
-        assert director.will_continue_flags == [True, True, True, True, False]
+        # 前 4 局仍有下一局，触发局末发言；第 5 局（最后一局）跳过局末发言
+        assert [call[1] for call in director.match_end_calls] == [True, True, True, True]
+        assert [call[0].match_index for call in director.match_end_calls] == [1, 2, 3, 4]
+        # 终局感言恰好一次，且拿到最后一局（第 5 局）的完整出价日志
+        assert len(director.final_calls) == 1
+        _, final_log = director.final_calls[0]
+        assert final_log.match_index == 5
+        assert final_log is result.match_logs[-1]
 
     def test_will_continue_respects_playoff_cap(self, monkeypatch):
         # 上限缩到 2：全员每天出 1 撞车永远流局、人人 0 胜永远并列，直到封顶
@@ -150,8 +181,15 @@ class TestDirectorWillContinue:
 
         assert result.playoff_cap_hit
         assert result.playoff_count == 2
-        # 第 5 局后还有加赛空间→True；第 6 局（加赛 1/2）→True；第 7 局（加赛 2/2）→False
-        assert director.will_continue_flags == [True, True, True, True, True, True, False]
+        # 第 5 局后还有加赛空间→True；第 6 局（加赛 1/2）→True；
+        # 第 7 局（加赛 2/2）封顶为最后一局，跳过局末发言
+        assert [call[1] for call in director.match_end_calls] == [True, True, True, True, True, True]
+        assert [call[0].match_index for call in director.match_end_calls] == [1, 2, 3, 4, 5, 6]
+        # 终局感言拿到的是封顶的第 7 局（最后一局）日志
+        assert len(director.final_calls) == 1
+        _, final_log = director.final_calls[0]
+        assert final_log.match_index == 7
+        assert final_log is result.match_logs[-1]
 
 
 class TestPublicationOnMatchEnd:

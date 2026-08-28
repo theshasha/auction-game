@@ -39,7 +39,7 @@ RULES_TEXT = """\
 
 四、每日分红
 1. 每个正常分出胜负的当天结算后，当天全员出价总和平均分给所有在场玩家：
-   总消耗除以 8 向下取整为每人分红，零头由系统没收。
+   总消耗除以 7 向下取整为每人分红，零头由系统没收。
 2. 若当天结算后本局结束（拍出最后 2 个胜场或第 5 天结算），则不再分红。
 
 五、信息公布
@@ -210,8 +210,12 @@ def next_match_plan_request(others_speeches: dict[str, str]) -> str:
     )
 
 
-def final_speech_request(standings: list[StandingsEntry]) -> str:
+def final_speech_request(standings: list[StandingsEntry], log: MatchLog) -> str:
+    """终局感言请求：并入最后一局的完整出价日志（该局已跳过局末发言）。"""
+    kind = "加赛局" if log.is_playoff else "正赛局"
     return (
+        f"第 {log.match_index} 局（{kind}）结束，这也是最后一局。本局完整出价日志：\n"
+        f"{render_match_log(log)}\n\n"
         f"比赛全部结束。最终排名与胜场明细：\n{render_standings(standings)}\n\n"
         "请向全体玩家发表你的最终感言（纯文本）。"
     )

@@ -21,7 +21,7 @@ class SpeechDirector(Protocol):
 
     def on_opening(self) -> None: ...
     def on_match_end(self, log: MatchLog, standings: list[StandingsEntry], will_continue: bool) -> None: ...
-    def on_final(self, standings: list[StandingsEntry]) -> None: ...
+    def on_final(self, standings: list[StandingsEntry], log: MatchLog) -> None: ...
 
 
 @dataclass
@@ -85,7 +85,9 @@ def run_tournament(
                 first_place_tied(standings)
                 and result.playoff_count + (1 if is_playoff else 0) < MAX_PLAYOFFS
             )
-            director.on_match_end(log, standings, will_continue)
+            # 最后一局跳过局末发言：该局的完整出价日志并入终局感言（on_final）
+            if will_continue:
+                director.on_match_end(log, standings, will_continue)
 
     for _ in range(REGULAR_MATCHES):
         play_one_match(is_playoff=False)
@@ -99,5 +101,5 @@ def run_tournament(
 
     result.final_standings = compute_standings(wins_history)
     if director:
-        director.on_final(result.final_standings)
+        director.on_final(result.final_standings, result.match_logs[-1])
     return result
