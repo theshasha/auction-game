@@ -131,15 +131,15 @@ class TestCoinSettlement:
         assert record_jia.raw_bid == 4
         assert record_jia.bid == 0 and record_jia.status == "illegal"
         assert day2.winner == "乙" and day2.winning_bid == 3
-        assert day2.pool == 2  # 第 1 天奖池 1 并入：1 + 1 = 2
-        assert log.wins["乙"] == 2  # 赢家一次拿走含并入的全部奖池
+        assert day2.pool == 3  # 第 1 天奖池 1 并入：2 + 1 = 3
+        assert log.wins["乙"] == 3  # 赢家一次拿走含并入的全部奖池
 
 
 class TestPoolRollover:
     """流局奖池并入次日；第 5 天流局（或未拍出）则作废。"""
 
     def test_consecutive_voids_accumulate_pool(self):
-        # 第 1~2 天全员出 1 撞车流局（各付 1）；第 3 天奖池 = 2 + 1 + 1 = 4
+        # 第 1~2 天全员出 1 撞车流局（各付 1）；第 3 天奖池 = 2 + 2 + 1 = 5
         def strategy(obs):
             if obs.day <= 2:
                 return 1
@@ -148,39 +148,102 @@ class TestPoolRollover:
             return 0
 
         log = run_one_match({name: strategy for name in NAMES})
-        assert [day.pool for day in log.days[:3]] == [1, 2, 4]
+        assert [day.pool for day in log.days[:3]] == [1, 3, 5]
         assert log.days[0].is_void and log.days[1].is_void
         assert log.days[2].winner == "甲"
-        assert log.wins["甲"] == 4  # 第 3 天奖池 4 个胜场全部拿走
+        assert log.wins["甲"] == 5  # 第 3 天奖池 5 个胜场全部拿走
 
     def test_day5_pool_includes_full_rollover(self):
-        # 前 4 天全员出 1 撞车流局，第 5 天奖池滚到 8；差异化出价，甲唯一 6 全拿——
-        # 但 6 触发冲顶税：8 - 1 = 7，被扣的 1 个胜场作废
+        # 前 4 天全员出 1 撞车流局，第 5 天奖池滚到 9；差异化出价，甲唯一 6 触发
+        # 冲顶税与转判：甲拿 ceil(9/2)=5，转判次高唯一价 5 的乙拿 floor(9/2)=4
         def strategy(obs):
             if obs.day <= 4:
                 return 1
             return {"甲": 6, "乙": 5, "丙": 4, "丁": 3, "戊": 2, "己": 0}[obs.my_name]
 
         log = run_one_match({name: strategy for name in NAMES})
-        assert [day.pool for day in log.days] == [1, 2, 4, 6, 8]
-        assert log.days[4].winner == "甲"
-        assert log.days[4].wins_taken == 7
-        assert log.wins["甲"] == 7
+        assert [day.pool for day in log.days] == [1, 3, 5, 7, 9]
+        day5 = log.days[4]
+        assert day5.winner == "甲"
+        assert day5.wins_taken == 5
+        assert day5.transfer_recipient == "乙"
+        assert day5.transfer_wins == 4
+        assert log.wins["甲"] == 5
+        assert log.wins["乙"] == 4
 
     def test_day5_void_forfeits_pool(self):
         # 5 天全流局（全员每天出 0 撞车，支付 0 无损失）：未拍出的胜场全部作废
         log = run_one_match({name: (lambda obs: 0) for name in NAMES})
         assert len(log.days) == 5
         assert all(day.is_void for day in log.days)
-        assert [day.pool for day in log.days] == [1, 2, 4, 6, 8]
+        assert [day.pool for day in log.days] == [1, 3, 5, 7, 9]
         assert all(wins == 0 for wins in log.wins.values())
 
 
-class TestCapTax:
-    """冲顶税：获胜价为 6 时，获胜者获得奖池数减 1（最低 0），扣除的 1 个作废。"""
+class TestCapTaxTransfer:
+    """冲顶税与转判：获胜价为 6 时，胜者得奖池一半（向上取整），另一半（向下取整）
+    转判给次高唯一出价者（照常支付出价）；无次高唯一出价者时转判部分作废。"""
 
-    def test_pool1_win_at_6_yields_zero(self):
-        # 第 1 天奖池只有 1：出 6 获胜 = 付 6 金币拿 0 个胜场（1-1=0），纯陷阱
+    def test_rules_example_one_transfer_to_second_highest_unique(self):
+        # RULES.md 结算示例一：6、5、5、3、2、0，奖池 2 → 胜者 1，转判出 3 者 1
+        # 示例在奖池 2 的第 2 天复现（第 1 天奖池只有 1，转判部分为 0 无物可转）
+        def strategy(obs):
+            if obs.day == 1:
+                return 1 if obs.my_name == "己" else 0  # 己唯一 1 获胜，奖池不滚存
+            if obs.day == 2:
+                return {"甲": 6, "乙": 5, "丙": 5, "丁": 3, "戊": 2, "己": 0}[obs.my_name]
+            return 0
+
+        log = run_one_match({name: strategy for name in NAMES})
+        day2 = log.days[1]
+        assert day2.pool == 2
+        assert day2.winner == "甲" and day2.winning_bid == 6
+        assert day2.wins_taken == 1
+        assert day2.transfer_recipient == "丁"  # 两个 5 撞车，次高唯一价是 3
+        assert day2.transfer_wins == 1
+        assert day2.collision_price_count == 1
+        assert log.wins["甲"] == 1
+        assert log.wins["丁"] == 1
+
+    def test_transfer_recipient_pays_bid(self):
+        # 转判获得者照常支付出价（对照：唯一未中者全额退还）。临界余额链：
+        # 第 2 天示例一丁出 3 被转判（付 3 后余额 6；若错按退还则为 9）；
+        # 第 3、4 天丁出 6 连胜（其余人 0 撞车，丁每天付 6）；
+        # 第 5 天丁出 4：扣款路径余额 6→9→3→6→3，出 4 非法记 0；
+        # 退还路径余额 9→12→6→9→6，出 4 合法——status 直接区分两条路径
+        def strategy(obs):
+            if obs.day == 1:
+                return 1 if obs.my_name == "己" else 0  # 己唯一 1 获胜，奖池不滚存
+            if obs.my_name == "丁":
+                return {2: 3, 3: 6, 4: 6, 5: 4}[obs.day]
+            if obs.day == 2:
+                return {"甲": 6, "乙": 5, "丙": 5, "戊": 2, "己": 0}[obs.my_name]
+            return 0
+
+        log = run_one_match({name: strategy for name in NAMES})
+        day2 = log.days[1]
+        assert day2.pool == 2
+        assert day2.winner == "甲" and day2.winning_bid == 6
+        assert day2.transfer_recipient == "丁" and day2.transfer_wins == 1
+        assert log.days[2].winner == "丁" and log.days[3].winner == "丁"
+
+        record = next(r for r in log.days[4].bids if r.player == "丁")
+        assert record.raw_bid == 4
+        assert record.bid == 0 and record.status == "illegal"  # 余额 3：转判确实扣了 3
+
+    def test_transfer_forfeited_without_second_highest_unique(self):
+        # 示例一补充：6、5、5、3、3、3 → 除 6 外全撞车，转判部分无处可转，作废
+        log = run_one_match(constant_strategies([6, 5, 5, 3, 3, 3]))
+        day1 = log.days[0]
+        assert day1.winner == "甲" and day1.winning_bid == 6
+        assert day1.wins_taken == 1
+        assert day1.transfer_recipient is None
+        assert day1.transfer_wins == 0
+        # 第 2 天奖池仍为 2：作废的转判部分不顺延
+        assert log.days[1].pool == 2
+
+    def test_pool1_win_at_6_keeps_one_nothing_to_transfer(self):
+        # 第 1 天奖池只有 1：出 6 获胜拿 ceil(1/2)=1，转判部分 floor(1/2)=0 无物可转
         def strategy(obs):
             if obs.day == 1:
                 return {"甲": 6, "乙": 5, "丙": 4, "丁": 3, "戊": 2, "己": 0}[obs.my_name]
@@ -189,13 +252,14 @@ class TestCapTax:
         log = run_one_match({name: strategy for name in NAMES})
         day1 = log.days[0]
         assert day1.winner == "甲" and day1.winning_bid == 6
-        assert day1.wins_taken == 0
-        assert log.wins["甲"] == 0
-        # 被作废的 1 个胜场不顺延：第 2 天奖池仍是 1
-        assert log.days[1].pool == 1
+        assert day1.wins_taken == 1
+        assert day1.transfer_recipient is None
+        assert day1.transfer_wins == 0
+        assert log.wins["甲"] == 1
 
-    def test_pool2_win_at_6_yields_one(self):
-        # 第 1 天全员出 1 撞车流局；第 2 天奖池 2，甲唯一 6 获胜 → 税后 1 个胜场
+    def test_odd_pool_splits_ceil_to_winner_floor_to_recipient(self):
+        # 奇数奖池（流局并入后）：第 1 天流局，第 2 天奖池 3，
+        # 甲唯一 6 获胜拿 2，转判次高唯一价 5 的乙拿 1
         def strategy(obs):
             if obs.day == 1:
                 return 1
@@ -205,25 +269,27 @@ class TestCapTax:
 
         log = run_one_match({name: strategy for name in NAMES})
         day2 = log.days[1]
-        assert day2.pool == 2
+        assert day2.pool == 3
         assert day2.winner == "甲" and day2.winning_bid == 6
-        assert day2.wins_taken == 1
-        assert log.wins["甲"] == 1
+        assert day2.wins_taken == 2
+        assert day2.transfer_recipient == "乙"
+        assert day2.transfer_wins == 1
+        assert log.wins["甲"] == 2
+        assert log.wins["乙"] == 1
 
-    def test_jackpot_pool8_win_at_6_yields_seven(self):
-        # 前 4 天全流局奖池滚到 8，第 5 天出 6 获胜 → 税后 7（大奖池时 6 仍有吸引力）
-        def strategy(obs):
-            if obs.day <= 4:
-                return 1
-            return {"甲": 6, "乙": 5, "丙": 4, "丁": 3, "戊": 2, "己": 0}[obs.my_name]
-
-        log = run_one_match({name: strategy for name in NAMES})
-        assert log.days[4].pool == 8
-        assert log.days[4].wins_taken == 7
-        assert log.wins["甲"] == 7
+    def test_rules_example_two_top_collision_falls_through_without_tax(self):
+        # RULES.md 结算示例二：6、6、4、4、2、1 → 6 与 4 撞车，唯一 2 获胜拿全部
+        # 奖池（获胜价 2 在 0~5，不触发冲顶税与转判）；出 1 者唯一未中全额退还
+        log = run_one_match(constant_strategies([6, 6, 4, 4, 2, 1]))
+        day1 = log.days[0]
+        assert day1.winner == "戊" and day1.winning_bid == 2
+        assert day1.wins_taken == 1  # 第 1 天奖池 1
+        assert day1.transfer_recipient is None
+        assert day1.transfer_wins == 0
+        assert day1.collision_price_count == 2
 
     def test_win_at_5_takes_full_pool(self):
-        # 以 0~5 获胜不缴税：第 1 天流局后第 2 天奖池 2，甲唯一 5 获胜拿满 2 个
+        # 以 0~5 获胜无冲顶税无转判：第 1 天流局后第 2 天奖池 3，甲唯一 5 获胜拿满 3 个
         def strategy(obs):
             if obs.day == 1:
                 return 1
@@ -233,10 +299,11 @@ class TestCapTax:
 
         log = run_one_match({name: strategy for name in NAMES})
         day2 = log.days[1]
-        assert day2.pool == 2
+        assert day2.pool == 3
         assert day2.winner == "甲" and day2.winning_bid == 5
-        assert day2.wins_taken == 2
-        assert log.wins["甲"] == 2
+        assert day2.wins_taken == 3
+        assert day2.transfer_recipient is None
+        assert log.wins["甲"] == 3
 
 
 class TestFixedFiveDays:
@@ -244,18 +311,18 @@ class TestFixedFiveDays:
 
     def test_match_always_runs_five_days(self):
         # 甲每天出 1 唯一获胜，其余人出 0 撞车（支付 0 无代价）：
-        # 即便甲一路通吃也打满 5 天，按奖池 1,1,2,2,2 共拿 8 个胜场
+        # 即便甲一路通吃也打满 5 天，按奖池 1,2,2,2,2 共拿 9 个胜场
         def strategy(obs):
             return 1 if obs.my_name == "甲" else 0
 
         log = run_one_match({name: strategy for name in NAMES})
         assert len(log.days) == 5
-        assert [day.pool for day in log.days] == [1, 1, 2, 2, 2]
+        assert [day.pool for day in log.days] == [1, 2, 2, 2, 2]
         assert all(day.winner == "甲" for day in log.days)
-        assert log.wins["甲"] == 8
+        assert log.wins["甲"] == 9
 
     def test_observation_carries_pool_and_salary(self):
-        # 全员每天出 0 撞车：天天流局、无人花钱；奖池 1→2→4→6→8，工资每天 +3
+        # 全员每天出 0 撞车：天天流局、无人花钱；奖池 1→3→5→7→9，工资每天 +3
         seen = []
 
         def strategy(obs):
@@ -266,10 +333,10 @@ class TestFixedFiveDays:
         run_one_match({name: strategy for name in NAMES})
         assert seen == [
             (1, 1, 6, 0, 0),
-            (2, 2, 9, 0, 0),
-            (3, 4, 12, 0, 0),
-            (4, 6, 15, 0, 0),
-            (5, 8, 18, 0, 0),
+            (2, 3, 9, 0, 0),
+            (3, 5, 12, 0, 0),
+            (4, 7, 15, 0, 0),
+            (5, 9, 18, 0, 0),
         ]
 
 
@@ -318,9 +385,11 @@ class TestMatchLogPublication:
         assert first_day["winner"] == "甲"
         assert first_day["winning_bid"] == 5
         assert first_day["pool"] == 1
+        assert first_day["transfer_recipient"] is None
+        assert first_day["transfer_wins"] == 0
         assert first_day["collision_price_count"] == 0
         assert first_day["is_void"] is False
-        assert sum(data["wins"].values()) == 8  # 无流局：8 个胜场全部拍出
+        assert sum(data["wins"].values()) == 9  # 无流局：9 个胜场全部拍出
 
 
 class TestComputeStandings:

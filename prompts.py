@@ -1,6 +1,12 @@
-"""所有发给 AI 的消息模板 + 局日志/排名的可读渲染（AI 消息与终端输出共用）。"""
+"""所有发给 AI 的消息模板 + 局日志/排名的可读渲染（AI 消息与终端输出共用）。
+
+规则全文单一来源是 RULES.md：本模块加载时读入为 RULES_TEXT 注入 system 提示词，
+改规则只需改 RULES.md（进程重启后生效），不再在此维护副本。
+"""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from models import (
     DAILY_POOL,
@@ -12,49 +18,7 @@ from models import (
     StandingsEntry,
 )
 
-RULES_TEXT = """\
-【唯一高价拍卖游戏规则】
-
-一、赛制
-1. 6 名 AI 玩家参赛，个人赛，各自独立争取排名。
-2. 共 5 局正赛，每局固定 5 天，共拍卖 8 个胜场。每天奖池：第 1 天 1 个、第 2 天 1 个、
-   第 3 天 2 个、第 4 天 2 个、第 5 天 2 个。流局当天的奖池并入次日；
-   第 5 天未拍出的胜场作废。
-
-二、金币与出价
-1. 每局开始时每人 6 枚金币；从第 2 天起，每天开始时每人发放 3 枚金币（工资）。
-   金币局内累积，跨局不继承，局末作废。
-2. 每天所有玩家同时提交秘密出价。出价为 0 到 6 的整数，且不得超过当前余额。
-3. 非法出价（超余额、超范围、非整数）与未提交一律视为出价 0。
-
-三、每日结算（按顺序执行四步）
-1. 判定撞车：若某个出价数值被两名及以上玩家出了，该数值即为撞车价位，
-   出了该数值的玩家全部视为撞车。只出现一次的数值为唯一出价。
-2. 判定胜负：所有唯一出价中最高的一个获胜。0 是合法价位：若其他价位全部撞车，
-   唯一的 0 出价也能获胜。若当天没有任何唯一出价，则流局：无人获胜，奖池并入次日。
-3. 冲顶税：若获胜价为 6，获胜者获得的胜场数为当天奖池数减 1（最低为 0），
-   被扣除的 1 个胜场作废。以 0~5 获胜则获得奖池全部胜场。
-4. 金币结算：获胜者扣除其出价；所有撞车的玩家扣除各自出价（流局日同样扣除）；
-   唯一但未获胜的玩家全额退还出价。被扣除的金币由系统没收。
-
-   结算示例：六人出价为 6、5、5、3、2、0。两个 5 撞车，各扣 5；6 是最高唯一出价，
-   获胜并扣 6，当天奖池为 2，缴冲顶税后获得 1 个胜场；
-   出 3、2、0 者唯一但未获胜，全额退还。
-
-四、信息公布
-1. 每天结束公布：获胜者身份与获胜价（或流局），以及当天撞车价位的个数。
-   不公布任何玩家的具体出价与余额。
-2. 每局结束后，公布该局完整出价日志，以及截至当前的累计排名。
-
-五、发言
-开赛前与每局结束后各一次公开发言，同时提交同时公开，无规则约束力，其余时间禁止通信。
-
-六、排名与加赛
-1. 正赛 5 局结束后比较总胜场数。第一名唯一则直接确定最终排名。
-2. 第一名有并列则全员进入加赛局（规则与正赛局完全相同），加赛局胜场计入总胜场，
-   每局加赛后重新排名，第一名仍并列（包括并列者变化）则继续加赛，直到第一名唯一。
-3. 第一名以外的并列保持并列，不再区分。
-"""
+RULES_TEXT = (Path(__file__).parent / "RULES.md").read_text(encoding="utf-8").strip()
 
 
 def bid_format_hint() -> str:
@@ -121,12 +85,16 @@ def opening_plan_request(others_speeches: dict[str, str]) -> str:
 
 def bid_request(obs: Observation) -> str:
     match_index = len(obs.past_match_logs) + 1
-    # 第 2 天起每天开始时已发放工资，余额是发放后的值，明示避免模型自己再加一次
-    salary_note = "（已含今日工资）" if obs.day >= 2 else ""
+    # 第 2 天起每天开始时已发放工资，余额是发放后的值，明示避免模型自己再加一次；
+    # 可出最高价直接给数值，避免模型自己算 min（实证有「余额 7 打不了 6」的算术错误）
+    status_notes = []
+    if obs.day >= 2:
+        status_notes.append("已含今日工资")
+    status_notes.append(f"今日可出最高价：{min(MAX_BID, obs.my_coins)}")
     status_line = (
         f"今日奖池：{obs.today_pool} 个胜场；"
-        f"你的金币余额：{obs.my_coins}{salary_note}；本局已获胜场：{obs.my_match_wins}；"
-        f"你的累计总胜场：{obs.my_total_wins}。"
+        f"你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）；"
+        f"本局已获胜场：{obs.my_match_wins}；你的累计总胜场：{obs.my_total_wins}。"
     )
     if not obs.today_history:
         # 首日：单行不换句
@@ -142,8 +110,12 @@ def bid_request(obs: Observation) -> str:
         announcement = (
             f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
             f"奖池 {yesterday['pool']} 个胜场，缴冲顶税后实得 {yesterday['wins_taken']} 个，"
-            f"撞车价位 {yesterday['collision_price_count']} 个。"
         )
+        if yesterday["transfer_recipient"] is not None:
+            announcement += (
+                f"转判 {yesterday['transfer_recipient']} 获得 {yesterday['transfer_wins']} 个，"
+            )
+        announcement += f"撞车价位 {yesterday['collision_price_count']} 个。"
     else:
         announcement = (
             f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
@@ -176,7 +148,10 @@ def render_match_log(log: MatchLog) -> str:
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
             if day.winning_bid == MAX_BID:
-                outcome += f"（冲顶税：{day.pool}→{day.wins_taken}）"
+                outcome += f"（冲顶税：{day.pool}→{day.wins_taken}"
+                if day.transfer_recipient is not None:
+                    outcome += f"，转判 {day.transfer_recipient} 得 {day.transfer_wins}"
+                outcome += "）"
         rows.append(
             f"| {day.day} | {day.pool} | {bid_cells} | {outcome} | {day.collision_price_count} |"
         )

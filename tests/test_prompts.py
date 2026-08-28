@@ -6,7 +6,8 @@ from models import BidRecord, DayResult, MatchLog, Observation, StandingsEntry
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 
 
-def make_day(day, bids, pool, winner, winning_bid, collision_count, wins_taken=0, is_void=False):
+def make_day(day, bids, pool, winner, winning_bid, collision_count, wins_taken=0,
+             is_void=False, transfer_recipient=None, transfer_wins=0):
     return DayResult(
         day=day,
         bids=[BidRecord(player=name, raw_bid=bid, bid=bid) for name, bid in zip(NAMES, bids)],
@@ -14,6 +15,8 @@ def make_day(day, bids, pool, winner, winning_bid, collision_count, wins_taken=0
         winner=winner,
         winning_bid=winning_bid,
         wins_taken=wins_taken,
+        transfer_recipient=transfer_recipient,
+        transfer_wins=transfer_wins,
         collision_price_count=collision_count,
         is_void=is_void,
     )
@@ -175,9 +178,15 @@ class TestBidRequest:
         text = prompts.bid_request(self.make_obs(day=1))
         first_line = text.splitlines()[0]
         assert first_line.startswith("当前是第 2 局第 1 天。")
-        assert "今日奖池：1 个胜场；你的金币余额：7；" in first_line  # 首日不换行分句
+        # 首日不换行分句；状态行附「今日可出最高价」（= min(上限, 余额)），防止模型自己算错
+        assert "今日奖池：1 个胜场；你的金币余额：7（今日可出最高价：6）；" in first_line
         assert "昨日公布" not in text
         assert "已含今日工资" not in text  # 第 1 天没有工资
+
+    def test_max_affordable_bid_capped_by_balance(self):
+        # 余额 4 低于上限 6 时，可出最高价明示为 4
+        text = prompts.bid_request(self.make_obs(day=1, coins=4))
+        assert "你的金币余额：4（今日可出最高价：4）；" in text.splitlines()[0]
 
     def test_later_day_three_lines_with_salary_note(self):
         history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "collision_price_count": 0}]
@@ -186,7 +195,7 @@ class TestBidRequest:
 
         assert lines[0] == "当前是第 2 局第 2 天。"
         assert lines[1] == "昨日公布：乙 以 5 获胜，赢得 1 个胜场，撞车价位 0 个。"
-        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：7（已含今日工资）；")
+        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：7（已含今日工资，今日可出最高价：6）；")
         # 余额行必须在昨日公布之后
         assert text.index("昨日公布") < text.index("你的金币余额")
 
@@ -201,15 +210,29 @@ class TestBidRequest:
         assert "今日奖池：2 个胜场" in lines[2]  # 并入后的奖池
 
     def test_cap_tax_announcement_shows_post_tax_wins(self):
-        # 获胜价 6 触发冲顶税：昨日公布显式展示奖池与税后实得
+        # 获胜价 6 触发冲顶税、无转判对象：昨日公布显式展示奖池与税后实得
         history = [{
             "day": 1, "winner": "乙", "winning_bid": 6, "pool": 3,
-            "wins_taken": 2, "collision_price_count": 0,
+            "wins_taken": 2, "transfer_recipient": None, "transfer_wins": 0,
+            "collision_price_count": 0,
         }]
         text = prompts.bid_request(self.make_obs(day=2, today_history=history))
         lines = text.splitlines()
 
         assert lines[1] == "昨日公布：乙 以 6 获胜，奖池 3 个胜场，缴冲顶税后实得 2 个，撞车价位 0 个。"
+
+    def test_cap_tax_announcement_shows_transfer_recipient(self):
+        # 获胜价 6 且有次高唯一出价者：昨日公布带转判获得者与转判胜场
+        history = [{
+            "day": 1, "winner": "乙", "winning_bid": 6, "pool": 2,
+            "wins_taken": 1, "transfer_recipient": "丁", "transfer_wins": 1,
+            "collision_price_count": 1,
+        }]
+        text = prompts.bid_request(self.make_obs(day=2, today_history=history))
+        lines = text.splitlines()
+
+        assert lines[1] == ("昨日公布：乙 以 6 获胜，奖池 2 个胜场，缴冲顶税后实得 1 个，"
+                            "转判 丁 获得 1 个，撞车价位 1 个。")
 
     def test_total_wins_in_first_day_line(self):
         text = prompts.bid_request(self.make_obs(day=1, total_wins=3))
@@ -236,10 +259,17 @@ class TestRenderMatchLog:
         assert "本局胜场：" in text
 
     def test_cap_tax_shown_in_outcome(self):
-        # 获胜价 6 触发冲顶税：结果列显式展示 奖池→税后
-        log = make_log(days=[make_day(3, [6, 5, 4, 3, 2, 0], 2, "甲", 6, 0, 1)])
+        # 获胜价 6 触发冲顶税：结果列显式展示 奖池→税后；无转判对象时不提转判
+        log = make_log(days=[make_day(3, [6, 5, 5, 3, 3, 3], 2, "甲", 6, 2, 1)])
         text = prompts.render_match_log(log)
-        assert "| 3 | 2 | 6 | 5 | 4 | 3 | 2 | 0 | 甲 以 6 获胜（冲顶税：2→1） | 0 |" in text
+        assert "| 3 | 2 | 6 | 5 | 5 | 3 | 3 | 3 | 甲 以 6 获胜（冲顶税：2→1） | 2 |" in text
+
+    def test_transfer_shown_in_outcome(self):
+        # 获胜价 6 且有次高唯一出价者：结果列带「转判 X 得 N」
+        log = make_log(days=[make_day(3, [6, 5, 5, 3, 2, 0], 2, "甲", 6, 1, 1,
+                                      transfer_recipient="丁", transfer_wins=1)])
+        text = prompts.render_match_log(log)
+        assert "| 3 | 2 | 6 | 5 | 5 | 3 | 2 | 0 | 甲 以 6 获胜（冲顶税：2→1，转判 丁 得 1） | 1 |" in text
 
     def test_void_day_row(self):
         log = make_log(days=[make_day(1, [2, 2, 2, 1, 1, 1], 1, None, None, 2, is_void=True)])
@@ -279,12 +309,17 @@ class TestRenderStandings:
 
 
 class TestRulesText:
-    """规则全文要点：固定 5 天、奖池表、工资、撞车扣款、唯一未中退还、每日公布获胜价。"""
+    """规则全文单一来源是 RULES.md：RULES_TEXT 即文件内容，要点与文件逐条对齐。"""
+
+    def test_rules_text_loaded_from_rules_md(self):
+        from pathlib import Path
+        rules_md = (Path(prompts.__file__).parent / "RULES.md").read_text(encoding="utf-8").strip()
+        assert prompts.RULES_TEXT == rules_md
 
     def test_core_mechanics_present(self):
         text = prompts.RULES_TEXT
         assert "每局固定 5 天" in text
-        assert "第 1 天 1 个、第 2 天 1 个" in text
+        assert "第 1 天 1 个，第 2~5 天各 2 个" in text
         assert "奖池并入次日" in text
         assert "每天开始时每人发放 3 枚金币（工资）" in text
         assert "出价为 0 到 6 的整数" in text
@@ -294,19 +329,27 @@ class TestRulesText:
         assert "判定撞车" in text
         assert "判定胜负" in text
         assert "金币结算" in text
-        assert "唯一但未获胜的玩家全额退还出价" in text
+        assert "其余玩家全额退还出价" in text
         assert "流局日同样扣除" in text
         assert "系统没收" in text
 
-    def test_cap_tax_present(self):
+    def test_cap_tax_transfer_present(self):
         text = prompts.RULES_TEXT
-        assert "冲顶税" in text
+        assert "冲顶税与转判" in text
         assert "获胜价为 6" in text
-        assert "当天奖池数减 1" in text
+        assert "向上取整" in text and "向下取整" in text
+        assert "次高唯一出价者" in text
         assert "以 0~5 获胜则获得奖池全部胜场" in text
-        assert "缴冲顶税后获得 1 个胜场" in text  # 结算示例
 
-    def test_publication_includes_winning_bid(self):
+    def test_settlement_examples_present(self):
+        text = prompts.RULES_TEXT
+        # 示例一：6 唯一获胜触发转判；示例二：最高出价撞车、次高唯一价获胜
+        assert "结算示例一" in text and "结算示例二" in text
+        assert "次高唯一出价是 3，出 3 者获得 1 个胜场" in text
+        assert "唯一出价中最高的是 2，出 2 者获胜" in text
+
+    def test_publication_includes_winning_bid_and_transfer(self):
         text = prompts.RULES_TEXT
         assert "获胜者身份与获胜价" in text
         assert "撞车价位的个数" in text
+        assert "转判获得者身份（若有）" in text

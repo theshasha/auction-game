@@ -123,24 +123,43 @@ def run_match(
         if unique_prices_desc:
             winning_bid = unique_prices_desc[0]
             winner = next(record.player for record in bids if record.bid == winning_bid)
-            # 冲顶税：获胜价为 6 时，获胜者获得的胜场数为当天奖池数减 1（最低为 0），
-            # 被扣除的 1 个胜场作废；以 0~5 获胜则获得奖池全部胜场
-            wins_taken = max(pool - 1, 0) if winning_bid == MAX_BID else pool
+            transfer_recipient = None
+            transfer_wins = 0
+            if winning_bid == MAX_BID:
+                # 冲顶税与转判：获胜者得奖池一半（向上取整），另一半（向下取整）
+                # 转判给次高唯一出价者；转判部分为 0（奖池 1）或不存在次高唯一出价者时作废
+                wins_taken = -(-pool // 2)  # ceil(pool / 2)
+                transfer_wins = pool // 2
+                if transfer_wins > 0 and len(unique_prices_desc) >= 2:
+                    runner_up_bid = unique_prices_desc[1]
+                    transfer_recipient = next(
+                        record.player for record in bids if record.bid == runner_up_bid
+                    )
+            else:
+                wins_taken = pool  # 以 0~5 获胜拿全部奖池，无冲顶税、无转判
             match_wins[winner] += wins_taken
+            if transfer_recipient is not None:
+                match_wins[transfer_recipient] += transfer_wins
             rollover = 0
             is_void = False
         else:
             winner = None
             winning_bid = None
             wins_taken = 0
+            transfer_recipient = None
+            transfer_wins = 0
             rollover = pool  # 流局：奖池整体并入次日（第 5 天流局则随循环结束作废）
             is_void = True
 
-        # 金币结算：获胜者与撞车者扣除出价（流局日撞车者同样扣除），
-        # 唯一但未获胜的玩家全额退还；扣除的金币由系统没收，无分红。
+        # 金币结算：获胜者、转判获得者与撞车者扣除各自出价（流局日撞车者同样扣除），
+        # 其余玩家全额退还；扣除的金币由系统没收。
         # 流局日不存在唯一出价，全员必然撞车，即全员扣除。
         for record in bids:
-            if record.player == winner or record.player in collided_players:
+            if (
+                record.player == winner
+                or record.player == transfer_recipient
+                or record.player in collided_players
+            ):
                 coins[record.player] -= record.bid
 
         log.days.append(
@@ -151,6 +170,8 @@ def run_match(
                 winner=winner,
                 winning_bid=winning_bid,
                 wins_taken=wins_taken,
+                transfer_recipient=transfer_recipient,
+                transfer_wins=transfer_wins,
                 collision_price_count=sum(1 for count in price_counts.values() if count >= 2),
                 is_void=is_void,
             )

@@ -41,16 +41,17 @@ def load_match_logs(run_dir: Path) -> list[dict]:
 
 def recompute_remaining_coins(match: dict) -> dict[str, int]:
     """按规则从出价日志重放金币：第 2 天起每天 +3 工资；
-    获胜者与撞车者扣除出价（流局日撞车照扣），唯一未中全额退还。"""
+    获胜者、转判获得者（新规则日志）与撞车者扣除出价（流局日撞车照扣），其余全额退还。"""
     coins = {bid["player"]: INITIAL_COINS for bid in match["days"][0]["bids"]}
     for day in match["days"]:
         if day["day"] >= 2:
             for name in coins:
                 coins[name] += DAILY_SALARY
         price_counts = Counter(bid["bid"] for bid in day["bids"])
+        transfer_recipient = day.get("transfer_recipient")  # 旧规则日志无此字段
         for bid in day["bids"]:
             is_collider = price_counts[bid["bid"]] >= 2
-            if bid["player"] == day["winner"] or is_collider:
+            if bid["player"] == day["winner"] or bid["player"] == transfer_recipient or is_collider:
                 coins[bid["player"]] -= bid["bid"]
     return coins
 
@@ -70,9 +71,12 @@ def analyze(run_dir: Path) -> None:
     illegal_bids = 0
     zero_bids = 0
     zero_bid_wins = 0
-    collision_burn = 0   # 因撞车被没收的金币总数（不含获胜者支付）
-    cap_tax_days = 0     # 获胜价=6 触发冲顶税的天数
-    cap_tax_wins_lost = 0  # 因冲顶税作废的胜场总数
+    collision_burn = 0   # 因撞车被没收的金币总数（不含获胜者/转判获得者支付）
+    cap_tax_days = 0        # 获胜价=6 触发冲顶税与转判的天数
+    cap_tax_wins_kept = 0      # 冲顶税天获胜者实得的胜场合计
+    transfer_wins_total = 0    # 转判给次高唯一出价者的胜场合计
+    transfer_days = 0          # 实际发生转判的天数
+    forfeited_wins = 0         # 无次高唯一出价者而作废的转判胜场合计（新规则日志才有此口径）
 
     for payload in matches:
         match = payload["match"]
@@ -97,9 +101,15 @@ def analyze(run_dir: Path) -> None:
                 continue
             bids_by_day_index.setdefault(day["day"], []).extend(b["bid"] for b in day["bids"])
             winning_bids.append(day["winning_bid"])
-            if day["winning_bid"] == 6:  # 冲顶税：获胜价为 6 时奖池 -1
+            if day["winning_bid"] == 6:  # 冲顶税与转判：获胜者得一半（向上取整）
                 cap_tax_days += 1
-                cap_tax_wins_lost += day["pool"] - day["wins_taken"]
+                cap_tax_wins_kept += day["wins_taken"]
+                # 旧规则日志（冲顶税=奖池-1 作废）无 transfer 字段，用 .get 容错
+                transfer_wins = day.get("transfer_wins", 0)
+                transfer_wins_total += transfer_wins
+                if day.get("transfer_recipient") is not None:
+                    transfer_days += 1
+                forfeited_wins += day["pool"] - day["wins_taken"] - transfer_wins
             if day["winning_bid"] == 0:
                 zero_bid_wins += 1
         remaining_coins_all.extend(recompute_remaining_coins(match).values())
@@ -135,7 +145,8 @@ def analyze(run_dir: Path) -> None:
           f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
     print(f"撞车放血：全场因撞车被没收 {collision_burn} 金币"
           f"（每局平均 {collision_burn / len(matches):.1f}）")
-    print(f"冲顶税：触发 {cap_tax_days} 天，作废 {cap_tax_wins_lost} 个胜场")
+    print(f"冲顶税与转判：触发 {cap_tax_days} 天，获胜者实得 {cap_tax_wins_kept} 个胜场，"
+          f"转判 {transfer_days} 天共 {transfer_wins_total} 个胜场，作废 {forfeited_wins} 个")
     print()
 
     print(f"单局 ≥4 胜场的玩家-局次数：{len(multi_win_matches)}"
