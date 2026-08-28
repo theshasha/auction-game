@@ -69,6 +69,8 @@ def analyze(run_dir: Path) -> None:
     illegal_bids = 0
     zero_bids = 0
     zero_bid_wins = 0
+    penalty_events = 0   # 胜场罚没次数（每次 1 胜场）
+    penalty_wins = 0     # 罚没的胜场总数
 
     for payload in matches:
         match = payload["match"]
@@ -80,6 +82,9 @@ def analyze(run_dir: Path) -> None:
         match_dividend_per_player = 0
         for day in match["days"]:
             total_days += 1
+            for penalty in day.get("penalties", []):  # 旧日志无此字段，按无罚没处理
+                penalty_events += 1
+                penalty_wins += penalty["wins"]
             if day["is_void"]:
                 void_days += 1
                 continue
@@ -128,6 +133,7 @@ def analyze(run_dir: Path) -> None:
         print(f"  第 {match_index} 局：{name} 赢 {win_count} 次")
     print()
 
+    print(f"胜场罚没：共 {penalty_events} 次，合计 {penalty_wins} 个胜场")
     print(f"其他：非法出价 {illegal_bids} 笔；出 0 共 {zero_bids} 笔，"
           f"其中 0 价获胜 {zero_bid_wins} 次")
 

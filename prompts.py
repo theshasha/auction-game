@@ -25,6 +25,11 @@ RULES_TEXT = """\
 3. 0 是合法价位：若出 0 以外的玩家均撞车，唯一出价 0 的玩家获胜。
 4. 若所有出价均撞车、没有任何唯一出价，当天流局：不产生胜场、出价全额返还、无分红。
 5. 获胜者不退场，以剩余金币继续参与后续天数的竞拍。
+6. 胜场罚没：每天结算时检查撞车价位——正常分出胜负的当天，只检查高于获胜价的
+   撞车价位；流局的当天，检查全部撞车价位。若出同一价位的玩家的总胜场（含本局
+   已获得的胜场，扣除已被罚没的胜场）并非全都相同，则其中总胜场最多的玩家各被
+   罚没 1 个累计胜场（并列最多则都被罚没）。
+7. 罚没只影响累计排名：当天的胜负归属、金币结算与本局拍卖流程均不受罚没影响。
 
 四、每日分红
 1. 每个正常分出胜负的当天结算后，当天全员出价总和平均分给所有在场玩家：
@@ -32,7 +37,8 @@ RULES_TEXT = """\
 2. 若当天结算后本局结束（拍出第 3 个胜场或第 5 天结算），则不再分红。
 
 五、信息公布
-1. 每天结束只公布三项：获胜者身份（或流局）、作废价位数量、当天分红金额。
+1. 每天结束只公布四项：获胜者身份（或流局）、作废价位数量、当天分红金额、
+   当天胜场罚没情况（若有玩家被罚没，公布其身份与罚没数量）。
    作废价位数量：正常分出胜负的当天，统计高于最终获胜价、且因两人及以上撞车而被
    作废的不同出价数值的个数（低于获胜价的撞车不计入）；流局的当天，统计全部撞车价位的个数。
    系统不公布任何玩家的具体出价与剩余余额。
@@ -90,12 +96,17 @@ def bid_request(obs: Observation) -> str:
 
     yesterday = obs.today_history[-1]
     if yesterday["winner"] == "流局":
-        announcement = f"昨日公布：流局（无分红），作废价位 {yesterday['voided_price_count']} 个。"
+        announcement = f"昨日公布：流局（无分红），作废价位 {yesterday['voided_price_count']} 个"
     else:
         announcement = (
             f"昨日公布：{yesterday['winner']} 获胜，作废价位 {yesterday['voided_price_count']} 个，"
-            f"分红 {yesterday['dividend']} 金币。"
+            f"分红 {yesterday['dividend']} 金币"
         )
+    penalties = yesterday.get("penalties") or []
+    if penalties:
+        details = "、".join(f"{p['player']} {p['wins']} 胜场" for p in penalties)
+        announcement += f"，胜场罚没：{details}"
+    announcement += "。"
     # 余额已含昨日分红，放在公布之后并明示，避免模型误再加一次分红
     status_line = status_line.replace(
         f"你的金币余额：{obs.my_coins}；", f"你的金币余额：{obs.my_coins}（已含昨日分红）；"
@@ -125,11 +136,23 @@ def render_match_log(log: MatchLog) -> str:
             outcome = "流局（全额返还）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
+        if day.penalties:
+            details = "、".join(f"{name} 被罚 {amount} 胜场" for name, amount in day.penalties)
+            outcome += f"；{details}"
         rows.append(
             f"| {day.day} | {bid_cells} | {outcome} | {day.voided_price_count} | {day.dividend} |"
         )
-    wins = "、".join(f"{name} {w} 胜" for name, w in log.wins.items())
-    return "\n".join([header, separator, *rows, "", f"本局胜场：{wins}"])
+    wins_text = "、".join(f"{name} {w} 胜" for name, w in log.wins.items())
+    lines = [header, separator, *rows, "", f"本局胜场：{wins_text}"]
+    penalty_totals: dict[str, int] = {}
+    for day in log.days:
+        for name, amount in day.penalties:
+            penalty_totals[name] = penalty_totals.get(name, 0) + amount
+    if penalty_totals:
+        lines.append(
+            "本局罚没胜场：" + "、".join(f"{name} {amount}" for name, amount in penalty_totals.items())
+        )
+    return "\n".join(lines)
 
 
 def render_standings(standings: list[StandingsEntry]) -> str:

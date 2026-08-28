@@ -51,6 +51,30 @@ class TestRegularSeasonOnly:
             assert ranks(result)[name] == 2  # 第一名以外并列同名次
 
 
+class TestCollisionPenaltyFolding:
+    def test_penalties_reduce_final_standings(self):
+        # 甲每局出 2 包揽胜场；第 3 局乙也出 2 撞车、丙出 1 唯一获胜、其余出 0。
+        # 第 3 局开局甲已攒 6 胜，每天与 0 胜的乙在高于获胜价的 2 撞车，各被罚 1，共 3。
+        def make_strategy(name):
+            def strategy(obs):
+                current_match = len(obs.past_match_logs) + 1
+                if current_match == 3:
+                    return {"甲": 2, "乙": 2, "丙": 1}.get(name, 0)
+                return 2 if name == "甲" else 1
+            return strategy
+
+        players = [ScriptedPlayer(name, make_strategy(name)) for name in NAMES]
+        result = run_tournament(players)
+
+        assert result.playoff_count == 0
+        # 甲毛胜场 12（第 1/2/4/5 局各 3），第 3 局被罚 3，净 9；罚没从最近有胜场局折算
+        assert totals(result)["甲"] == 9
+        entry = next(e for e in result.final_standings if e.player == "甲")
+        assert entry.wins_per_match == [3, 0, 0, 3, 3]
+        assert totals(result)["丙"] == 3  # 丙的胜场不受影响
+        assert ranks(result)["甲"] == 1
+
+
 class TestPlayoff:
     def test_first_place_tie_triggers_playoff_until_unique(self):
         players = make_players({1: "甲", 2: "甲", 3: "乙", 4: "乙", 5: "丙", 6: "甲"})

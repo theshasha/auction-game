@@ -201,3 +201,36 @@ class TestRenderStandings:
         standings = make_standings({"甲": [], "乙": []})
         text = prompts.render_standings(standings)
         assert text.splitlines()[0] == "| 排名 | 玩家 | 总胜场 |"
+
+
+class TestPenaltyRendering:
+    """胜场罚没：规则文本、局日志渲染、每日公布三处同步。"""
+
+    def test_rules_text_mentions_penalty(self):
+        assert "胜场罚没" in prompts.RULES_TEXT
+
+    def test_match_log_renders_penalty_in_outcome_and_summary(self):
+        day = make_day(1, [2, 2, 1, 0, 0, 0], "丙", 1, 1, 0)
+        day.penalties = [("甲", 1)]
+        log = make_log(days=[day], wins={"丙": 1})
+        text = prompts.render_match_log(log)
+
+        assert "丙 以 1 获胜；甲 被罚 1 胜场" in text
+        assert "本局罚没胜场：甲 1" in text
+
+    def test_match_log_without_penalty_has_no_penalty_wording(self):
+        assert "罚没" not in prompts.render_match_log(make_log())
+
+    def test_bid_request_announces_penalty(self):
+        history = [{
+            "day": 1, "winner": "丙", "voided_price_count": 1, "dividend": 0,
+            "penalties": [{"player": "甲", "wins": 1}],
+        }]
+        text = prompts.bid_request(TestBidRequest.make_obs(day=2, today_history=history))
+        assert "昨日公布：丙 获胜，作废价位 1 个，分红 0 金币，胜场罚没：甲 1 胜场。" in text
+
+    def test_bid_request_without_penalty_omits_penalty_wording(self):
+        history = [{"day": 1, "winner": "乙", "voided_price_count": 0, "dividend": 4,
+                    "penalties": []}]
+        text = prompts.bid_request(TestBidRequest.make_obs(day=2, today_history=history))
+        assert "罚没" not in text

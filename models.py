@@ -10,6 +10,7 @@ INITIAL_COINS = 6      # 每局初始金币
 MAX_DAYS = 5           # 每局最多天数（含顺延）
 WINS_PER_MATCH = 3     # 每局拍卖的胜场数
 DIVIDEND_DIVISOR = 8   # 分红除数，固定为 8（大于玩家数，低价苟活无分红）
+COLLISION_PENALTY = 1  # 高位撞车每次罚没的累计胜场数
 
 
 @dataclass
@@ -24,7 +25,7 @@ class BidRecord:
 
 @dataclass
 class DayResult:
-    """一天的完整结算结果。public 视图 = 系统每日公布的三项信息。"""
+    """一天的完整结算结果。public 视图 = 系统每日公布的信息。"""
 
     day: int
     bids: list[BidRecord]
@@ -33,14 +34,18 @@ class DayResult:
     voided_price_count: int      # 作废价位数量
     dividend: int                # 当天每人分红，流局为 0
     is_void: bool                # 是否流局
+    penalties: list[tuple[str, int]] = field(default_factory=list)  # 当天胜场罚没 [(玩家, 罚没数)]
 
     def public_view(self) -> dict:
-        """规则第六节：每天结束时系统公布且仅公布的三项。"""
+        """规则五.1：每天结束时系统公布的信息。"""
         return {
             "day": self.day,
             "winner": self.winner if not self.is_void else "流局",
             "voided_price_count": self.voided_price_count,
             "dividend": self.dividend,
+            "penalties": [
+                {"player": player, "wins": wins} for player, wins in self.penalties
+            ],
         }
 
 
@@ -72,6 +77,9 @@ class MatchLog:
                     "voided_price_count": day.voided_price_count,
                     "dividend": day.dividend,
                     "is_void": day.is_void,
+                    "penalties": [
+                        {"player": player, "wins": wins} for player, wins in day.penalties
+                    ],
                 }
                 for day in self.days
             ],
@@ -95,10 +103,10 @@ class Observation:
     my_name: str
     my_coins: int
     my_match_wins: int           # 本局已获胜场
-    my_total_wins: int           # 含本局在内的总胜场
+    my_total_wins: int           # 含本局在内的总胜场（已扣除罚没）
     day: int                     # 当前第几天（1 起）
     wins_remaining: int          # 本局剩余待拍胜场
     max_days: int                # 每局天数上限
-    today_history: list[dict]    # 本局已过天数的每日公布三项（DayResult.public_view）
+    today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）
     standings: list[StandingsEntry]   # 截至当前的累计排名（含本局已决出的胜场）
     past_match_logs: list[dict]  # 已结束各局的完整公开日志

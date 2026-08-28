@@ -1,7 +1,7 @@
 """单局规则引擎的边界测试。全部使用 ScriptedPlayer 构造确定性场景。"""
 
 import engine
-from engine import compute_standings, run_match, validate_bid
+from engine import compute_standings, fold_match_penalties, run_match, validate_bid
 from players import ScriptedPlayer
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
@@ -211,3 +211,117 @@ class TestComputeStandings:
         assert ranks["乙"] == 2
         assert ranks["丙"] == 3 and ranks["丁"] == 3  # 并列同名次
         assert ranks["戊"] == 5 and ranks["己"] == 5
+
+    def test_current_match_penalties_reduce_total_wins(self):
+        # 进行中的本局：已获 2 胜、被罚 1，总胜场 = 历史 1 + 2 - 1 = 2
+        wins_history = {name: [] for name in NAMES} | {"甲": [1]}
+        standings = compute_standings(wins_history, {"甲": 2}, {"甲": 1})
+        totals = {entry.player: entry.total_wins for entry in standings}
+        assert totals["甲"] == 2
+
+
+def run_match_with_history(strategies, wins_history, match_index=2):
+    """带历史净胜场跑一局：wins_history 为 {名字: [各局胜场]}。"""
+    players = [ScriptedPlayer(name, strategies[name]) for name in NAMES]
+    history = {name: list(wins_history.get(name, [])) for name in NAMES}
+    return run_match(players, match_index, False, history, [])
+
+
+class TestCollisionPenalty:
+    """高位撞车罚没：同价位玩家总胜场不全相同时，最多者各罚 1 个累计胜场。"""
+
+    def test_richest_offender_pays_above_winning_price(self):
+        # 甲乙出 2 撞车、高于获胜价 1：甲有历史 1 胜被罚，乙 0 胜免疫；
+        # 丁戊己出 0 撞车但低于获胜价，即使丁有 3 个历史胜场也不罚
+        history = {"甲": [1], "丁": [3]}
+        log = run_match_with_history(constant_strategies([2, 2, 1, 0, 0, 0]), history)
+        day1 = log.days[0]
+        assert day1.winner == "丙" and day1.winning_bid == 1
+        assert day1.penalties == [("甲", 1)]
+        # 被罚后甲与乙持平（都是 0），第 2 天起不再触发罚没（自我刹车）
+        assert log.days[1].penalties == []
+        # 罚没不影响本局拍卖流程：丙照常连赢 3 天结束
+        assert log.wins["丙"] == 3
+        assert log.end_reason == "wins_exhausted"
+        assert len(log.days) == 3
+
+    def test_tied_richest_offenders_all_pay(self):
+        # 甲乙丙出 2 撞车：甲乙各 1 胜并列最多都被罚，丙 0 胜免罚
+        history = {"甲": [1], "乙": [1]}
+        log = run_match_with_history(constant_strategies([2, 2, 2, 1, 0, 0]), history)
+        day1 = log.days[0]
+        assert day1.winner == "丁" and day1.winning_bid == 1
+        assert day1.penalties == [("甲", 1), ("乙", 1)]
+
+    def test_all_equal_offenders_no_penalty(self):
+        # 全员 0 胜开局撞车：胜场全相同，无人能罚
+        log = run_one_match(constant_strategies([5, 5, 4, 3, 2, 1]))
+        assert log.days[0].winner == "丙"
+        assert log.days[0].penalties == []
+
+    def test_void_day_taxes_all_collided_prices(self):
+        # 流局日检查全部撞车价位：2 价位罚甲（1 胜 vs 0 胜），0 价位罚丙（2 胜 vs 0 胜），
+        # 1 价位戊己同为 0 胜不罚
+        history = {"甲": [1], "丙": [2]}
+
+        def strategy(obs):
+            if obs.day == 1:
+                return {"甲": 2, "乙": 2, "丙": 0, "丁": 0, "戊": 1, "己": 1}[obs.my_name]
+            return {"甲": 5, "乙": 4, "丙": 3, "丁": 2, "戊": 1, "己": 0}[obs.my_name]
+
+        log = run_match_with_history({name: strategy for name in NAMES}, history)
+        day1 = log.days[0]
+        assert day1.is_void
+        assert day1.penalties == [("甲", 1), ("丙", 1)]
+        # to_dict 同步携带罚没记录
+        assert log.to_dict()["days"][0]["penalties"] == [
+            {"player": "甲", "wins": 1},
+            {"player": "丙", "wins": 1},
+        ]
+
+    def test_penalty_counts_current_match_wins(self):
+        # 甲第 1 天唯一 3 获胜；第 2 天甲乙出 2 撞车，甲的总胜场含本局已获胜场 → 被罚
+        def strategy(obs):
+            if obs.day == 1:
+                return {"甲": 3, "乙": 2, "丙": 1, "丁": 0, "戊": 0, "己": 0}[obs.my_name]
+            return {"甲": 2, "乙": 2, "丙": 1, "丁": 0, "戊": 0, "己": 0}[obs.my_name]
+
+        log = run_one_match({name: strategy for name in NAMES})
+        assert log.days[0].winner == "甲"
+        assert log.days[0].penalties == []
+        assert log.days[1].winner == "丙"  # 2 撞车，唯一 1 获胜
+        assert log.days[1].penalties == [("甲", 1)]
+        # 第 3 天起甲乙同为 0 净胜场，不再罚
+        assert log.days[2].penalties == []
+
+
+class TestFoldMatchPenalties:
+    def test_deducts_from_most_recent_match_first(self):
+        # 甲历史 2 胜，本局被罚 2 次、净胜场归零，全部从历史局里扣空
+        log = run_match_with_history(constant_strategies([2, 2, 1, 0, 0, 0]), {"甲": [2]})
+        assert log.days[0].penalties == [("甲", 1)]
+        assert log.days[1].penalties == [("甲", 1)]  # 第 2 天甲净胜场仍为 1（2-1），再罚
+        assert log.days[2].penalties == []           # 第 3 天甲归零，与乙持平不罚
+
+        wins_history = {name: [] for name in NAMES}
+        wins_history["甲"] = [2]
+        for name, wins in log.wins.items():
+            wins_history[name].append(wins)
+        fold_match_penalties(wins_history, log)
+        assert wins_history["甲"] == [0, 0]  # 本局 0 胜不可扣，第 1 局 2 胜被扣空
+        assert wins_history["丙"] == [3]
+
+    def test_skips_matches_without_wins(self):
+        from models import BidRecord, DayResult, MatchLog
+
+        log = MatchLog(match_index=3, is_playoff=False, wins={"甲": 0})
+        log.days.append(DayResult(
+            day=1,
+            bids=[BidRecord(player="甲", raw_bid=2, bid=2)],
+            winner=None, winning_bid=None,
+            voided_price_count=0, dividend=0, is_void=True,
+            penalties=[("甲", 1)],
+        ))
+        wins_history = {"甲": [2, 0, 0]}  # 当前局（0 胜）已追加
+        fold_match_penalties(wins_history, log)
+        assert wins_history["甲"] == [1, 0, 0]  # 跳过无胜场的局，从第 1 局扣

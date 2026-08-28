@@ -19,9 +19,12 @@
 ├── controller.py   # 轮级并发执行器 + 单步/连续/暂停状态机 + 按玩家 checkpoint 回滚
 ├── prompts.py      # 规则全文 + 全部消息模板 + 局日志/排名渲染（markdown 表格）
 ├── main.py         # 入口：默认 Bot 模式；--ai 为 AI 交互模式（每玩家独立模型）
-├── check_llm.py    # 连通性冒烟测试：对 config.yaml 每个端点发最小请求（真实联网）
-├── config.yaml     # 6 玩家名字+人设+各自 provider/model
-├── tests/          # test_engine.py / test_tournament.py / test_ai.py / test_prompts.py（73 项全绿）
+├── check_llm.py    # 端点连通性冒烟测试（真实联网，--ai 前必跑）
+├── analyze.py      # 统计一场 AI 对战的出价/分红/胜场/异常，默认取最新 *_ai 目录，
+│                   # 可传 logs/<目录名> 指定；archive_ 开头的归档目录会被忽略
+├── config.yaml     # 6 玩家名字+人设+各自 provider/model + 全局 llm.timeout_seconds
+├── requirements.txt
+├── tests/          # test_engine.py / test_tournament.py / test_ai.py / test_prompts.py（90 项全绿）
 └── logs/           # 按场次分目录 <时间戳>_<bot|ai>/，latest 软链接指向最近一场（gitignore）
                     # 每场内含 match_<n>.json/.txt，AI 模式另有 ai_<名字>.jsonl、speeches.txt
                     # ai_<名字>.md 与 jsonl 同步双写（markdown 视图，VSCode 打开可实时分玩家阅读）
@@ -29,10 +32,11 @@
 
 ```bash
 cd /root/auction_game
-python3 -m pytest tests/ -q     # 73 项测试（全部零网络）
-python3 main.py --seed 42       # Bot 模式（冠军 Delta，可复现）
+python3 -m pytest tests/ -q     # 90 项测试（全部零网络）
+python3 main.py --seed 42       # Bot 模式（可复现；冠军随规则变化）
 python3 check_llm.py            # 冒烟测试 6 个 LLM 端点（真实联网，--ai 前必跑）
 python3 main.py --ai            # AI 模式，需 .env 配齐 GEMINI_API_KEY / MODAL_* / HUB_API_KEY
+python3 analyze.py              # 统计最新 AI 场次
 ```
 
 AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（保留已完成，恢复后仅补跑未完成）/ q=中止。
@@ -40,63 +44,57 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 ## 模型分配
 
 玩家名 = 模型名（Kimi-K3 去掉 moonshotai/ 前缀），人设统一为「做你心中的自己」。
-
-| 玩家 | provider | model | 调用方式 |
-|---|---|---|---|
-| Kimi-K3 | modal | moonshotai/Kimi-K3 | OpenAI chat completions（Modal 端点，key=TOKEN_ID.TOKEN_SECRET） |
-| deepseek-v4-pro | hub | deepseek-v4-pro | OpenAI responses API（hub.oaifree.com/v1） |
-| gemini-3.1-pro-preview | hub | gemini-3.1-pro-preview | 同上 |
-| gpt-5.6-sol | hub | gpt-5.6-sol | 同上 |
-| claude-opus-4-6 | anthropic | claude-opus-4-6 | Anthropic SDK（hub.oaifree.com/anthropic，system 单独传） |
-| gemini-flash-latest | gemini | gemini-flash-latest | Google 官方 OpenAI 兼容端点 |
-
 改模型只需改 config.yaml 对应玩家的 provider/model 字段。
+
+| 玩家 | provider | 调用方式 |
+|---|---|---|
+| Kimi-K3 | modal | OpenAI chat completions（Modal 端点，key=TOKEN_ID.TOKEN_SECRET） |
+| deepseek-v4-pro | hub | OpenAI responses API（hub.oaifree.com/v1） |
+| gemini-3.1-pro-preview | hub | 同上 |
+| gpt-5.6-sol | hub | 同上 |
+| claude-opus-4-6 | anthropic | Anthropic SDK（hub.oaifree.com/anthropic，system 单独传） |
+| gemini-flash-latest | gemini | Google 官方 OpenAI 兼容端点 |
 
 ## 关键设计决策（用户已拍板，勿擅自更改）
 
-1. **玩家类名是 AIPlayer**，与厂商无关，模型/端点走配置。
+1. **玩家类名是 AIPlayer**，与厂商无关，模型/端点走配置；新增端点前先跑 `check_llm.py`。
 2. **每局结束公开**：该局完整出价日志 + 当前累计排名 + 每人各局胜场明细。
 3. **AI 输出格式**：自由文本推理 + 末尾 `json {"bid": N}` 块；解析取最后一个 JSON 块。
 4. **对话线只增不改**（保前缀缓存）：system（规则+人设+名单）初始化后永不改，
   所有环节只 append；唯一允许的截断是暂停回滚到本轮 checkpoint。
 5. **每天只发一条 user 消息**：「当前是第N局第M天。」非首日随后接「昨日公布」（获胜者带
   「获胜」字样，流局写「流局（无分红）」），余额行放最后且标注「（已含昨日分红）」——
-  余额是结算后的值，放在分红之前曾诱导模型误再加一次分红；首日单行不换句。
-6. **不采集推理内容**：所有模型均不需要 `reasoning_content`，`chat_fn` 统一返回 `str`（正文）。
-7. **多 provider 架构**：`make_chat_fn(provider, model)` 按 provider 分发四种调用方式
-   （gemini/modal chat completions、hub responses API、anthropic SDK）；每玩家独立配模型；
-   新增端点前先跑 `check_llm.py` 冒烟测试。
-   各模型输出上限按 https://models.dev/ 官方 provider 数据内置在 `MODEL_OUTPUT_LIMITS`
-   （Kimi-K3=131072、deepseek-v4-pro=384000、gpt-5.6-sol/claude-opus-4-6=128000、gemini 系=65536），
-   按 API 传参：chat completions 用 max_tokens、responses API 用 max_output_tokens、anthropic 必填 max_tokens。
-8. **单步粒度 = 一轮并发收集**：回车一次放行整轮（某天 6 人出价 / 某轮 6 人发言），
-  线程池并发执行，全部任务有定论后才进入下一轮；闸门提示只显示轮次说明（如"第1局第1天出价"）。
-  暂停 = 等在途调用结束，丢弃暂停后完成的结果并回滚对应玩家，**已完成的结果保留**，
+  余额是结算后的值；首日单行不换句。
+6. **不采集推理内容**：`chat_fn` 统一返回 `str`（正文），不需要 `reasoning_content`。
+7. **输出上限内置在 `MODEL_OUTPUT_LIMITS`**（数据来源 https://models.dev/），
+  按 API 传参：chat completions 用 max_tokens、responses API 用 max_output_tokens、
+  anthropic 必填 max_tokens。
+8. **单步粒度 = 一轮并发收集**（线程池），全部任务有定论后才进下一轮；
+  暂停 = 等在途调用结束，丢弃暂停后完成的结果并回滚对应玩家，已完成保留，
   恢复后仅补跑未完成项；连续/单步随时切换。
-9. **连续两次调用失败（网络/余额等基础设施故障）→ 抛 `CallFailedError` 上报轮级别**
-  （玩家内部已自动重试 1 次且对话线回滚到本轮 checkpoint）：一轮收完后打印失败名单与原因，
-  回车仅重跑失败的 AI（可反复直到本轮齐全，q 仍可中止），连续模式同样转入等回车。
-  注意：解析失败（输出格式问题）仍按规则重试 1 次后记 0，不触发轮级别重跑。
-10. **发言流程**：开局发言→互看他人发言→规划第一局；每局末同上→规划下局；终局感言→互看→
-  观众总结（不回喂任何对话线）。**发言/规划/总结一律不截断**（全文进对话线也全文公开，
-  发言者与其他玩家看到的内容严格一致）；字数只是提示词软要求：开局/局末发言提示「不超过
-  300 字」，终局感言与观众总结不限字数，规则原文（RULES_TEXT）不提字数。缺失视为放弃。
-  加赛预告只在第 5 局或加赛局结束且第一名仍并列时出现在局末发言请求中。
-11. **分红除数恒为 8**（玩家永不退场；除数大于玩家数，低价苟活无分红，且加宽对手对
-  总消耗的推断区间）；一局结束当天不分红；流局日全额返还无分红。
-12. **日志按场次分目录**：每次运行创建 `logs/<YYYYmmdd_HHMMSS>_<bot|ai>/`，
-  该场所有日志直接写入；`logs/latest` 相对软链接指向最近一场；同秒撞名加 `_2` 后缀；
-  不放 run_meta.json；旧日志不做移动/删除，清理由用户决定。
-13. **AI 对话日志 md 双写**：`_write_log` 是唯一出口，每条 jsonl 同步渲染追加到
-  同名 `ai_<名字>.md`（路径由 `log_path.with_suffix(".md")` 派生，调用方零改动），
-  供 VSCode 实时分玩家阅读。user/assistant 全文收录，调用失败/出价结果以 `> 引用行` 收录；
-  正文不套代码围栏（assistant 自带 ```json 块原样渲染）；jsonl 仍是结构化源头，md 只是视图可随时重建。
+9. **连续两次调用失败（网络/余额等基础设施故障）→ 抛 `CallFailedError` 上报轮级别**：
+  一轮收完后打印失败名单，回车仅重跑失败的 AI（q 仍可中止）。
+  解析失败（输出格式问题）按规则重试 1 次后记 0，不触发轮级重跑。
+10. **发言流程**：开局发言→互看→规划第一局；每局末同上→规划下局；终局感言→互看→
+  观众总结（不回喂任何对话线）。**发言/规划/总结一律不截断**（全文进对话线也全文公开）；
+  字数只是软要求：开局/局末提示「不超过 300 字」，终局感言与观众总结不限。
+  加赛预告只在第 5 局或加赛局结束且第一名仍并列时出现。
+11. **分红除数恒为 8**（玩家永不退场）；一局结束当天不分红；流局日全额返还无分红。
+12. **日志按场次分目录**：`logs/<YYYYmmdd_HHMMSS>_<bot|ai>/`，`logs/latest` 相对软链接；
+  同秒撞名加 `_2` 后缀；旧日志不做移动/删除，清理由用户决定。
+13. **AI 对话日志 md 双写**：`_write_log` 是唯一出口，每条 jsonl 同步渲染追加到同名
+  `ai_<名字>.md`；user/assistant 全文收录，调用失败/出价结果以 `> 引用行` 收录；
+  jsonl 是结构化源头，md 只是视图可随时重建。
 14. **局日志与排名用 markdown 表格渲染**（`render_match_log` / `render_standings`，
-  txt 日志与发给 AI 的消息共用同一渲染）：出价表以玩家为列（顺序取 config）、每行一天
-  （含结果/作废价位/分红）；排名表以局为列、随场次动态增长。
-15. **error 日志条目带轮次上下文**：`_guarded_call`/`final_summary` 收 `context` 参数
-  （出价传「第N局第M天」，发言/规划传环节标签，由 main.py 的 phase_label 透传），
-  error 条目写 `context` 字段，md 引用行渲染为「调用失败（phase，context，第 X 次）」。
+  txt 日志与发给 AI 的消息共用同一渲染）。
+15. **error 日志条目带轮次上下文**：error 条目写 `context` 字段（「第N局第M天」或环节标签），
+  md 引用行渲染为「调用失败（phase，context，第 X 次）」。
+16. **高位撞车罚胜场**（防领先者无脑出大数保优势）：每天结算检查撞车价位——正常日仅
+  高于获胜价的，流局日全部；同价位玩家总胜场（含本局已获、扣除已罚）不全相同则最多者
+  各罚 1 个累计胜场（0 胜天然免疫，并列最多都罚）。罚没只落累计排名，不影响当天胜负、
+  金币与本局流程：engine 双账本（`match_wins` 驱动流程、`match_penalties` 落排名），
+  局末 `fold_match_penalties` 从最近有净胜场的局折算进 wins_history（各局值不为负）。
+  每日公布第 4 项为罚没情况；`RULES_TEXT` 三.6/三.7 与五.1 是规则源头。
 
 ## 已踩过的坑（重要）
 

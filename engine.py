@@ -6,6 +6,7 @@ from collections import Counter
 
 from models import (
     BID_LIMIT,
+    COLLISION_PENALTY,
     DIVIDEND_DIVISOR,
     INITIAL_COINS,
     MAX_DAYS,
@@ -31,13 +32,23 @@ def validate_bid(raw_bid: object, coins: int) -> tuple[int, str]:
 def compute_standings(
     wins_history: dict[str, list[int]],
     current_match_wins: dict[str, int] | None = None,
+    current_match_penalties: dict[str, int] | None = None,
 ) -> list[StandingsEntry]:
-    """根据各局胜场分布计算累计排名（并列同名次，取最高名次）。"""
+    """根据各局胜场分布计算累计排名（并列同名次，取最高名次）。
+
+    current_match_wins / current_match_penalties：进行中的本局已决出胜场与
+    已发生罚没，仅影响总胜场，不进各局明细（明细在局末折算后写入 wins_history）。
+    """
     current_match_wins = current_match_wins or {}
+    current_match_penalties = current_match_penalties or {}
     entries = [
         StandingsEntry(
             player=name,
-            total_wins=sum(per_match) + current_match_wins.get(name, 0),
+            total_wins=(
+                sum(per_match)
+                + current_match_wins.get(name, 0)
+                - current_match_penalties.get(name, 0)
+            ),
             wins_per_match=list(per_match),
         )
         for name, per_match in wins_history.items()
@@ -49,6 +60,27 @@ def compute_standings(
         else:
             entry.rank = index + 1
     return entries
+
+
+def fold_match_penalties(wins_history: dict[str, list[int]], log: MatchLog) -> None:
+    """把一局产生的胜场罚没折算进各局胜场明细：从最近一个有净胜场的局往前扣。
+
+    在 run_match 的 log.wins 已追加进 wins_history 之后调用。
+    被罚者被罚时总胜场必然至少为 1（同价位玩家胜场不全相同则最多者 ≥1），
+    因此罚没总额不超过累计胜场，折算后各局数值不会为负。
+    """
+    penalty_totals = {name: 0 for name in log.wins}
+    for day in log.days:
+        for name, amount in day.penalties:
+            penalty_totals[name] += amount
+    for name, amount in penalty_totals.items():
+        remaining = amount
+        for index in range(len(wins_history[name]) - 1, -1, -1):
+            if remaining == 0:
+                break
+            deduction = min(wins_history[name][index], remaining)
+            wins_history[name][index] -= deduction
+            remaining -= deduction
 
 
 def run_match(
@@ -68,10 +100,15 @@ def run_match(
     run_parallel_round 内部处理，对本函数透明。
     """
     coins = {player.name: INITIAL_COINS for player in players}
-    match_wins = {player.name: 0 for player in players}
+    match_wins = {player.name: 0 for player in players}          # 本局拍卖流程胜场（驱动 wins_remaining）
+    match_penalties = {player.name: 0 for player in players}     # 本局已发生罚没（只影响累计排名）
     wins_remaining = WINS_PER_MATCH
     log = MatchLog(match_index=match_index, is_playoff=is_playoff)
     past_log_dicts = [past_log.to_dict() for past_log in past_logs]
+
+    def ranking_wins(name: str) -> int:
+        """计入累计排名的胜场：历史净胜场 + 本局已获胜场 - 本局已罚没。"""
+        return sum(wins_history[name]) + match_wins[name] - match_penalties[name]
 
     day = 1
     while wins_remaining > 0 and day <= MAX_DAYS:
@@ -86,12 +123,12 @@ def run_match(
                     my_name=player.name,
                     my_coins=coins[player.name],
                     my_match_wins=match_wins[player.name],
-                    my_total_wins=sum(wins_history[player.name]) + match_wins[player.name],
+                    my_total_wins=ranking_wins(player.name),
                     day=day,
                     wins_remaining=wins_remaining,
                     max_days=MAX_DAYS,
                     today_history=[day_result.public_view() for day_result in log.days],
-                    standings=compute_standings(wins_history, match_wins),
+                    standings=compute_standings(wins_history, match_wins, match_penalties),
                     past_match_logs=past_log_dicts,
                 ),
             )
@@ -114,9 +151,32 @@ def run_match(
             reverse=True,
         )
 
+        def collect_collision_penalties(taxable_prices: list[int]) -> list[tuple[str, int]]:
+            """高位撞车罚没：同一撞车价位上总胜场不全相同时，最多者各罚 1 个累计胜场。
+
+            正常日只传入高于获胜价的撞车价位，流局日传入全部撞车价位。
+            罚没只落累计排名，不影响当天胜负、金币结算与本局拍卖流程。
+            """
+            penalties: list[tuple[str, int]] = []
+            for price in sorted(taxable_prices, reverse=True):
+                offenders = [record.player for record in bids if record.bid == price]
+                totals = {name: ranking_wins(name) for name in offenders}
+                if len(set(totals.values())) == 1:
+                    continue
+                top_wins = max(totals.values())
+                for name, total in totals.items():
+                    if total == top_wins:
+                        match_penalties[name] += COLLISION_PENALTY
+                        penalties.append((name, COLLISION_PENALTY))
+            return penalties
+
         if not unique_prices_desc:
-            # 流局：不产生胜场，全员出价全额返还（即不扣除），无分红
+            # 流局：不产生胜场，全员出价全额返还（即不扣除），无分红；
+            # 所有价位必然都撞车，全部参与罚没检查
             voided_count = sum(1 for count in price_counts.values() if count >= 2)
+            penalties = collect_collision_penalties(
+                [price for price, count in price_counts.items() if count >= 2]
+            )
             log.days.append(
                 DayResult(
                     day=day,
@@ -126,17 +186,19 @@ def run_match(
                     voided_price_count=voided_count,
                     dividend=0,
                     is_void=True,
+                    penalties=penalties,
                 )
             )
         else:
             winning_bid = unique_prices_desc[0]
             winner = next(record.player for record in bids if record.bid == winning_bid)
-            # 作废价位数：高于获胜价且两人及以上撞车的不同价位（低于获胜价的不计入）
-            voided_count = sum(
-                1
+            # 作废价位（高于获胜价且两人及以上撞车）即正常日的罚没检查范围
+            taxable_prices = [
+                price
                 for price, count in price_counts.items()
                 if count >= 2 and price > winning_bid
-            )
+            ]
+            voided_count = len(taxable_prices)
 
             # 出价即消耗：无论输赢立即扣除
             for record in bids:
@@ -151,6 +213,7 @@ def run_match(
                 for player in players:
                     coins[player.name] += dividend
 
+            penalties = collect_collision_penalties(taxable_prices)
             log.days.append(
                 DayResult(
                     day=day,
@@ -160,6 +223,7 @@ def run_match(
                     voided_price_count=voided_count,
                     dividend=dividend,
                     is_void=False,
+                    penalties=penalties,
                 )
             )
 

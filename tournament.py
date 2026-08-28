@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
-from engine import compute_standings, run_match
+from engine import compute_standings, fold_match_penalties, run_match
 from models import MatchLog, StandingsEntry
 from players import Player
 
@@ -73,6 +73,7 @@ def run_tournament(
         )
         for name, wins in log.wins.items():
             wins_history[name].append(wins)
+        fold_match_penalties(wins_history, log)
         result.match_logs.append(log)
         standings = compute_standings(wins_history)
         if on_match_end:

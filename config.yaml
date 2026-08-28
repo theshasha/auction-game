@@ -1,6 +1,6 @@
 # LLM 全局配置：timeout 对所有 provider 生效
 llm:
-  timeout_seconds: 60
+  timeout_seconds: 900
 
 # 6 名 AI 玩家：名字（模型名） + 人设 + 各自的 provider/model
 # provider 可选：modal（Kimi-K3）/ hub（oaifree responses API）/ anthropic（oaifree claude）/ gemini（官方直连）
