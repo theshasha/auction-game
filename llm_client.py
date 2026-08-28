@@ -1,10 +1,10 @@
 """LLM 调用封装：多 provider 分发（gemini/modal/hub/anthropic），密钥走 .env。
 
 provider 与调用方式：
-- gemini：Google 官方 OpenAI 兼容端点，chat completions
+- gemini：Google 官方 OpenAI 兼容端点，chat completions（当前无玩家使用，代码保留）
 - modal：Modal 托管的 Kimi-K3，OpenAI chat completions（K3 强制推理，不传 thinking 控制参数）
-- hub：oaifree 中转，OpenAI responses API（deepseek/gemini/gpt 系列）
-- anthropic：oaifree 中转，Anthropic SDK（claude 系列）
+- hub：oaifree 中转，按玩家 protocol 字段二选一：responses API（默认）或 chat completions
+- anthropic：oaifree 中转，Anthropic SDK（当前无玩家使用，代码保留）
 
 chat_fn 统一签名为 (messages: list[dict]) -> str，只返回正文 content。
 """
@@ -12,6 +12,7 @@ chat_fn 统一签名为 (messages: list[dict]) -> str，只返回正文 content�
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +32,8 @@ HUB_ANTHROPIC_BASE_URL = "https://hub.oaifree.com/anthropic"
 #   google     | gemini-3.1-pro-preview / gemini-flash-latest  out=65536
 #   openai     | gpt-5.6-sol          out=128000
 #   anthropic  | claude-opus-4-6      out=128000
+#   minimax    | MiniMax-M3           out=512000
+#   zai        | glm-5.3              out=131072
 MODEL_OUTPUT_LIMITS = {
     "moonshotai/Kimi-K3": 131072,
     "deepseek-v4-pro": 384000,
@@ -38,12 +41,25 @@ MODEL_OUTPUT_LIMITS = {
     "gpt-5.6-sol": 128000,
     "claude-opus-4-6": 128000,
     "gemini-flash-latest": 65536,
+    "MiniMax-M3": 512000,
+    "glm-5.3": 131072,
 }
 
 # anthropic 的 max_tokens 是必填参数，未知模型的兜底值
 ANTHROPIC_FALLBACK_MAX_TOKENS = 8192
 
 ChatFn = Callable[[list[dict]], str]
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+_THINK_UNCLOSED_RE = re.compile(r"<think>.*$", re.DOTALL)
+
+
+def strip_think_blocks(text: str) -> str:
+    """剥离正文内嵌的 <think> 推理块（如 MiniMax-M3 的 responses 输出）。
+
+    未闭合的 <think>（输出被截断时）连同其后内容一并去掉。
+    """
+    return _THINK_UNCLOSED_RE.sub("", _THINK_BLOCK_RE.sub("", text))
 
 
 class MissingApiKeyError(RuntimeError):
@@ -94,19 +110,41 @@ def _make_modal_fn(model: str, timeout: int) -> ChatFn:
     return chat_fn
 
 
-def _make_hub_fn(model: str, timeout: int) -> ChatFn:
-    """oaifree 中转的 OpenAI responses API：input 直接吃 messages 列表，取 output_text。"""
+def _make_hub_fn(model: str, timeout: int, protocol: str = "responses") -> ChatFn:
+    """oaifree 中转端点，protocol 二选一：
+
+    - responses：OpenAI responses API，input 直接吃 messages 列表，取 output_text
+    - chat：OpenAI chat completions（/v1/chat/completions），取 choices[0].message.content
+    """
+    if protocol not in ("responses", "chat"):
+        raise ValueError(f"hub 未知 protocol：{protocol!r}（可选：responses、chat）")
+
     api_key = _require_env("HUB_API_KEY", "hub")
     client = OpenAI(base_url=HUB_BASE_URL, api_key=api_key)
 
-    def chat_fn(messages: list[dict]) -> str:
+    if protocol == "chat":
+
+        def chat_fn(messages: list[dict]) -> str:
+            kwargs = {}
+            if model in MODEL_OUTPUT_LIMITS:
+                kwargs["max_tokens"] = MODEL_OUTPUT_LIMITS[model]
+            response = client.chat.completions.create(
+                model=model, messages=messages, timeout=timeout, **kwargs
+            )
+            return response.choices[0].message.content or ""
+
+        return chat_fn
+
+    def responses_fn(messages: list[dict]) -> str:
         kwargs = {}
         if model in MODEL_OUTPUT_LIMITS:
             kwargs["max_output_tokens"] = MODEL_OUTPUT_LIMITS[model]
-        response = client.responses.create(model=model, input=messages, timeout=timeout, **kwargs)
+        response = client.responses.create(
+            model=model, input=messages, timeout=timeout, **kwargs
+        )
         return response.output_text or ""
 
-    return chat_fn
+    return responses_fn
 
 
 def _make_anthropic_fn(model: str, timeout: int) -> ChatFn:
@@ -144,13 +182,24 @@ _PROVIDER_FACTORIES = {
 }
 
 
-def make_chat_fn(provider: str, model: str, timeout: int = 60) -> ChatFn:
+def make_chat_fn(
+    provider: str, model: str, timeout: int = 60, protocol: str | None = None
+) -> ChatFn:
     """按 provider 构建 chat_fn(messages) -> str，供 AIPlayer 注入。
 
+    protocol 仅对 hub 生效（responses/chat），缺省按 responses 处理。
     AIPlayer 只依赖 chat_fn 签名，测试时用假函数替代，零网络。
     """
     factory = _PROVIDER_FACTORIES.get(provider)
     if factory is None:
         known = "、".join(sorted(_PROVIDER_FACTORIES))
         raise ValueError(f"未知 provider：{provider!r}（可选：{known}）")
-    return factory(model, timeout)
+    if provider == "hub":
+        raw_fn = _make_hub_fn(model, timeout, protocol or "responses")
+    else:
+        raw_fn = factory(model, timeout)
+
+    def chat_fn(messages: list[dict]) -> str:
+        return strip_think_blocks(raw_fn(messages))
+
+    return chat_fn

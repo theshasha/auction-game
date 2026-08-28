@@ -14,7 +14,8 @@
 ├── engine.py       # 单局裁判：出价校验、最高唯一价判定、流局、分红、提前结束
 ├── tournament.py   # 整场：5 局正赛 + 加赛循环 + SpeechDirector 发言钩子
 ├── players.py      # Player 抽象 + RandomBot + ScriptedPlayer（测试用）
-├── llm_client.py   # 多 provider 分发：gemini/modal/hub(responses)/anthropic，chat_fn 返回 str
+├── llm_client.py   # 多 provider 分发：modal / hub（protocol=responses|chat）/ anthropic / gemini，
+│                   # 后两者当前无玩家使用但代码保留；chat_fn 返回 str
 ├── ai_player.py    # AIPlayer：只增不改的对话线、出价解析容错、发言/规划/总结
 ├── controller.py   # 轮级并发执行器 + 单步/连续/暂停状态机 + 按玩家 checkpoint 回滚
 ├── prompts.py      # 规则全文 + 全部消息模板 + 局日志/排名渲染（markdown 表格）
@@ -24,7 +25,8 @@
 │                   # 可传 logs/<目录名> 指定；archive_ 开头的归档目录会被忽略
 ├── config.yaml     # 6 玩家名字+人设+各自 provider/model + 全局 llm.timeout_seconds
 ├── requirements.txt
-├── tests/          # test_engine.py / test_tournament.py / test_ai.py / test_prompts.py（90 项全绿）
+├── tests/          # test_engine.py / test_tournament.py / test_ai.py / test_prompts.py /
+│                   # test_llm_client.py（98 项全绿，全部零网络）
 └── logs/           # 按场次分目录 <时间戳>_<bot|ai>/，latest 软链接指向最近一场（gitignore）
                     # 每场内含 match_<n>.json/.txt，AI 模式另有 ai_<名字>.jsonl、speeches.txt
                     # ai_<名字>.md 与 jsonl 同步双写（markdown 视图，VSCode 打开可实时分玩家阅读）
@@ -32,10 +34,10 @@
 
 ```bash
 cd /root/auction_game
-python3 -m pytest tests/ -q     # 90 项测试（全部零网络）
+python3 -m pytest tests/ -q     # 98 项测试（全部零网络）
 python3 main.py --seed 42       # Bot 模式（可复现；冠军随规则变化）
 python3 check_llm.py            # 冒烟测试 6 个 LLM 端点（真实联网，--ai 前必跑）
-python3 main.py --ai            # AI 模式，需 .env 配齐 GEMINI_API_KEY / MODAL_* / HUB_API_KEY
+python3 main.py --ai            # AI 模式，需 .env 配齐 MODAL_* / HUB_API_KEY（按 config 实际用到的 provider）
 python3 analyze.py              # 统计最新 AI 场次
 ```
 
@@ -49,11 +51,13 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 | 玩家 | provider | 调用方式 |
 |---|---|---|
 | Kimi-K3 | modal | OpenAI chat completions（Modal 端点，key=TOKEN_ID.TOKEN_SECRET） |
-| deepseek-v4-pro | hub | OpenAI responses API（hub.oaifree.com/v1） |
-| gemini-3.1-pro-preview | hub | 同上 |
+| deepseek-v4-pro | hub | OpenAI chat completions（hub.oaifree.com/v1，config 中 `protocol: chat`） |
+| gemini-3.1-pro-preview | hub | OpenAI responses API（hub 默认 protocol） |
 | gpt-5.6-sol | hub | 同上 |
-| claude-opus-4-6 | anthropic | Anthropic SDK（hub.oaifree.com/anthropic，system 单独传） |
-| gemini-flash-latest | gemini | Google 官方 OpenAI 兼容端点 |
+| MiniMax-M3 | hub | 同上 |
+| glm-5.3 | hub | 同上 |
+
+注：anthropic / gemini 两个 provider 的代码仍保留在 llm_client.py（当前无玩家使用）。
 
 ## 关键设计决策（用户已拍板，勿擅自更改）
 
@@ -65,7 +69,8 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 5. **每天只发一条 user 消息**：「当前是第N局第M天。」非首日随后接「昨日公布」（获胜者带
   「获胜」字样，流局写「流局（无分红）」），余额行放最后且标注「（已含昨日分红）」——
   余额是结算后的值；首日单行不换句。
-6. **不采集推理内容**：`chat_fn` 统一返回 `str`（正文），不需要 `reasoning_content`。
+6. **不采集推理内容**：`chat_fn` 统一返回 `str`（正文），不需要 `reasoning_content`；
+  出口统一过 `strip_think_blocks`，剥离正文内嵌的 `<think>` 推理块（含未闭合截断）。
 7. **输出上限内置在 `MODEL_OUTPUT_LIMITS`**（数据来源 https://models.dev/），
   按 API 传参：chat completions 用 max_tokens、responses API 用 max_output_tokens、
   anthropic 必填 max_tokens。
@@ -102,3 +107,6 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
    （"Kimi K3 always reasons..."），只能省略该参数或传 low/high/max（当前省略）。
 2. **hub 的 claude 走 Anthropic SDK 而非 OpenAI 协议**：`base_url=https://hub.oaifree.com/anthropic`，
    system 提示词必须从 messages[0] 提取到 `system=` 参数，且必须显式传 `max_tokens`。
+3. **MiniMax-M3 的 responses 正文内嵌 `<think>` 块**：hub 的 responses API 把推理内容直接拼进
+   `output_text`，靠 `strip_think_blocks` 在 chat_fn 出口统一剥离；若输出在 think 中被截断
+   （未闭合），剥离后正文为空，会走出价解析失败路径（重试 1 次后记 0）。

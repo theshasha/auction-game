@@ -207,7 +207,10 @@ def run_ai() -> None:
     for pc in player_configs:
         try:
             chat_fns[pc["name"]] = make_chat_fn(
-                provider=pc["provider"], model=pc["model"], timeout=timeout
+                provider=pc["provider"],
+                model=pc["model"],
+                timeout=timeout,
+                protocol=pc.get("protocol"),
             )
         except (MissingApiKeyError, ValueError) as exc:
             print(f"错误：玩家 {pc['name']} 的 LLM 配置不可用：{exc}")

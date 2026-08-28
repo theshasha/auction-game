@@ -29,9 +29,15 @@ def main() -> int:
 
     failures = 0
     for player in config["players"]:
-        label = f"{player['name']}（{player['provider']} / {player['model']}）"
+        protocol_suffix = f" / {player['protocol']}" if player.get("protocol") else ""
+        label = f"{player['name']}（{player['provider']}{protocol_suffix} / {player['model']}）"
         try:
-            chat_fn = make_chat_fn(provider=player["provider"], model=player["model"], timeout=timeout)
+            chat_fn = make_chat_fn(
+                provider=player["provider"],
+                model=player["model"],
+                timeout=timeout,
+                protocol=player.get("protocol"),
+            )
         except (MissingApiKeyError, ValueError) as exc:
             print(f"[配置错误] {label}: {exc}")
             failures += 1
