@@ -234,6 +234,15 @@ class TestPenaltyRendering:
     def test_rules_text_mentions_penalty(self):
         assert "胜场罚没" in prompts.RULES_TEXT
 
+    def test_rules_text_anchors_penalty_to_total_wins(self):
+        assert "累计总胜场" in prompts.RULES_TEXT
+        assert "高于获胜价" in prompts.RULES_TEXT
+        assert "永不看" in prompts.RULES_TEXT
+
+    def test_rules_text_voided_price_only_above_winning_bid(self):
+        assert "只统计高于最终获胜价" in prompts.RULES_TEXT
+        assert "低于或等于获胜价的撞车一律不计入" in prompts.RULES_TEXT
+
     def test_match_log_renders_penalty_in_outcome_and_summary(self):
         day = make_day(1, [2, 2, 1, 0, 0, 0], "丙", 1, 1, 0)
         day.penalties = [("甲", 1)]
@@ -260,3 +269,16 @@ class TestPenaltyRendering:
         text = prompts.bid_request(TestBidRequest.make_obs(day=2, today_history=history))
         announcement_line = text.splitlines()[1]
         assert "胜场罚没" not in announcement_line  # 昨日公布不提罚没（状态行的「已含罚没」不算）
+
+    def test_bid_request_status_line_carries_constant_penalty_hint(self):
+        # 恒定提示与具体数字无关：首日单行与后续日状态行都必须出现
+        first_day = prompts.bid_request(TestBidRequest.make_obs(day=1))
+        assert "罚没提示" in first_day.splitlines()[0]
+        assert "作废价位同样只统计高于获胜价的撞车" in first_day.splitlines()[0]
+
+        history = [{"day": 1, "winner": "乙", "voided_price_count": 0, "dividend": 4,
+                    "penalties": []}]
+        later_day = prompts.bid_request(TestBidRequest.make_obs(day=2, today_history=history))
+        status_line = later_day.splitlines()[2]
+        assert "罚没提示" in status_line
+        assert "作废价位同样只统计高于获胜价的撞车" in status_line
