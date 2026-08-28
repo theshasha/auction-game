@@ -137,6 +137,48 @@ class TestConversationLine:
         assert player.messages == prefix
 
 
+class TestMarkdownLog:
+    """md 双写：每条 jsonl 日志同步渲染追加到同名 .md（jsonl 断言见既有用例，不动）。"""
+
+    @staticmethod
+    def read_md(player) -> str:
+        return player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+
+    def test_normal_bid_entry_rendered(self, tmp_path):
+        player = make_player(fake_chat_fn([bid_reply(3)]), tmp_path)
+        player.decide_bid(make_obs())
+
+        md_text = self.read_md(player)
+        assert md_text.startswith("# Alpha 对话记录\n")
+        assert "## bid" in md_text
+        assert "**【user】**" in md_text and "**【assistant】**" in md_text
+        assert '```json\n{"bid": 3}\n```' in md_text  # 正文原样收录，不套外层围栏
+        assert "> 出价结果：3" in md_text
+
+    def test_error_entry_rendered(self, tmp_path):
+        # 第一次调用失败重试成功：md 含失败备注，且最终问答仍完整
+        chat_fn = fake_chat_fn([RuntimeError("timeout"), bid_reply(4)])
+        player = make_player(chat_fn, tmp_path)
+        assert player.decide_bid(make_obs()) == 4
+
+        md_text = self.read_md(player)
+        assert "> 调用失败（bid，第 1 次）：RuntimeError: timeout" in md_text
+        assert "## bid" in md_text
+
+    def test_parse_failed_entry_rendered(self, tmp_path):
+        player = make_player(fake_chat_fn(["没有块", "还是没有"]), tmp_path)
+        assert player.decide_bid(make_obs()) == 0
+
+        assert "> 出价解析失败，按规则记 0" in self.read_md(player)
+
+    def test_truncation_entry_rendered(self, tmp_path):
+        player = make_player(fake_chat_fn(["很" * 600]), tmp_path)
+        player.give_speech("请发言", "opening_speech")
+
+        md_text = self.read_md(player)
+        assert "> 发言截断：原文 600 字，已截断至 500 字" in md_text
+
+
 class TestSpeech:
     def test_speech_truncated_at_500_chars(self, tmp_path):
         long_speech = "很" * 600

@@ -62,6 +62,39 @@ class AIPlayer(Player):
         self.log_path.parent.mkdir(exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        self._append_markdown(entry)
+
+    def _append_markdown(self, entry: dict) -> None:
+        """把本条 jsonl 日志渲染追加到同名 .md，供 VSCode 实时分玩家阅读。
+
+        jsonl 是结构化源头，md 只是视图；正文不套代码围栏，
+        assistant 自带的 ```json 块原样写入即可正常渲染。
+        """
+        md_path = self.log_path.with_suffix(".md")
+        is_new_file = not md_path.exists()
+        with md_path.open("a", encoding="utf-8") as file:
+            if is_new_file:
+                file.write(f"# {self.name} 对话记录\n\n")
+            file.write(self._render_markdown_entry(entry))
+
+    @staticmethod
+    def _render_markdown_entry(entry: dict) -> str:
+        """按 jsonl 条目的四种形态渲染 markdown 片段。"""
+        if "user" in entry and "content" in entry:
+            return (
+                f"## {entry['phase']}\n\n"
+                f"**【user】**\n\n{entry['user']}\n\n"
+                f"**【assistant】**\n\n{entry['content']}\n\n---\n\n"
+            )
+        if "error" in entry:
+            return f"> 调用失败（{entry['phase']}，第 {entry['attempt']} 次）：{entry['error']}\n\n"
+        if "result" in entry:
+            if entry.get("parse_failed"):
+                return "> 出价解析失败，按规则记 0\n\n---\n\n"
+            return f"> 出价结果：{entry['result']}\n\n---\n\n"
+        if entry.get("truncated"):
+            return f"> 发言截断：原文 {entry['original_length']} 字，已截断至 {SPEECH_LIMIT} 字\n\n"
+        return ""
 
     def _call(self, user_text: str, phase: str) -> str:
         """追加一条 user 消息并调用 LLM，assistant 正文进对话线。"""
