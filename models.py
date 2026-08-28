@@ -5,13 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-BID_LIMIT = 6          # 每日出价上限，固定为 6，与余额无关
 INITIAL_COINS = 6      # 每局初始金币
 MAX_DAYS = 5           # 每局最多天数（含顺延）
 WINS_PER_MATCH = 8     # 每局拍卖的胜场数
 WINS_PER_DAY = 2       # 每天打包拍卖的胜场数（8 ÷ 2 整除，不产生零头）
-DIVIDEND_DIVISOR = 7   # 分红除数，固定为 7（大于玩家数 6，全员极低价苟活时总消耗不足 7、无分红）
+# 每日出价上限按天降档：第 1~2 天 6、第 3~4 天 5、第 5 天 4；流局日照样降档。
+# 动机：拆掉永恒极点（固定上限下最高价位零风险必胜），并让苟着攒钱付出时间成本——
+# 攒到后期高价已过期，金币只能低价花出。
+BID_LIMITS = (6, 6, 5, 5, 4)
+DIVIDEND_DIVISOR = 6   # 分红除数，固定为 6（等于玩家数，全员极低价苟活时总消耗不足 6、无分红）
 COLLISION_PENALTY = 1  # 高位撞车每次罚没的累计胜场数
+
+
+def bid_limit(day: int) -> int:
+    """第 day 天（1 起）的出价上限：第 1~2 天 6、第 3~4 天 5、第 5 天 4。"""
+    return BID_LIMITS[day - 1]
 
 
 @dataclass
@@ -106,6 +114,7 @@ class Observation:
     my_match_wins: int           # 本局已获胜场
     my_total_wins: int           # 含本局在内的总胜场（已扣除罚没）
     day: int                     # 当前第几天（1 起）
+    bid_cap: int                 # 当天出价上限（随天数降档）
     wins_remaining: int          # 本局剩余待拍胜场
     max_days: int                # 每局天数上限
     today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）

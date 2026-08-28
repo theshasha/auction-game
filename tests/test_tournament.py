@@ -75,18 +75,18 @@ class TestCollisionPenaltyFolding:
         assert totals(result)["甲"] == 29
         entry = next(e for e in result.final_standings if e.player == "甲")
         assert entry.wins_per_match == [8, 5, 0, 8, 8]
-        # 丙第 3 局拿满 8 胜且后续未被罚（除数 7 分红托底下余额可持续，第 4/5 局第 4 天仍出 1、
+        # 丙第 3 局拿满 8 胜且后续未被罚（除数 6 分红托底下余额可持续，第 4/5 局第 4 天仍出 1、
         # 获胜价 1 高于 0 撞车，不再触发「非法 0 撞车罚没」）
         assert totals(result)["丙"] == 8
         assert ranks(result)["甲"] == 1
 
 
 class TestDividendSustainsBalances:
-    """除数 7 的经济效果：每天总消耗恰为 7 时分红 1 补回出价，余额可持续，不再被耗尽。"""
+    """除数 6 的经济效果：每天总消耗不低于 6 时分红 ≥1 补回出价，余额可持续，不再被耗尽。"""
 
     def test_daily_dividend_keeps_balance_positive(self):
         # 甲每天出 2（唯一最高）获胜，其余人每天出 1（低于获胜价、撞车不罚）。
-        # 每天总消耗 2+5 = 7，分红 7 // 7 = 1 恰好补回其余人的出价：余额永续，4 天都出得起。
+        # 每天总消耗 2+5 = 7，分红 7 // 6 = 1 恰好补回其余人的出价：余额永续，4 天都出得起。
         players = [ScriptedPlayer(n, (lambda b: lambda obs: b)(2 if n == "甲" else 1)) for n in NAMES]
         result = run_tournament(players)
 

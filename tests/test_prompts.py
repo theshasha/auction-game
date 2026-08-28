@@ -139,6 +139,7 @@ class TestBidRequest:
             my_match_wins=0,
             my_total_wins=total_wins,
             day=day,
+            bid_cap=6,
             wins_remaining=2,
             max_days=5,
             today_history=today_history or [],
@@ -161,7 +162,7 @@ class TestBidRequest:
 
         assert lines[0] == "当前是第 2 局第 2 天。"
         assert lines[1] == "昨日公布：乙 获胜，作废价位 0 个，分红 4 金币。"
-        assert lines[2].startswith("你的金币余额：7（已含昨日分红）；")
+        assert lines[2].startswith("今日出价上限：6；你的金币余额：7（已含昨日分红）；")
         # 余额行必须在昨日公布之后
         assert text.index("昨日公布") < text.index("你的金币余额")
 

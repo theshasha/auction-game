@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from models import WINS_PER_MATCH, MatchLog, Observation, StandingsEntry
+from models import WINS_PER_MATCH, MatchLog, Observation, StandingsEntry, bid_limit
 
 RULES_TEXT = """\
 【唯一高价拍卖游戏规则】
@@ -15,7 +15,9 @@ RULES_TEXT = """\
 
 二、金币与出价
 1. 每局开始时每位玩家获得 6 枚金币。金币在局内跨天累积，跨局不继承，局末作废。
-2. 每天所有玩家同时提交秘密出价。出价为 0 到 6 的整数，且不得超过当前余额。
+2. 每天所有玩家同时提交秘密出价。出价为 0 到当天出价上限的整数，且不得超过当前余额。
+   出价上限随天数降档：第 1~2 天为 6，第 3~4 天为 5，第 5 天为 4；
+   流局顺延的日子同样计入降档。每局第 1 天的上限重新从 6 开始。
 3. 非法出价（超余额、超上限、非整数、负数）一律视为出价 0。未提交视为出价 0。
 4. 出价即消耗：正常结算当天无论输赢，出价立即被扣除。流局日全员出价全额返还。
 
@@ -39,7 +41,7 @@ RULES_TEXT = """\
 
 四、每日分红
 1. 每个正常分出胜负的当天结算后，当天全员出价总和平均分给所有在场玩家：
-   总消耗除以 7 向下取整为每人分红，零头由系统没收。
+   总消耗除以 6 向下取整为每人分红，零头由系统没收。
 2. 若当天结算后本局结束（拍出最后 2 个胜场或第 5 天结算），则不再分红。
 
 五、信息公布
@@ -62,9 +64,12 @@ RULES_TEXT = """\
 3. 第一名以外的并列保持并列，不再区分。
 """
 
-BID_FORMAT_HINT = """\
-请先分析当前局势，然后在回复末尾用如下 JSON 给出今日出价：
-{"bid": <0到6的整数，不得超过你的余额>}"""
+def bid_format_hint(bid_cap: int) -> str:
+    """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。"""
+    return (
+        "请先分析当前局势，然后在回复末尾用如下 JSON 给出今日出价：\n"
+        f'{{"bid": <0到{bid_cap}的整数，不得超过你的余额>}}'
+    )
 
 
 def build_system_prompt(name: str, persona: str, all_names: list[str]) -> str:
@@ -86,14 +91,16 @@ def opening_plan_request(others_speeches: dict[str, str]) -> str:
         "以下是其他玩家的开局发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价"
-        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}）。\n\n"
-        + BID_FORMAT_HINT
+        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}，"
+        f"出价上限 {bid_limit(1)}）。\n\n"
+        + bid_format_hint(bid_limit(1))
     )
 
 
 def bid_request(obs: Observation) -> str:
     match_index = len(obs.past_match_logs) + 1
     status_line = (
+        f"今日出价上限：{obs.bid_cap}；"
         f"你的金币余额：{obs.my_coins}；本局已获胜场：{obs.my_match_wins}；"
         f"本局剩余待拍胜场：{obs.wins_remaining}；"
         f"你的累计总胜场：{obs.my_total_wins}（已含罚没）。"
@@ -103,7 +110,7 @@ def bid_request(obs: Observation) -> str:
     )
     if not obs.today_history:
         # 首日：单行不换句
-        return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{BID_FORMAT_HINT}"
+        return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint(obs.bid_cap)}"
 
     yesterday = obs.today_history[-1]
     if yesterday["winner"] == "流局":
@@ -123,12 +130,12 @@ def bid_request(obs: Observation) -> str:
         f"你的金币余额：{obs.my_coins}；", f"你的金币余额：{obs.my_coins}（已含昨日分红）；"
     )
     lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement, status_line]
-    return "\n".join(lines) + "\n\n" + BID_FORMAT_HINT
+    return "\n".join(lines) + "\n\n" + bid_format_hint(obs.bid_cap)
 
 
-def retry_bid_request() -> str:
+def retry_bid_request(bid_cap: int) -> str:
     return (
-        "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + BID_FORMAT_HINT
+        "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + bid_format_hint(bid_cap)
     )
 
 
@@ -203,8 +210,9 @@ def next_match_plan_request(others_speeches: dict[str, str]) -> str:
         "以下是其他玩家的局末发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你下一局的初步策略，并直接给出下一局第 1 天的出价"
-        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}）。\n\n"
-        + BID_FORMAT_HINT
+        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}，"
+        f"出价上限 {bid_limit(1)}）。\n\n"
+        + bid_format_hint(bid_limit(1))
     )
 
 

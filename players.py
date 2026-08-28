@@ -28,7 +28,7 @@ class RandomBot(Player):
         self.rng = rng or random.Random()
 
     def decide_bid(self, obs: Observation) -> int:
-        return self.rng.randint(0, min(obs.my_coins, 6))
+        return self.rng.randint(0, min(obs.my_coins, obs.bid_cap))
 
 
 class ScriptedPlayer(Player):

@@ -2,6 +2,7 @@
 
 import engine
 from engine import compute_standings, fold_match_penalties, run_match, validate_bid
+from models import bid_limit
 from players import ScriptedPlayer
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
@@ -21,24 +22,25 @@ def constant_strategies(bids: list[int]):
 
 class TestValidateBid:
     def test_legal_bid(self):
-        assert validate_bid(3, 6) == (3, "ok")
-        assert validate_bid(0, 6) == (0, "ok")
-        assert validate_bid(6, 6) == (6, "ok")
+        assert validate_bid(3, 6, 6) == (3, "ok")
+        assert validate_bid(0, 6, 6) == (0, "ok")
+        assert validate_bid(6, 6, 6) == (6, "ok")
 
     def test_over_balance(self):
-        assert validate_bid(6, 3) == (0, "illegal")
+        assert validate_bid(6, 3, 6) == (0, "illegal")
 
     def test_over_limit(self):
-        assert validate_bid(7, 100) == (0, "illegal")
+        assert validate_bid(7, 100, 6) == (0, "illegal")
+        assert validate_bid(6, 100, 5) == (0, "illegal")  # 第 3~4 天上限已降为 5
 
     def test_negative(self):
-        assert validate_bid(-1, 6) == (0, "illegal")
+        assert validate_bid(-1, 6, 6) == (0, "illegal")
 
     def test_non_integer(self):
-        assert validate_bid(2.5, 6) == (0, "illegal")
-        assert validate_bid("3", 6) == (0, "illegal")
-        assert validate_bid(None, 6) == (0, "illegal")
-        assert validate_bid(True, 6) == (0, "illegal")  # bool 也视为非法
+        assert validate_bid(2.5, 6, 6) == (0, "illegal")
+        assert validate_bid("3", 6, 6) == (0, "illegal")
+        assert validate_bid(None, 6, 6) == (0, "illegal")
+        assert validate_bid(True, 6, 6) == (0, "illegal")  # bool 也视为非法
 
 
 class TestWinningRules:
@@ -91,12 +93,12 @@ class TestVoidDay:
 
 class TestDividend:
     def test_dividend_is_floor_of_total_over_players(self):
-        # 第 1 天总消耗 15，分红 15 // 7 = 2
+        # 第 1 天总消耗 15，分红 15 // 6 = 2
         log = run_one_match(constant_strategies([5, 4, 3, 2, 1, 0]))
         assert log.days[0].dividend == 2
 
     def test_dividend_added_to_coins(self):
-        # 第 1 天总消耗 12，分红 12 // 7 = 1。"己"出 0 获胜不扣钱，余额变为 6 + 1 = 7
+        # 第 1 天总消耗 12，分红 12 // 6 = 2。"己"出 0 获胜不扣钱，余额变为 6 + 2 = 8
         def strategy(obs):
             if obs.day == 1:
                 return {"甲": 3, "乙": 3, "丙": 2, "丁": 2, "戊": 2, "己": 0}[obs.my_name]
@@ -104,34 +106,35 @@ class TestDividend:
 
         log = run_one_match({name: strategy for name in NAMES})
         day2 = log.days[1]
-        assert log.days[0].dividend == 1  # 12 // 7 = 1（除数为 8 时同样得 1，行为不变）
+        assert log.days[0].dividend == 2  # 12 // 6 = 2
         record = next(r for r in day2.bids if r.player == "己")
         assert record.bid == 6 and record.status == "ok"
 
     def test_no_dividend_on_match_final_day_by_wins(self):
-        # 前 3 天甲出 1 连胜（拿 6 个胜场），第 4 天全员放开出价、总消耗 15 本应分红 15 // 7 = 2，
-        # 但拍出最后 2 个胜场的结束日不分红
+        # 前 3 天甲出 1 连胜（拿 6 个胜场），第 4 天全员放开出价、总消耗 14 本应分红 14 // 6 = 2，
+        # 但拍出最后 2 个胜场的结束日不分红（第 4 天上限已降为 5，乙出 5 为合法最高价）
         def strategy(obs):
             if obs.day <= 3:
                 return 1 if obs.my_name == "甲" else 0
-            return {"甲": 3, "乙": 6, "丙": 2, "丁": 2, "戊": 1, "己": 1}[obs.my_name]
+            return {"甲": 3, "乙": 5, "丙": 2, "丁": 2, "戊": 1, "己": 1}[obs.my_name]
 
         log = run_one_match({name: strategy for name in NAMES})
 
         assert len(log.days) == 4
         assert log.end_reason == "wins_exhausted"
-        assert log.days[0].dividend == 1 // 7  # 0
-        assert log.days[1].dividend == 1 // 7
-        assert log.days[2].dividend == 1 // 7
-        assert log.days[3].dividend == 0  # 结束日不分红（当天总消耗 15，本应分 2）
+        assert log.days[0].dividend == 1 // 6  # 0
+        assert log.days[1].dividend == 1 // 6
+        assert log.days[2].dividend == 1 // 6
+        assert log.days[3].dividend == 0  # 结束日不分红（当天总消耗 14，本应分 2）
         assert log.wins == {"甲": 6, "乙": 2, "丙": 0, "丁": 0, "戊": 0, "己": 0}
 
     def test_no_dividend_on_day5_even_if_wins_remain(self):
         # 前 4 天全员撞车流局，第 5 天分出胜负：仍不分红，且本局强制结束
+        # （第 5 天上限已降为 4，差异化出价从 4 开始）
         def strategy(obs):
             if obs.day < 5:
                 return 1  # 六人全撞车
-            return {"甲": 5, "乙": 4, "丙": 3, "丁": 2, "戊": 1, "己": 0}[obs.my_name]
+            return {"甲": 4, "乙": 3, "丙": 2, "丁": 1, "戊": 0, "己": 0}[obs.my_name]
 
         log = run_one_match({name: strategy for name in NAMES})
         day5 = log.days[4]
@@ -182,6 +185,46 @@ class TestBundleWinsPerDay:
         assert len(log.days) == 5
         assert log.wins["甲"] == 8
         assert log.end_reason == "wins_exhausted"
+
+
+class TestBidLimitSchedule:
+    """出价上限按天降档：第 1~2 天 6、第 3~4 天 5、第 5 天 4，流局日照样降档。"""
+
+    def test_limits_step_down_by_day(self):
+        assert [bid_limit(day) for day in range(1, 6)] == [6, 6, 5, 5, 4]
+
+    def test_over_daily_cap_is_illegal(self):
+        # 甲前两天出 0 攒钱，第 3 天上限已降为 5：出 6 即使余额充足也记非法 0
+        seen_caps = []
+
+        def strategy(obs):
+            if obs.my_name == "甲":
+                seen_caps.append((obs.day, obs.bid_cap))
+                return 6 if obs.day == 3 else 0
+            return {"乙": 1, "丙": 2, "丁": 3, "戊": 4, "己": 5}[obs.my_name]
+
+        log = run_one_match({name: strategy for name in NAMES})
+        assert seen_caps[:3] == [(1, 6), (2, 6), (3, 5)]
+        record = next(record for record in log.days[2].bids if record.player == "甲")
+        assert record.raw_bid == 6
+        assert record.bid == 0
+        assert record.status == "illegal"
+
+    def test_void_day_still_ticks_the_cap_down(self):
+        # 第 1~2 天全员撞车流局：胜场顺延但降档时钟照常走，第 3 天上限已是 5
+        observed_caps = []
+
+        def strategy(obs):
+            if obs.my_name == "甲":
+                observed_caps.append(obs.bid_cap)
+                return 1 if obs.day <= 2 else 5  # 前两天跟随全员撞车，第 3 天上限 5 下出 5 合法
+            return 1
+
+        log = run_one_match({name: strategy for name in NAMES})
+        assert observed_caps == [6, 6, 5, 5, 4]
+        assert log.days[0].is_void and log.days[1].is_void
+        day3_record = next(record for record in log.days[2].bids if record.player == "甲")
+        assert day3_record.bid == 5 and day3_record.status == "ok"
 
 
 class TestMatchEnd:

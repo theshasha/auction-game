@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import Counter
 
 from models import (
-    BID_LIMIT,
     COLLISION_PENALTY,
     DIVIDEND_DIVISOR,
     INITIAL_COINS,
@@ -17,15 +16,16 @@ from models import (
     MatchLog,
     Observation,
     StandingsEntry,
+    bid_limit,
 )
 from players import Player
 
 
-def validate_bid(raw_bid: object, coins: int) -> tuple[int, str]:
-    """校验出价。非法出价（超余额、超上限、非整数、负数）一律记 0。"""
+def validate_bid(raw_bid: object, coins: int, bid_cap: int) -> tuple[int, str]:
+    """校验出价。非法出价（超余额、超当日上限、非整数、负数）一律记 0。"""
     if type(raw_bid) is not int:  # bool 是 int 子类，同样视为非法
         return 0, "illegal"
-    if raw_bid < 0 or raw_bid > BID_LIMIT or raw_bid > coins:
+    if raw_bid < 0 or raw_bid > bid_cap or raw_bid > coins:
         return 0, "illegal"
     return raw_bid, "ok"
 
@@ -119,6 +119,7 @@ def run_match(
 
         # 同一天内 6 人的排名快照完全相同，循环外算一次
         standings_snapshot = compute_standings(wins_history, match_wins, match_penalties)
+        bid_cap = bid_limit(day)
         observations = [
             (
                 player,
@@ -128,6 +129,7 @@ def run_match(
                     my_match_wins=match_wins[player.name],
                     my_total_wins=ranking_wins(player.name),
                     day=day,
+                    bid_cap=bid_cap,
                     wins_remaining=wins_remaining,
                     max_days=MAX_DAYS,
                     today_history=[day_result.public_view() for day_result in log.days],
@@ -145,7 +147,7 @@ def run_match(
 
         bids: list[BidRecord] = []
         for (player, _), raw_bid in zip(observations, raw_bids):
-            bid, status = validate_bid(raw_bid, coins[player.name])
+            bid, status = validate_bid(raw_bid, coins[player.name], bid_cap)
             bids.append(BidRecord(player=player.name, raw_bid=raw_bid, bid=bid, status=status))
 
         price_counts = Counter(record.bid for record in bids)

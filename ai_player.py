@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import prompts
-from models import Observation
+from models import Observation, bid_limit
 from players import Player
 
 JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
@@ -171,7 +171,9 @@ class AIPlayer(Player):
         bid = self.parse_bid(content)
         if bid is PARSE_FAILED:
             # 模型输出格式问题（非基础设施故障）：按规则重试 1 次，仍失败记 0
-            retry_content = self._guarded_call(prompts.retry_bid_request(), "bid_retry", context)
+            retry_content = self._guarded_call(
+                prompts.retry_bid_request(obs.bid_cap), "bid_retry", context
+            )
             bid = self.parse_bid(retry_content)
             if bid is PARSE_FAILED:
                 self._write_log({"phase": "bid", "parse_failed": True, "result": 0})
@@ -199,7 +201,7 @@ class AIPlayer(Player):
         bid = self.parse_bid(content)
         if bid is PARSE_FAILED:
             retry_content = self._guarded_call(
-                prompts.retry_bid_request(), f"{phase}_retry", context
+                prompts.retry_bid_request(bid_limit(1)), f"{phase}_retry", context
             )
             bid = self.parse_bid(retry_content)
             if bid is PARSE_FAILED:
