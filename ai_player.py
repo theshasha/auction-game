@@ -11,8 +11,6 @@ import prompts
 from models import Observation
 from players import Player
 
-SPEECH_LIMIT = 500
-
 JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
 
 PARSE_FAILED = object()  # 解析失败的哨兵值，区别于任何合法出价
@@ -79,7 +77,7 @@ class AIPlayer(Player):
 
     @staticmethod
     def _render_markdown_entry(entry: dict) -> str:
-        """按 jsonl 条目的四种形态渲染 markdown 片段。"""
+        """按 jsonl 条目的三种形态渲染 markdown 片段。"""
         if "user" in entry and "content" in entry:
             return (
                 f"## {entry['phase']}\n\n"
@@ -87,13 +85,13 @@ class AIPlayer(Player):
                 f"**【assistant】**\n\n{entry['content']}\n\n---\n\n"
             )
         if "error" in entry:
-            return f"> 调用失败（{entry['phase']}，第 {entry['attempt']} 次）：{entry['error']}\n\n"
+            context = entry.get("context")
+            where = f"{entry['phase']}，{context}" if context else entry["phase"]
+            return f"> 调用失败（{where}，第 {entry['attempt']} 次）：{entry['error']}\n\n"
         if "result" in entry:
             if entry.get("parse_failed"):
                 return "> 出价解析失败，按规则记 0\n\n---\n\n"
             return f"> 出价结果：{entry['result']}\n\n---\n\n"
-        if entry.get("truncated"):
-            return f"> 发言截断：原文 {entry['original_length']} 字，已截断至 {SPEECH_LIMIT} 字\n\n"
         return ""
 
     def _call(self, user_text: str, phase: str) -> str:
@@ -104,9 +102,10 @@ class AIPlayer(Player):
         self._write_log({"phase": phase, "user": user_text, "content": content})
         return content
 
-    def _guarded_call(self, user_text: str, phase: str) -> str:
+    def _guarded_call(self, user_text: str, phase: str, context: str = "") -> str:
         """调用 LLM，失败立即重试 1 次（重试前回滚未应答的 user 消息）。
 
+        context: 轮次描述（如「第3局第2天」），仅用于失败日志定位。
         连续两次失败：抛 CallFailedError，对话线保持在本轮 checkpoint 状态，
         由轮级别收集失败名单后仅重跑本玩家。
         """
@@ -118,9 +117,10 @@ class AIPlayer(Player):
             except Exception as exc:
                 last_error = exc
                 self.rollback(mark)  # 丢弃未应答的 user 消息，保持对话线完整
-                self._write_log(
-                    {"phase": phase, "attempt": attempt, "error": f"{type(exc).__name__}: {exc}"}
-                )
+                entry = {"phase": phase, "attempt": attempt, "error": f"{type(exc).__name__}: {exc}"}
+                if context:
+                    entry["context"] = context
+                self._write_log(entry)
         raise CallFailedError(
             f"{self.name} 连续两次调用失败（{phase}）：{type(last_error).__name__}: {last_error}"
         )
@@ -142,12 +142,13 @@ class AIPlayer(Player):
         return data["bid"]
 
     def decide_bid(self, obs: Observation) -> int:
-        content = self._guarded_call(prompts.bid_request(obs), "bid")
+        context = f"第{len(obs.past_match_logs) + 1}局第{obs.day}天"
+        content = self._guarded_call(prompts.bid_request(obs), "bid", context)
 
         bid = self.parse_bid(content)
         if bid is PARSE_FAILED:
             # 模型输出格式问题（非基础设施故障）：按规则重试 1 次，仍失败记 0
-            retry_content = self._guarded_call(prompts.retry_bid_request(), "bid_retry")
+            retry_content = self._guarded_call(prompts.retry_bid_request(), "bid_retry", context)
             bid = self.parse_bid(retry_content)
             if bid is PARSE_FAILED:
                 self._write_log({"phase": "bid", "parse_failed": True, "result": 0})
@@ -159,20 +160,15 @@ class AIPlayer(Player):
 
     # ---- 发言与规划 ----
 
-    def give_speech(self, user_text: str, phase: str) -> str:
-        """发言：正文截断 500 字，完整进对话线（公开信息）。双失败抛 CallFailedError。"""
-        content = self._guarded_call(user_text, phase)
-        speech = content.strip()
-        if len(speech) > SPEECH_LIMIT:
-            self._write_log({"phase": phase, "truncated": True, "original_length": len(speech)})
-            speech = speech[:SPEECH_LIMIT]
-        return speech
+    def give_speech(self, user_text: str, phase: str, context: str = "") -> str:
+        """发言：不做任何截断，全文进对话线并全文公开。双失败抛 CallFailedError。"""
+        return self._guarded_call(user_text, phase, context).strip()
 
-    def plan_strategy(self, user_text: str, phase: str) -> str:
+    def plan_strategy(self, user_text: str, phase: str, context: str = "") -> str:
         """策略规划：与发言同机制，只给自己看（不进任何公开渠道）。"""
-        return self.give_speech(user_text, phase)
+        return self.give_speech(user_text, phase, context)
 
-    def final_summary(self, user_text: str) -> str:
+    def final_summary(self, user_text: str, context: str = "") -> str:
         """终局观众总结：不回喂任何对话线（连自己的也不进），只落日志。"""
         last_error: Optional[Exception] = None
         for attempt in (1, 2):
@@ -181,13 +177,18 @@ class AIPlayer(Player):
                 break
             except Exception as exc:
                 last_error = exc
-                self._write_log(
-                    {"phase": "final_summary", "attempt": attempt, "error": f"{type(exc).__name__}: {exc}"}
-                )
+                entry = {
+                    "phase": "final_summary",
+                    "attempt": attempt,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                if context:
+                    entry["context"] = context
+                self._write_log(entry)
         else:
             raise CallFailedError(
                 f"{self.name} 连续两次调用失败（final_summary）："
                 f"{type(last_error).__name__}: {last_error}"
             )
         self._write_log({"phase": "final_summary", "user": user_text, "content": content})
-        return content.strip()[:SPEECH_LIMIT]
+        return content.strip()

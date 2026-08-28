@@ -17,11 +17,11 @@
 ├── llm_client.py   # 多 provider 分发：gemini/modal/hub(responses)/anthropic，chat_fn 返回 str
 ├── ai_player.py    # AIPlayer：只增不改的对话线、出价解析容错、发言/规划/总结
 ├── controller.py   # 轮级并发执行器 + 单步/连续/暂停状态机 + 按玩家 checkpoint 回滚
-├── prompts.py      # 规则全文 + 全部消息模板 + 局日志/排名渲染
+├── prompts.py      # 规则全文 + 全部消息模板 + 局日志/排名渲染（markdown 表格）
 ├── main.py         # 入口：默认 Bot 模式；--ai 为 AI 交互模式（每玩家独立模型）
 ├── check_llm.py    # 连通性冒烟测试：对 config.yaml 每个端点发最小请求（真实联网）
 ├── config.yaml     # 6 玩家名字+人设+各自 provider/model
-├── tests/          # test_engine.py / test_tournament.py / test_ai.py（54 项全绿）
+├── tests/          # test_engine.py / test_tournament.py / test_ai.py / test_prompts.py（73 项全绿）
 └── logs/           # 按场次分目录 <时间戳>_<bot|ai>/，latest 软链接指向最近一场（gitignore）
                     # 每场内含 match_<n>.json/.txt，AI 模式另有 ai_<名字>.jsonl、speeches.txt
                     # ai_<名字>.md 与 jsonl 同步双写（markdown 视图，VSCode 打开可实时分玩家阅读）
@@ -29,7 +29,7 @@
 
 ```bash
 cd /root/auction_game
-python3 -m pytest tests/ -q     # 54 项测试（全部零网络）
+python3 -m pytest tests/ -q     # 73 项测试（全部零网络）
 python3 main.py --seed 42       # Bot 模式（冠军 Delta，可复现）
 python3 check_llm.py            # 冒烟测试 6 个 LLM 端点（真实联网，--ai 前必跑）
 python3 main.py --ai            # AI 模式，需 .env 配齐 GEMINI_API_KEY / MODAL_* / HUB_API_KEY
@@ -77,15 +77,24 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
   回车仅重跑失败的 AI（可反复直到本轮齐全，q 仍可中止），连续模式同样转入等回车。
   注意：解析失败（输出格式问题）仍按规则重试 1 次后记 0，不触发轮级别重跑。
 10. **发言流程**：开局发言→互看他人发言→规划第一局；每局末同上→规划下局；终局感言→互看→
-  观众总结（不回喂任何对话线）。发言 500 字截断，缺失视为放弃。
+  观众总结（不回喂任何对话线）。**发言/规划/总结一律不截断**（全文进对话线也全文公开，
+  发言者与其他玩家看到的内容严格一致）；字数只是提示词软要求：开局/局末发言提示「不超过
+  300 字」，终局感言与观众总结不限字数，规则原文（RULES_TEXT）不提字数。缺失视为放弃。
+  加赛预告只在第 5 局或加赛局结束且第一名仍并列时出现在局末发言请求中。
 11. **分红除数恒为 6**（玩家永不退场）；一局结束当天不分红；流局日全额返还无分红。
 12. **日志按场次分目录**：每次运行创建 `logs/<YYYYmmdd_HHMMSS>_<bot|ai>/`，
   该场所有日志直接写入；`logs/latest` 相对软链接指向最近一场；同秒撞名加 `_2` 后缀；
   不放 run_meta.json；旧日志不做移动/删除，清理由用户决定。
 13. **AI 对话日志 md 双写**：`_write_log` 是唯一出口，每条 jsonl 同步渲染追加到
   同名 `ai_<名字>.md`（路径由 `log_path.with_suffix(".md")` 派生，调用方零改动），
-  供 VSCode 实时分玩家阅读。user/assistant 全文收录，调用失败/出价结果/截断以 `> 引用行` 收录；
+  供 VSCode 实时分玩家阅读。user/assistant 全文收录，调用失败/出价结果以 `> 引用行` 收录；
   正文不套代码围栏（assistant 自带 ```json 块原样渲染）；jsonl 仍是结构化源头，md 只是视图可随时重建。
+14. **局日志与排名用 markdown 表格渲染**（`render_match_log` / `render_standings`，
+  txt 日志与发给 AI 的消息共用同一渲染）：出价表以玩家为列（顺序取 config）、每行一天
+  （含结果/作废价位/分红）；排名表以局为列、随场次动态增长。
+15. **error 日志条目带轮次上下文**：`_guarded_call`/`final_summary` 收 `context` 参数
+  （出价传「第N局第M天」，发言/规划传环节标签，由 main.py 的 phase_label 透传），
+  error 条目写 `context` 字段，md 引用行渲染为「调用失败（phase，context，第 X 次）」。
 
 ## 已踩过的坑（重要）
 

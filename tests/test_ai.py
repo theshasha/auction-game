@@ -162,8 +162,16 @@ class TestMarkdownLog:
         assert player.decide_bid(make_obs()) == 4
 
         md_text = self.read_md(player)
-        assert "> 调用失败（bid，第 1 次）：RuntimeError: timeout" in md_text
+        assert "> 调用失败（bid，第1局第1天，第 1 次）：RuntimeError: timeout" in md_text
         assert "## bid" in md_text
+
+    def test_error_entry_without_context_keeps_plain_format(self, tmp_path):
+        # 不传 context 的发言失败：保持旧的纯 phase 格式
+        chat_fn = fake_chat_fn([RuntimeError("timeout"), "发言内容"])
+        player = make_player(chat_fn, tmp_path)
+        player.give_speech("请发言", "opening_speech")
+
+        assert "> 调用失败（opening_speech，第 1 次）：RuntimeError: timeout" in self.read_md(player)
 
     def test_parse_failed_entry_rendered(self, tmp_path):
         player = make_player(fake_chat_fn(["没有块", "还是没有"]), tmp_path)
@@ -171,22 +179,31 @@ class TestMarkdownLog:
 
         assert "> 出价解析失败，按规则记 0" in self.read_md(player)
 
-    def test_truncation_entry_rendered(self, tmp_path):
-        player = make_player(fake_chat_fn(["很" * 600]), tmp_path)
-        player.give_speech("请发言", "opening_speech")
-
-        md_text = self.read_md(player)
-        assert "> 发言截断：原文 600 字，已截断至 500 字" in md_text
-
 
 class TestSpeech:
-    def test_speech_truncated_at_500_chars(self, tmp_path):
+    def test_speech_never_truncated(self, tmp_path):
+        # 发言不再截断：全文返回、全文进对话线，且不产生 truncated 日志
         long_speech = "很" * 600
         player = make_player(fake_chat_fn([long_speech]), tmp_path)
         speech = player.give_speech("请发言", "opening_speech")
-        assert speech is not None and len(speech) == 500
+        assert speech == long_speech
+        assert player.messages[-1]["content"] == long_speech
         log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
-        assert any(entry.get("truncated") for entry in log_entries)
+        assert not any(entry.get("truncated") for entry in log_entries)
+
+    def test_bid_error_log_carries_round_context(self, tmp_path):
+        chat_fn = fake_chat_fn([RuntimeError("timeout"), bid_reply(4)])
+        player = make_player(chat_fn, tmp_path)
+        assert player.decide_bid(make_obs(day=2)) == 4
+
+        log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
+        error_entry = next(entry for entry in log_entries if "error" in entry)
+        assert error_entry["context"] == "第1局第2天"
+
+    def test_final_summary_never_truncated(self):
+        long_summary = "长" * 700
+        player = make_player(fake_chat_fn([long_summary]))
+        assert player.final_summary("请写观众总结") == long_summary
 
     def test_speech_double_error_raises(self):
         player = make_player(fake_chat_fn([RuntimeError("timeout"), RuntimeError("timeout")]))
