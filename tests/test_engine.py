@@ -109,16 +109,22 @@ class TestDividend:
         assert record.bid == 6 and record.status == "ok"
 
     def test_no_dividend_on_match_final_day_by_wins(self):
-        # 甲每天出 3、其余每天出 2（余额可持续），甲连赢 3 天、每天拿走打包的 2 个胜场，
-        # 6 个胜场拍完本局结束，第 3 天不分红
-        log = run_one_match(constant_strategies([3, 2, 2, 2, 2, 2]))
+        # 前 3 天甲出 1 连胜（拿 6 个胜场），第 4 天全员放开出价、总消耗 15 本应分红 1，
+        # 但拍出最后 2 个胜场的结束日不分红
+        def strategy(obs):
+            if obs.day <= 3:
+                return 1 if obs.my_name == "甲" else 0
+            return {"甲": 3, "乙": 6, "丙": 2, "丁": 2, "戊": 1, "己": 1}[obs.my_name]
 
-        assert len(log.days) == 3
+        log = run_one_match({name: strategy for name in NAMES})
+
+        assert len(log.days) == 4
         assert log.end_reason == "wins_exhausted"
-        assert log.days[0].dividend == 13 // 8  # 1
-        assert log.days[1].dividend == 13 // 8
-        assert log.days[2].dividend == 0  # 结束日不分红
-        assert log.wins == {"甲": 6, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
+        assert log.days[0].dividend == 1 // 8  # 0
+        assert log.days[1].dividend == 1 // 8
+        assert log.days[2].dividend == 1 // 8
+        assert log.days[3].dividend == 0  # 结束日不分红（当天总消耗 15，本应分 1）
+        assert log.wins == {"甲": 6, "乙": 2, "丙": 0, "丁": 0, "戊": 0, "己": 0}
 
     def test_no_dividend_on_day5_even_if_wins_remain(self):
         # 前 4 天全员撞车流局，第 5 天分出胜负：仍不分红，且本局强制结束
@@ -134,29 +140,31 @@ class TestDividend:
         assert day5.winner == "甲"
         assert day5.dividend == 0
         assert log.end_reason == "max_days"
-        assert log.wins["甲"] == 2  # 未拍出的 4 个胜场作废
+        assert log.wins["甲"] == 2  # 未拍出的 6 个胜场作废
 
 
 class TestBundleWinsPerDay:
     """每天打包拍卖 2 个胜场：赢家一次拿 2 个，流局则 2 个整体顺延。"""
 
     def test_winner_takes_two_wins_per_day(self):
-        # 甲连赢 3 天正好拿满 6 个；观察到的剩余量按 6→4→2 递减、本局胜场按 0→2→4 递增
+        # 甲连赢 4 天正好拿满 8 个；观察到的剩余量按 8→6→4→2 递减、本局胜场按 0→2→4→6 递增
+        # （出价按天递减以保证 4 天余额可持续：6-3+分红1 起算，其余人前两天出 1 后两天出 0）
         seen = []
 
         def strategy(obs):
             if obs.my_name == "甲":
                 seen.append((obs.day, obs.wins_remaining, obs.my_match_wins))
-            return 3 if obs.my_name == "甲" else 2
+                return {1: 3, 2: 2, 3: 1, 4: 1}[obs.day]
+            return 1 if obs.day <= 2 else 0
 
         log = run_one_match({name: strategy for name in NAMES})
-        assert seen == [(1, 6, 0), (2, 4, 2), (3, 2, 4)]
-        assert log.wins["甲"] == 6
-        assert len(log.days) == 3
+        assert seen == [(1, 8, 0), (2, 6, 2), (3, 4, 4), (4, 2, 6)]
+        assert log.wins["甲"] == 8
+        assert len(log.days) == 4
         assert log.end_reason == "wins_exhausted"
 
     def test_void_day_postpones_whole_bundle(self):
-        # 第 1 天全员撞车流局：2 个胜场整体顺延，第 2 天剩余量仍是 6
+        # 第 1 天全员撞车流局：2 个胜场整体顺延，第 2 天剩余量仍是 8
         remaining_seen = []
 
         def strategy(obs):
@@ -164,15 +172,15 @@ class TestBundleWinsPerDay:
                 remaining_seen.append((obs.day, obs.wins_remaining))
             if obs.day == 1:
                 return 1  # 六人全撞车
-            # 甲 2、乙 1、其余 0（低出价保证余额可持续 3 天；0 撞车低于获胜价不影响）
-            return {"甲": 2, "乙": 1, "丙": 0, "丁": 0, "戊": 0, "己": 0}[obs.my_name]
+            # 甲 1、其余 0（低出价保证余额可持续 4 天；0 撞车低于获胜价不影响）
+            return 1 if obs.my_name == "甲" else 0
 
         log = run_one_match({name: strategy for name in NAMES})
         assert log.days[0].is_void
-        assert remaining_seen[:2] == [(1, 6), (2, 6)]
-        # 第 2~4 天甲各拿 2 个，第 4 天拍完结束
-        assert len(log.days) == 4
-        assert log.wins["甲"] == 6
+        assert remaining_seen[:2] == [(1, 8), (2, 8)]
+        # 第 2~5 天甲各拿 2 个，第 5 天拍完结束
+        assert len(log.days) == 5
+        assert log.wins["甲"] == 8
         assert log.end_reason == "wins_exhausted"
 
 
@@ -232,11 +240,13 @@ class TestMatchLogPublication:
 
         assert data["match_index"] == 1
         assert data["is_playoff"] is False
-        assert len(data["days"]) == 3
+        assert len(data["days"]) == 4
         first_day = data["days"][0]
         assert {b["player"]: b["bid"] for b in first_day["bids"]} == dict(zip(NAMES, day_bids))
         assert first_day["winner"] == "甲"
-        assert data["wins"]["甲"] == 6
+        # 甲前 3 天出 2 连胜拿 6 胜场；第 4 天余额归零出 2 非法记 0，
+        # 其余人出 1 撞车，唯一的 0 再拿 2 个胜场，8 个拍完结束
+        assert data["wins"]["甲"] == 8
 
 
 class TestComputeStandings:
@@ -280,10 +290,11 @@ class TestCollisionPenalty:
         assert day1.penalties == [("甲", 1)]
         # 被罚后甲与乙持平（都是 0），第 2 天起不再触发罚没（自我刹车）
         assert log.days[1].penalties == []
-        # 罚没不影响本局拍卖流程：丙照常连赢 3 天（拿满 6 个胜场）结束
-        assert log.wins["丙"] == 6
+        # 罚没不影响本局拍卖流程：丙照常连赢 4 天（拿满 8 个胜场）结束
+        # （甲乙第 4 天余额归零、出 2 非法记 0，不影响丙每天唯一 1 获胜）
+        assert log.wins["丙"] == 8
         assert log.end_reason == "wins_exhausted"
-        assert len(log.days) == 3
+        assert len(log.days) == 4
 
     def test_tied_richest_offenders_all_pay(self):
         # 甲乙丙出 2 撞车：甲乙各 1 胜并列最多都被罚，丙 0 胜免罚
@@ -325,7 +336,13 @@ class TestCollisionPenalty:
         def strategy(obs):
             if obs.day == 1:
                 return {"甲": 3, "乙": 2, "丙": 1, "丁": 0, "戊": 0, "己": 0}[obs.my_name]
-            return {"甲": 2, "乙": 2, "丙": 1, "丁": 0, "戊": 0, "己": 0}[obs.my_name]
+            if obs.day == 2:
+                return {"甲": 2, "乙": 2, "丙": 1, "丁": 0, "戊": 0, "己": 0}[obs.my_name]
+            # 第 3 天起甲出 0 避开撞车（继续出 2 会与乙持续撞车连吃罚没直至归零，
+            # 污染本用例的断言），且甲后续不再获胜，便于直接断言累计胜场；
+            # 乙出 1（余额 2 正好够连赢两天），丙丁戊出 2 撞车压过 1，
+            # 第 5 天乙余额归零出 1 非法记 0，全场唯一 0 收走最后 2 个胜场
+            return {"甲": 0, "乙": 1, "丙": 2, "丁": 2, "戊": 2, "己": 0}[obs.my_name]
 
         log = run_one_match({name: strategy for name in NAMES})
         assert log.days[0].winner == "甲"
@@ -333,10 +350,13 @@ class TestCollisionPenalty:
         # 第 2 天：甲乙出 2 撞车，唯一 1 的丙获胜；甲总胜场含本局已获的 2 个（> 乙的 0）→ 被罚
         assert log.days[1].winner == "丙"
         assert log.days[1].penalties == [("甲", 1)]
-        # 第 3 天甲余额只剩 1、出 2 被判非法记 0：唯一 2 的乙拿走最后 2 个胜场，本局结束
+        # 第 3 天起甲出 0 脱身，唯一 1 的乙连赢 2 天（丙丁戊的 2 撞车抬价），
+        # 8 个胜场拍完本局结束；丙这两天因 2 撞车持续单独被罚
         assert log.days[2].winner == "乙"
-        assert log.days[2].penalties == []  # 撞车价位 0 低于获胜价，不罚
-        assert log.wins == {"甲": 2, "乙": 2, "丙": 2, "丁": 0, "戊": 0, "己": 0}
+        # 撞车价位 2 高于获胜价：丙总胜场 2（本局第 2 天赢的）> 丁戊的 0，单独被罚
+        assert log.days[2].penalties == [("丙", 1)]
+        assert len(log.days) == 4
+        assert log.wins == {"甲": 2, "乙": 4, "丙": 2, "丁": 0, "戊": 0, "己": 0}
         assert log.end_reason == "wins_exhausted"
 
 
@@ -354,7 +374,7 @@ class TestFoldMatchPenalties:
             wins_history[name].append(wins)
         fold_match_penalties(wins_history, log)
         assert wins_history["甲"] == [0, 0]  # 本局 0 胜不可扣，第 1 局 2 胜被扣空
-        assert wins_history["丙"] == [6]     # 丙连赢 3 天拿满 6 个胜场
+        assert wins_history["丙"] == [8]     # 丙连赢 4 天拿满 8 个胜场
 
     def test_skips_matches_without_wins(self):
         from models import BidRecord, DayResult, MatchLog

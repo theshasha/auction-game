@@ -20,7 +20,7 @@ from controller import (
     run_parallel_round,
 )
 from llm_client import MissingApiKeyError, make_chat_fn
-from models import MatchLog, StandingsEntry
+from models import WINS_PER_MATCH, MatchLog, StandingsEntry
 from players import RandomBot
 from tournament import run_tournament
 
@@ -30,7 +30,7 @@ LOG_DIR = ROOT_DIR / "logs"
 CONFIG_PATH = ROOT_DIR / "config.yaml"
 
 END_REASON_LABELS = {
-    "wins_exhausted": "6 个胜场全部拍出",
+    "wins_exhausted": f"{WINS_PER_MATCH} 个胜场全部拍出",
     "max_days": "达到第 5 天上限",
     "all_coins_zero": "全员余额归零",
 }

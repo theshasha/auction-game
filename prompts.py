@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from models import MatchLog, Observation, StandingsEntry
+from models import WINS_PER_MATCH, MatchLog, Observation, StandingsEntry
 
 RULES_TEXT = """\
 【唯一高价拍卖游戏规则】
 
 一、赛制
 1. 共 6 名 AI 玩家参赛，个人赛，各自独立争取排名。
-2. 比赛共 5 局正赛。每局拍卖 6 个胜场，每天打包拍卖 2 个，因流局可顺延，每局最多 5 天。
+2. 比赛共 5 局正赛。每局拍卖 8 个胜场，每天打包拍卖 2 个，因流局可顺延，每局最多 5 天。
    第 5 天结算后无论分出胜负还是流局，本局结束，未拍出的胜场作废。
 3. 每天开局时若全员金币余额均为 0，本局立即结束，未拍出的胜场作废。
 
@@ -81,7 +81,7 @@ def opening_plan_request(others_speeches: dict[str, str]) -> str:
         "以下是其他玩家的开局发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价"
-        "（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 6）。\n\n"
+        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}）。\n\n"
         + BID_FORMAT_HINT
     )
 
@@ -195,7 +195,7 @@ def next_match_plan_request(others_speeches: dict[str, str]) -> str:
         "以下是其他玩家的局末发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你下一局的初步策略，并直接给出下一局第 1 天的出价"
-        "（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 6）。\n\n"
+        f"（第 1 天信息恒定：你的金币 6，本局已获胜场 0，本局剩余待拍胜场 {WINS_PER_MATCH}）。\n\n"
         + BID_FORMAT_HINT
     )
 

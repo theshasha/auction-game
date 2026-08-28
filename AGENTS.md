@@ -54,7 +54,7 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 | deepseek-v4-pro | hub | OpenAI chat completions（hub.oaifree.com/v1，config 中 `protocol: chat`） |
 | gemini-3.1-pro-preview | hub | OpenAI responses API（hub 默认 protocol） |
 | gpt-5.6-sol | hub | 同上 |
-| MiniMax-M3 | hub | 同上 |
+| gemini-3.7-flash | hub | 同上 |
 | deepseek-v4-flash | hub | OpenAI chat completions（config 中 `protocol: chat`，同 deepseek-v4-pro） |
 
 注：anthropic / gemini 两个 provider 的代码仍保留在 llm_client.py（当前无玩家使用）。
@@ -102,14 +102,14 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
   金币与本局流程：engine 双账本（`match_wins` 驱动流程、`match_penalties` 落排名），
   局末 `fold_match_penalties` 从最近有净胜场的局折算进 wins_history（各局值不为负）。
   每日公布第 4 项为罚没情况；`RULES_TEXT` 三.6/三.7 与五.1 是规则源头。
-17. **规划与下一局第 1 天出价合并**：第 1 天信息恒定（6 金币、0 胜场、6 待拍），
+17. **规划与下一局第 1 天出价合并**：第 1 天信息恒定（6 金币、0 胜场、8 待拍），
   规划回复末尾必须带 `json {"bid": N}` 块，AIPlayer 解析后缓存为 `_pending_day1_bid`，
   引擎第 1 天的 `decide_bid` 直接消费缓存、不再发 LLM 调用（每个局边界省 6 次调用）。
   解析失败与出价同规则（重试 1 次后记 0）；规划开头先清缓存再写，防止暂停重跑残留；
   无缓存时第 1 天回退为正常独立出价调用。`will_continue` 判断含加赛上限余量
   （加赛局 playoff_count 已含本局需 +1，正赛局不需），封顶局末不再空跑规划轮。
-18. **打包拍卖**：每局 6 个胜场、每天打包拍 2 个——每天仍只有 1 个最高唯一价，赢家
-  一次拿走 2 个胜场，流局则 2 个整体顺延（6÷2 整除无零头）。常量 `WINS_PER_MATCH=6` /
+18. **打包拍卖**：每局 8 个胜场、每天打包拍 2 个——每天仍只有 1 个最高唯一价，赢家
+  一次拿走 2 个胜场，流局则 2 个整体顺延（8÷2 整除无零头）。常量 `WINS_PER_MATCH=8` /
   `WINS_PER_DAY=2` 在 models.py；analyze.py 的「单局多胜」口径相应为 ≥4 胜场（赢超过 1 天）。
 
 ## 已踩过的坑（重要）

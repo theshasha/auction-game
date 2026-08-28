@@ -116,13 +116,13 @@ class TestPlanBidMerge:
     def test_opening_plan_asks_for_day1_bid(self):
         text = prompts.opening_plan_request({"乙": "发言"})
         assert "第 1 局第 1 天的出价" in text
-        assert "你的金币 6，本局已获胜场 0，本局剩余待拍胜场 6" in text
+        assert "你的金币 6，本局已获胜场 0，本局剩余待拍胜场 8" in text
         assert '```json\n{"bid":' in text
 
     def test_next_match_plan_asks_for_day1_bid(self):
         text = prompts.next_match_plan_request({"乙": "发言"})
         assert "下一局第 1 天的出价" in text
-        assert "你的金币 6，本局已获胜场 0，本局剩余待拍胜场 6" in text
+        assert "你的金币 6，本局已获胜场 0，本局剩余待拍胜场 8" in text
         assert '```json\n{"bid":' in text
 
 

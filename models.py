@@ -8,8 +8,8 @@ from typing import Any, Optional
 BID_LIMIT = 6          # 每日出价上限，固定为 6，与余额无关
 INITIAL_COINS = 6      # 每局初始金币
 MAX_DAYS = 5           # 每局最多天数（含顺延）
-WINS_PER_MATCH = 6     # 每局拍卖的胜场数
-WINS_PER_DAY = 2       # 每天打包拍卖的胜场数（6 ÷ 2 整除，不产生零头）
+WINS_PER_MATCH = 8     # 每局拍卖的胜场数
+WINS_PER_DAY = 2       # 每天打包拍卖的胜场数（8 ÷ 2 整除，不产生零头）
 DIVIDEND_DIVISOR = 8   # 分红除数，固定为 8（大于玩家数，低价苟活无分红）
 COLLISION_PENALTY = 1  # 高位撞车每次罚没的累计胜场数
 
