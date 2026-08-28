@@ -62,6 +62,24 @@ class TestBidParsing:
         player = make_player(fake_chat_fn([content]))
         assert player.decide_bid(make_obs()) == 4
 
+    def test_bare_json_without_fence_parsed(self):
+        # 提示词示例无围栏，模型直接输出裸 JSON 时必须能解析（实证：deepseek-v4-pro 双失败记 0）
+        player = make_player(fake_chat_fn(["我的分析：……\n{\"bid\": 2}"]))
+        assert player.decide_bid(make_obs()) == 2
+
+    def test_bare_json_uses_last_valid_object(self):
+        content = "先举个例子 {\"bid\": 1}，但改主意了\n{\"bid\": 5}"
+        player = make_player(fake_chat_fn([content]))
+        assert player.decide_bid(make_obs()) == 5
+
+    def test_bare_json_last_object_without_bid_key_fails(self):
+        # 最后一个合法 JSON 无 bid 键：不再向前找，按解析失败处理（重试 1 次后成功）
+        script = ["正文引用了 {\"note\": \"x\"} 但没出价", bid_reply(3)]
+        chat_fn = fake_chat_fn(script)
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_obs()) == 3
+        assert len(chat_fn.calls) == 2
+
     def test_missing_json_block_retries_once(self):
         script = [
             "我忘了给 JSON",

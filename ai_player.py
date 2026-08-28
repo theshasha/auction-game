@@ -12,6 +12,8 @@ from models import Observation
 from players import Player
 
 JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
+# 兜底用：提示词示例无围栏，模型常直接输出裸 JSON；出价 JSON 是扁平对象，不匹配嵌套花括号
+BARE_JSON_PATTERN = re.compile(r"\{[^{}]*\}")
 
 PARSE_FAILED = object()  # 解析失败的哨兵值，区别于任何合法出价
 
@@ -131,12 +133,25 @@ class AIPlayer(Player):
 
     @staticmethod
     def parse_bid(content: str):
-        """取正文中最后一个 ```json 块并解析 bid 字段；失败返回 PARSE_FAILED。"""
+        """解析 bid 字段：优先取最后一个 ```json 围栏块；无围栏块时兜底取
+        全文最后一个合法裸 JSON 对象（提示词示例即无围栏），仍无则返回 PARSE_FAILED。"""
         blocks = JSON_BLOCK_PATTERN.findall(content)
-        if not blocks:
-            return PARSE_FAILED
+        if blocks:
+            return AIPlayer._bid_from_json_text(blocks[-1])
+        for candidate in reversed(BARE_JSON_PATTERN.findall(content)):
+            try:
+                data = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue  # 不是合法 JSON，继续向前找
+            if isinstance(data, dict) and "bid" in data:
+                return data["bid"]
+            return PARSE_FAILED  # 最后一个合法 JSON 对象无 bid 键，不再向前找
+        return PARSE_FAILED
+
+    @staticmethod
+    def _bid_from_json_text(json_text: str):
         try:
-            data = json.loads(blocks[-1])
+            data = json.loads(json_text)
         except json.JSONDecodeError:
             return PARSE_FAILED
         if not isinstance(data, dict) or "bid" not in data:

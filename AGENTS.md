@@ -26,7 +26,7 @@
 ├── config.yaml     # 6 玩家名字+人设+各自 provider/model + 全局 llm.timeout_seconds
 ├── requirements.txt
 ├── tests/          # test_engine.py / test_tournament.py / test_ai.py / test_prompts.py /
-│                   # test_llm_client.py（112 项全绿，全部零网络）
+│                   # test_llm_client.py（119 项全绿，全部零网络）
 └── logs/           # 按场次分目录 <时间戳>_<bot|ai>/，latest 软链接指向最近一场（gitignore）
                     # 每场内含 match_<n>.json/.txt，AI 模式另有 ai_<名字>.jsonl、speeches.txt
                     # ai_<名字>.md 与 jsonl 同步双写（markdown 视图，VSCode 打开可实时分玩家阅读）
@@ -34,7 +34,7 @@
 
 ```bash
 cd /root/auction_game
-python3 -m pytest tests/ -q     # 112 项测试（全部零网络）
+python3 -m pytest tests/ -q     # 119 项测试（全部零网络）
 python3 main.py --seed 42       # Bot 模式（可复现；冠军随规则变化）
 python3 check_llm.py            # 冒烟测试 6 个 LLM 端点（真实联网，--ai 前必跑）
 python3 main.py --ai            # AI 模式，需 .env 配齐 MODAL_* / HUB_API_KEY（按 config 实际用到的 provider）
@@ -63,7 +63,10 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 
 1. **玩家类名是 AIPlayer**，与厂商无关，模型/端点走配置；新增端点前先跑 `check_llm.py`。
 2. **每局结束公开**：该局完整出价日志 + 当前累计排名 + 每人各局胜场明细。
-3. **AI 输出格式**：自由文本推理 + 末尾 `json {"bid": N}` 块；解析取最后一个 JSON 块。
+3. **AI 输出格式**：自由文本推理 + 末尾裸 JSON `{"bid": N}`（提示词示例无围栏——
+  实证围栏示例会让模型误以为必须包代码块，裸输出被误判解析失败双次记 0）；
+  解析优先取最后一个 ```json 围栏块，无围栏块时兜底取全文最后一个合法裸 JSON
+  对象再查 bid 键（无 bid 键即失败，不再向前找）。
 4. **对话线只增不改**（保前缀缓存）：system（规则+人设+名单）初始化后永不改，
   所有环节只 append；唯一允许的截断是暂停回滚到本轮 checkpoint。
 5. **每天只发一条 user 消息**：「当前是第N局第M天。」非首日随后接「昨日公布」（获胜者带
@@ -108,7 +111,7 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
   「检查范围 / 比较口径 / 罚没」三步算法书写，并显式把比较口径锚定到每日状态行的
   「你的累计总胜场」，五.1 同步强调作废价位只统计高于获胜价的撞车。
 17. **规划与下一局第 1 天出价合并**：第 1 天信息恒定（6 金币、0 胜场、8 待拍），
-  规划回复末尾必须带 `json {"bid": N}` 块，AIPlayer 解析后缓存为 `_pending_day1_bid`，
+  规划回复末尾必须带裸 JSON `{"bid": N}`，AIPlayer 解析后缓存为 `_pending_day1_bid`，
   引擎第 1 天的 `decide_bid` 直接消费缓存、不再发 LLM 调用（每个局边界省 6 次调用）。
   解析失败与出价同规则（重试 1 次后记 0）；规划开头先清缓存再写，防止暂停重跑残留；
   无缓存时第 1 天回退为正常独立出价调用。`will_continue` 判断含加赛上限余量

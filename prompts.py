@@ -64,9 +64,7 @@ RULES_TEXT = """\
 
 BID_FORMAT_HINT = """\
 请先分析当前局势，然后在回复末尾用如下 JSON 给出今日出价：
-```json
-{"bid": <0到6的整数，不得超过你的余额>}
-```"""
+{"bid": <0到6的整数，不得超过你的余额>}"""
 
 
 def build_system_prompt(name: str, persona: str, all_names: list[str]) -> str:
