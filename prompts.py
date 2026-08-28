@@ -28,7 +28,7 @@ RULES_TEXT = """\
 
 四、每日分红
 1. 每个正常分出胜负的当天结算后，当天全员出价总和平均分给所有在场玩家：
-   总消耗除以 6 向下取整为每人分红，零头由系统没收。
+   总消耗除以 8 向下取整为每人分红，零头由系统没收。
 2. 若当天结算后本局结束（拍出第 3 个胜场或第 5 天结算），则不再分红。
 
 五、信息公布
@@ -80,19 +80,28 @@ def opening_plan_request(others_speeches: dict[str, str]) -> str:
 
 def bid_request(obs: Observation) -> str:
     match_index = len(obs.past_match_logs) + 1
-    lines = [
-        f"第 {match_index} 局第 {obs.day} 天。你的金币余额：{obs.my_coins}；"
-        f"本局已获胜场：{obs.my_match_wins}；本局剩余待拍胜场：{obs.wins_remaining}。"
-    ]
-    if obs.today_history:
-        yesterday = obs.today_history[-1]
-        lines.append(
-            f"昨日公布：{yesterday['winner']}，作废价位 {yesterday['voided_price_count']} 个，"
+    status_line = (
+        f"你的金币余额：{obs.my_coins}；本局已获胜场：{obs.my_match_wins}；"
+        f"本局剩余待拍胜场：{obs.wins_remaining}。"
+    )
+    if not obs.today_history:
+        # 首日：单行不换句
+        return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{BID_FORMAT_HINT}"
+
+    yesterday = obs.today_history[-1]
+    if yesterday["winner"] == "流局":
+        announcement = f"昨日公布：流局（无分红），作废价位 {yesterday['voided_price_count']} 个。"
+    else:
+        announcement = (
+            f"昨日公布：{yesterday['winner']} 获胜，作废价位 {yesterday['voided_price_count']} 个，"
             f"分红 {yesterday['dividend']} 金币。"
         )
-    lines.append("")
-    lines.append(BID_FORMAT_HINT)
-    return "\n".join(lines)
+    # 余额已含昨日分红，放在公布之后并明示，避免模型误再加一次分红
+    status_line = status_line.replace(
+        f"你的金币余额：{obs.my_coins}；", f"你的金币余额：{obs.my_coins}（已含昨日分红）；"
+    )
+    lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement, status_line]
+    return "\n".join(lines) + "\n\n" + BID_FORMAT_HINT
 
 
 def retry_bid_request() -> str:

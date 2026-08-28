@@ -91,12 +91,12 @@ class TestVoidDay:
 
 class TestDividend:
     def test_dividend_is_floor_of_total_over_players(self):
-        # 第 1 天总消耗 15，分红 15 // 6 = 2
+        # 第 1 天总消耗 15，分红 15 // 8 = 1
         log = run_one_match(constant_strategies([5, 4, 3, 2, 1, 0]))
-        assert log.days[0].dividend == 2
+        assert log.days[0].dividend == 1
 
     def test_dividend_added_to_coins(self):
-        # 第 1 天总消耗 12，分红 2。"己"出 0 获胜不扣钱，余额变为 6 + 2 = 8
+        # 第 1 天总消耗 12，分红 1。"己"出 0 获胜不扣钱，余额变为 6 + 1 = 7
         def strategy(obs):
             if obs.day == 1:
                 return {"甲": 3, "乙": 3, "丙": 2, "丁": 2, "戊": 2, "己": 0}[obs.my_name]
@@ -104,18 +104,18 @@ class TestDividend:
 
         log = run_one_match({name: strategy for name in NAMES})
         day2 = log.days[1]
-        assert log.days[0].dividend == 2
+        assert log.days[0].dividend == 1
         record = next(r for r in day2.bids if r.player == "己")
         assert record.bid == 6 and record.status == "ok"
 
     def test_no_dividend_on_match_final_day_by_wins(self):
-        # 甲每天出 2、其余每天出 1（余额可持续），甲连赢 3 天本局结束，第 3 天不分红
-        log = run_one_match(constant_strategies([2, 1, 1, 1, 1, 1]))
+        # 甲每天出 3、其余每天出 2（余额可持续），甲连赢 3 天本局结束，第 3 天不分红
+        log = run_one_match(constant_strategies([3, 2, 2, 2, 2, 2]))
 
         assert len(log.days) == 3
         assert log.end_reason == "wins_exhausted"
-        assert log.days[0].dividend == 7 // 6
-        assert log.days[1].dividend == 7 // 6
+        assert log.days[0].dividend == 13 // 8  # 1
+        assert log.days[1].dividend == 13 // 8
         assert log.days[2].dividend == 0  # 结束日不分红
         assert log.wins == {"甲": 3, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
 

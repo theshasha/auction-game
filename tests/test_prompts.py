@@ -1,7 +1,7 @@
 """提示词文案与表格渲染的测试：字数软要求、加赛预告、发言拼接空行、表格格式。"""
 
 import prompts
-from models import BidRecord, DayResult, MatchLog, StandingsEntry
+from models import BidRecord, DayResult, MatchLog, Observation, StandingsEntry
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 
@@ -108,6 +108,53 @@ class TestSpeechJoinBlankLines:
     def test_final_summary_separates_speeches_with_blank_line(self):
         text = prompts.final_summary_request({"甲": "感言A", "乙": "感言B"})
         assert "【甲】感言A\n\n【乙】感言B" in text
+
+
+class TestBidRequest:
+    """每日出价开场：首句「当前是」、昨日公布带「获胜」、余额行在公布之后且标注已含分红。"""
+
+    @staticmethod
+    def make_obs(day=1, today_history=None):
+        return Observation(
+            my_name="甲",
+            my_coins=7,
+            my_match_wins=0,
+            my_total_wins=0,
+            day=day,
+            wins_remaining=2,
+            max_days=5,
+            today_history=today_history or [],
+            standings=[],
+            past_match_logs=[{"match_index": 1}],  # 使当前为第 2 局
+        )
+
+    def test_first_day_single_line(self):
+        text = prompts.bid_request(self.make_obs(day=1))
+        first_line = text.splitlines()[0]
+        assert first_line.startswith("当前是第 2 局第 1 天。")
+        assert "你的金币余额：7；" in first_line  # 首日不换行分句
+        assert "昨日公布" not in text
+        assert "已含昨日分红" not in text
+
+    def test_later_day_three_lines_with_dividend_note(self):
+        history = [{"day": 1, "winner": "乙", "voided_price_count": 0, "dividend": 4}]
+        text = prompts.bid_request(self.make_obs(day=2, today_history=history))
+        lines = text.splitlines()
+
+        assert lines[0] == "当前是第 2 局第 2 天。"
+        assert lines[1] == "昨日公布：乙 获胜，作废价位 0 个，分红 4 金币。"
+        assert lines[2].startswith("你的金币余额：7（已含昨日分红）；")
+        # 余额行必须在昨日公布之后
+        assert text.index("昨日公布") < text.index("你的金币余额")
+
+    def test_void_day_announcement_has_no_winner_wording(self):
+        history = [{"day": 1, "winner": "流局", "voided_price_count": 2, "dividend": 0}]
+        text = prompts.bid_request(self.make_obs(day=2, today_history=history))
+        lines = text.splitlines()
+
+        assert lines[1] == "昨日公布：流局（无分红），作废价位 2 个。"
+        assert "获胜" not in lines[1]
+        assert "已含昨日分红" in lines[2]
 
 
 class TestRenderMatchLog:

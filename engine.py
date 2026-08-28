@@ -6,6 +6,7 @@ from collections import Counter
 
 from models import (
     BID_LIMIT,
+    DIVIDEND_DIVISOR,
     INITIAL_COINS,
     MAX_DAYS,
     WINS_PER_MATCH,
@@ -145,7 +146,7 @@ def run_match(
 
             # 当天结算后本局结束则不再分红（第 3 个胜场拍出，或第 5 天结算）
             match_ends_today = wins_remaining == 0 or day == MAX_DAYS
-            dividend = 0 if match_ends_today else sum(record.bid for record in bids) // len(players)
+            dividend = 0 if match_ends_today else sum(record.bid for record in bids) // DIVIDEND_DIVISOR
             if dividend:
                 for player in players:
                     coins[player.name] += dividend

@@ -9,6 +9,7 @@ BID_LIMIT = 6          # 每日出价上限，固定为 6，与余额无关
 INITIAL_COINS = 6      # 每局初始金币
 MAX_DAYS = 5           # 每局最多天数（含顺延）
 WINS_PER_MATCH = 3     # 每局拍卖的胜场数
+DIVIDEND_DIVISOR = 8   # 分红除数，固定为 8（大于玩家数，低价苟活无分红）
 
 
 @dataclass
