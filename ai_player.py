@@ -18,13 +18,17 @@ JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
 PARSE_FAILED = object()  # 解析失败的哨兵值，区别于任何合法出价
 
 
+class CallFailedError(Exception):
+    """连续两次调用失败（网络/余额等基础设施故障）：由轮级别收集后仅重跑本玩家。"""
+
+
 class AIPlayer(Player):
     """LLM 驱动的玩家。
 
     前缀保护：messages 初始化后只 append，唯一的截断是 rollback 到 checkpoint
-    （暂停回滚，只动尾部）。chat_fn 可注入，测试零网络。
-    on_double_error: 连续两次调用失败时的钩子（预期抛出暂停异常，见 main.py）；
-    为 None 时按规则兜底：出价记 0、发言视为放弃。
+    （暂停/失败回滚，只动尾部）。chat_fn 可注入，测试零网络。
+    连续两次调用失败抛 CallFailedError，由 run_parallel_round 收集失败名单、
+    仅重跑失败的玩家；对话线在抛出前已回滚到本轮 checkpoint 状态。
     """
 
     def __init__(
@@ -34,7 +38,6 @@ class AIPlayer(Player):
         all_names: list[str],
         chat_fn: Callable[[list[dict]], str],
         log_path: Optional[Path] = None,
-        on_double_error: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(name)
         self.messages: list[dict] = [
@@ -42,7 +45,6 @@ class AIPlayer(Player):
         ]
         self.chat_fn = chat_fn
         self.log_path = log_path
-        self.on_double_error = on_double_error
 
     # ---- 对话线维护 ----
 
@@ -69,11 +71,11 @@ class AIPlayer(Player):
         self._write_log({"phase": phase, "user": user_text, "content": content})
         return content
 
-    def _guarded_call(self, user_text: str, phase: str) -> Optional[str]:
+    def _guarded_call(self, user_text: str, phase: str) -> str:
         """调用 LLM，失败立即重试 1 次（重试前回滚未应答的 user 消息）。
 
-        连续两次失败：配置了 on_double_error 钩子则交给钩子（预期抛暂停异常，
-        本轮回滚后由用户确认重跑）；未配置则返回 None，由调用方按规则兜底。
+        连续两次失败：抛 CallFailedError，对话线保持在本轮 checkpoint 状态，
+        由轮级别收集失败名单后仅重跑本玩家。
         """
         last_error: Optional[Exception] = None
         for attempt in (1, 2):
@@ -86,10 +88,9 @@ class AIPlayer(Player):
                 self._write_log(
                     {"phase": phase, "attempt": attempt, "error": f"{type(exc).__name__}: {exc}"}
                 )
-        detail = f"{self.name} 连续两次调用失败（{phase}）：{type(last_error).__name__}: {last_error}"
-        if self.on_double_error is not None:
-            self.on_double_error(detail)  # 预期抛出暂停异常，不会返回
-        return None
+        raise CallFailedError(
+            f"{self.name} 连续两次调用失败（{phase}）：{type(last_error).__name__}: {last_error}"
+        )
 
     # ---- 出价 ----
 
@@ -109,17 +110,11 @@ class AIPlayer(Player):
 
     def decide_bid(self, obs: Observation) -> int:
         content = self._guarded_call(prompts.bid_request(obs), "bid")
-        if content is None:  # 无钩子时双失败的兜底：按规则视为出价 0
-            self._write_log({"phase": "bid", "result": 0, "fallback": "double_error"})
-            return 0
 
         bid = self.parse_bid(content)
         if bid is PARSE_FAILED:
             # 模型输出格式问题（非基础设施故障）：按规则重试 1 次，仍失败记 0
             retry_content = self._guarded_call(prompts.retry_bid_request(), "bid_retry")
-            if retry_content is None:
-                self._write_log({"phase": "bid", "result": 0, "fallback": "double_error"})
-                return 0
             bid = self.parse_bid(retry_content)
             if bid is PARSE_FAILED:
                 self._write_log({"phase": "bid", "parse_failed": True, "result": 0})
@@ -131,24 +126,20 @@ class AIPlayer(Player):
 
     # ---- 发言与规划 ----
 
-    def give_speech(self, user_text: str, phase: str) -> Optional[str]:
-        """发言：正文截断 500 字，完整进对话线（公开信息）。双失败兜底视为放弃。"""
+    def give_speech(self, user_text: str, phase: str) -> str:
+        """发言：正文截断 500 字，完整进对话线（公开信息）。双失败抛 CallFailedError。"""
         content = self._guarded_call(user_text, phase)
-        if content is None:
-            self._write_log({"phase": phase, "absent": True})
-            return None
         speech = content.strip()
-        truncated = len(speech) > SPEECH_LIMIT
-        if truncated:
+        if len(speech) > SPEECH_LIMIT:
             self._write_log({"phase": phase, "truncated": True, "original_length": len(speech)})
             speech = speech[:SPEECH_LIMIT]
         return speech
 
-    def plan_strategy(self, user_text: str, phase: str) -> Optional[str]:
+    def plan_strategy(self, user_text: str, phase: str) -> str:
         """策略规划：与发言同机制，只给自己看（不进任何公开渠道）。"""
         return self.give_speech(user_text, phase)
 
-    def final_summary(self, user_text: str) -> Optional[str]:
+    def final_summary(self, user_text: str) -> str:
         """终局观众总结：不回喂任何对话线（连自己的也不进），只落日志。"""
         last_error: Optional[Exception] = None
         for attempt in (1, 2):
@@ -161,10 +152,9 @@ class AIPlayer(Player):
                     {"phase": "final_summary", "attempt": attempt, "error": f"{type(exc).__name__}: {exc}"}
                 )
         else:
-            detail = f"{self.name} 连续两次调用失败（final_summary）：{type(last_error).__name__}: {last_error}"
-            if self.on_double_error is not None:
-                self.on_double_error(detail)  # 预期抛出暂停异常
-            self._write_log({"phase": "final_summary", "absent": True})
-            return None
+            raise CallFailedError(
+                f"{self.name} 连续两次调用失败（final_summary）："
+                f"{type(last_error).__name__}: {last_error}"
+            )
         self._write_log({"phase": "final_summary", "user": user_text, "content": content})
         return content.strip()[:SPEECH_LIMIT]

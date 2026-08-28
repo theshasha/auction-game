@@ -63,17 +63,14 @@ def run_match(
     wins_history: 每名玩家在已结束各局的胜场分布，用于构造 Observation 中的排名。
     past_logs: 已结束各局的完整日志，局末公开后玩家可见。
     bid_collector: 可选，签名为 list[(player, obs)] -> list[原始出价]（顺序对齐），
-    AI 模式注入并行收集；默认逐个顺序调用 decide_bid。收集被暂停打断时抛出
-    controller.RoundAborted，引擎原地重跑同一天（此时尚未结算，状态未被污染）。
+    AI 模式注入并行收集；默认逐个顺序调用 decide_bid。暂停/失败的重跑由
+    run_parallel_round 内部处理，对本函数透明。
     """
     coins = {player.name: INITIAL_COINS for player in players}
     match_wins = {player.name: 0 for player in players}
     wins_remaining = WINS_PER_MATCH
     log = MatchLog(match_index=match_index, is_playoff=is_playoff)
     past_log_dicts = [past_log.to_dict() for past_log in past_logs]
-
-    # 延迟导入：Bot 模式不经过 controller 依赖链（ai_player/llm_client）
-    from controller import RoundAborted
 
     day = 1
     while wins_remaining > 0 and day <= MAX_DAYS:
@@ -100,15 +97,10 @@ def run_match(
             for player in players
         ]
 
-        while True:
-            try:
-                if bid_collector is None:
-                    raw_bids = [player.decide_bid(obs) for player, obs in observations]
-                else:
-                    raw_bids = bid_collector(observations)
-                break
-            except RoundAborted:
-                continue  # 当天尚未结算，原地重跑
+        if bid_collector is None:
+            raw_bids = [player.decide_bid(obs) for player, obs in observations]
+        else:
+            raw_bids = bid_collector(observations)
 
         bids: list[BidRecord] = []
         for (player, _), raw_bid in zip(observations, raw_bids):

@@ -15,7 +15,6 @@ import prompts
 from ai_player import AIPlayer
 from controller import (
     Controller,
-    RoundAborted,
     RoundTask,
     TournamentAborted,
     run_parallel_round,
@@ -114,7 +113,7 @@ class AISpeechDirector:
         print(text)
 
     @staticmethod
-    def _dispatch(player: AIPlayer, request: tuple[str, str]):
+    def _dispatch(player: AIPlayer, request: tuple[str, str]) -> str:
         user_text, phase = request
         if phase == "final_summary":
             return player.final_summary(user_text)
@@ -122,37 +121,27 @@ class AISpeechDirector:
             return player.plan_strategy(user_text, phase)
         return player.give_speech(user_text, phase)
 
-    def _run_round(self, requests: dict[AIPlayer, tuple[str, str]], phase_label: str) -> dict[str, str | None]:
-        """requests: {player: (user_text, phase)}。返回 {名字: 发言或 None}。
-        暂停回滚后清标志并原地重跑本轮；中止比赛则向上抛。"""
+    def _run_round(self, requests: dict[AIPlayer, tuple[str, str]], phase_label: str) -> dict[str, str]:
+        """requests: {player: (user_text, phase)}。返回 {名字: 发言}。
+        失败重跑与暂停补跑由 run_parallel_round 内部处理；中止比赛向上抛。"""
         tasks = [
             RoundTask(
                 key=player.name,
-                description=f"{player.name} {phase_label}",
                 player=player,
                 fn=lambda player=player, req=req: self._dispatch(player, req),
             )
             for player, req in requests.items()
         ]
-        while True:
-            try:
-                return run_parallel_round(tasks, self.controller)
-            except RoundAborted:
-                self.controller.clear_pause()
-                continue
+        return run_parallel_round(tasks, self.controller, label=phase_label)
 
     @staticmethod
-    def _others(speeches: dict[str, str | None], exclude: str) -> dict[str, str]:
-        return {
-            name: (text if text is not None else ABSENT_SPEECH)
-            for name, text in speeches.items()
-            if name != exclude
-        }
+    def _others(speeches: dict[str, str], exclude: str) -> dict[str, str]:
+        return {name: text for name, text in speeches.items() if name != exclude}
 
-    def _publish_speeches(self, title: str, speeches: dict[str, str | None]) -> None:
+    def _publish_speeches(self, title: str, speeches: dict[str, str]) -> None:
         lines = [f"\n===== {title} ====="]
         for name, text in speeches.items():
-            lines.append(f"【{name}】{text if text is not None else ABSENT_SPEECH}")
+            lines.append(f"【{name}】{text if text else ABSENT_SPEECH}")
         self._record("\n".join(lines))
 
     def on_opening(self) -> None:
@@ -226,11 +215,6 @@ def run_ai() -> None:
     run_dir = make_run_dir("ai")
     controller = Controller(mode="step")
 
-    def pause_on_double_error(detail: str) -> None:
-        """连续两次调用失败：报错并暂停，本轮回滚后等用户确认重跑。"""
-        controller.request_pause(detail)
-        raise RoundAborted(detail)
-
     players = [
         AIPlayer(
             name=pc["name"],
@@ -238,7 +222,6 @@ def run_ai() -> None:
             all_names=all_names,
             chat_fn=chat_fns[pc["name"]],
             log_path=run_dir / f"ai_{pc['name']}.jsonl",
-            on_double_error=pause_on_double_error,
         )
         for pc in player_configs
     ]
@@ -246,25 +229,21 @@ def run_ai() -> None:
         print(f"{pc['name']}: {pc['provider']} / {pc['model']}")
 
     controller.start_stdin_reader()
-    print("命令：回车=单步推进一次对话 / c=连续模式 / s=单步模式 / p=暂停并回滚本轮 / q=中止比赛")
+    print("命令：回车=推进一轮 / c=连续模式 / s=单步模式 / p=暂停（保留已完成，恢复后仅补跑未完成）/ q=中止比赛")
 
     def bid_collector(observations):
+        sample_obs = observations[0][1]  # 同一轮内所有玩家的局/天相同
+        label = f"第{len(sample_obs.past_match_logs) + 1}局第{sample_obs.day}天出价"
         tasks = [
             RoundTask(
                 key=player.name,
-                description=f"{player.name} 第{len(obs.past_match_logs) + 1}局第{obs.day}天出价",
                 player=player,
                 fn=lambda player=player, obs=obs: player.decide_bid(obs),
             )
             for player, obs in observations
         ]
-        while True:
-            try:
-                results = run_parallel_round(tasks, controller)
-                return [results[player.name] for player, _ in observations]
-            except RoundAborted:
-                controller.clear_pause()
-                continue
+        results = run_parallel_round(tasks, controller, label=label)
+        return [results[player.name] for player, _ in observations]
 
     director = AISpeechDirector(players, controller, run_dir)
     try:
