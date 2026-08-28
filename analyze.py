@@ -76,7 +76,7 @@ def analyze(run_dir: Path) -> None:
         match = payload["match"]
         wins = match["wins"]
         for name, win_count in wins.items():
-            if win_count >= 2:
+            if win_count >= 4:  # 每天打包 2 个胜场：赢超过 1 天即 ≥4 胜场
                 multi_win_matches.append((match["match_index"], name, win_count))
 
         match_dividend_per_player = 0
@@ -118,7 +118,7 @@ def analyze(run_dir: Path) -> None:
         print(f"  第 {day_index} 天：平均 {sum(bids) / len(bids):.2f}（{len(bids)} 笔）")
     all_bids = [bid for bids in bids_by_day_index.values() for bid in bids]
     print(f"  全天总体：平均 {sum(all_bids) / len(all_bids):.2f}（{len(all_bids)} 笔）")
-    print(f"  获胜价平均：{sum(winning_bids) / len(winning_bids):.2f}（{len(winning_bids)} 个胜场）")
+    print(f"  获胜价平均：{sum(winning_bids) / len(winning_bids):.2f}（{len(winning_bids)} 个获胜日）")
     print()
 
     print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
@@ -127,10 +127,10 @@ def analyze(run_dir: Path) -> None:
           f"每人每局累计 {sum(dividends_per_match) / len(dividends_per_match):.2f}")
     print()
 
-    print(f"单局赢超过 1 次的玩家-局次数：{len(multi_win_matches)}"
+    print(f"单局赢超过 1 天的玩家-局次数：{len(multi_win_matches)}"
           f"（占 {len(matches)} 局的 {len({m for m, _, _ in multi_win_matches})} 局）")
     for match_index, name, win_count in multi_win_matches:
-        print(f"  第 {match_index} 局：{name} 赢 {win_count} 次")
+        print(f"  第 {match_index} 局：{name} 赢 {win_count // 2} 天（{win_count} 胜场）")
     print()
 
     print(f"胜场罚没：共 {penalty_events} 次，合计 {penalty_wins} 个胜场")

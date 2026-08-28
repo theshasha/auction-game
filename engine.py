@@ -10,6 +10,7 @@ from models import (
     DIVIDEND_DIVISOR,
     INITIAL_COINS,
     MAX_DAYS,
+    WINS_PER_DAY,
     WINS_PER_MATCH,
     BidRecord,
     DayResult,
@@ -102,7 +103,7 @@ def run_match(
     coins = {player.name: INITIAL_COINS for player in players}
     match_wins = {player.name: 0 for player in players}          # 本局拍卖流程胜场（驱动 wins_remaining）
     match_penalties = {player.name: 0 for player in players}     # 本局已发生罚没（只影响累计排名）
-    wins_remaining = WINS_PER_MATCH
+    wins_remaining = WINS_PER_MATCH                              # 每天打包拍出 WINS_PER_DAY 个
     log = MatchLog(match_index=match_index, is_playoff=is_playoff)
     past_log_dicts = [past_log.to_dict() for past_log in past_logs]
 
@@ -116,6 +117,8 @@ def run_match(
             log.end_reason = "all_coins_zero"
             break
 
+        # 同一天内 6 人的排名快照完全相同，循环外算一次
+        standings_snapshot = compute_standings(wins_history, match_wins, match_penalties)
         observations = [
             (
                 player,
@@ -128,7 +131,7 @@ def run_match(
                     wins_remaining=wins_remaining,
                     max_days=MAX_DAYS,
                     today_history=[day_result.public_view() for day_result in log.days],
-                    standings=compute_standings(wins_history, match_wins, match_penalties),
+                    standings=standings_snapshot,
                     past_match_logs=past_log_dicts,
                 ),
             )
@@ -203,10 +206,11 @@ def run_match(
             # 出价即消耗：无论输赢立即扣除
             for record in bids:
                 coins[record.player] -= record.bid
-            match_wins[winner] += 1
-            wins_remaining -= 1
+            wins_taken = min(WINS_PER_DAY, wins_remaining)  # 打包拍卖：赢家一次拿走 2 个胜场
+            match_wins[winner] += wins_taken
+            wins_remaining -= wins_taken
 
-            # 当天结算后本局结束则不再分红（第 3 个胜场拍出，或第 5 天结算）
+            # 当天结算后本局结束则不再分红（最后 2 个胜场拍出，或第 5 天结算）
             match_ends_today = wins_remaining == 0 or day == MAX_DAYS
             dividend = 0 if match_ends_today else sum(record.bid for record in bids) // DIVIDEND_DIVISOR
             if dividend:

@@ -110,16 +110,32 @@ class TestSpeechJoinBlankLines:
         assert "【甲】感言A\n\n【乙】感言B" in text
 
 
+class TestPlanBidMerge:
+    """规划请求与下一局第 1 天出价合并：附恒定首日状态与 JSON 出价格式。"""
+
+    def test_opening_plan_asks_for_day1_bid(self):
+        text = prompts.opening_plan_request({"乙": "发言"})
+        assert "第 1 局第 1 天的出价" in text
+        assert "你的金币 6，本局已获胜场 0，本局剩余待拍胜场 6" in text
+        assert '```json\n{"bid":' in text
+
+    def test_next_match_plan_asks_for_day1_bid(self):
+        text = prompts.next_match_plan_request({"乙": "发言"})
+        assert "下一局第 1 天的出价" in text
+        assert "你的金币 6，本局已获胜场 0，本局剩余待拍胜场 6" in text
+        assert '```json\n{"bid":' in text
+
+
 class TestBidRequest:
     """每日出价开场：首句「当前是」、昨日公布带「获胜」、余额行在公布之后且标注已含分红。"""
 
     @staticmethod
-    def make_obs(day=1, today_history=None):
+    def make_obs(day=1, today_history=None, total_wins=0):
         return Observation(
             my_name="甲",
             my_coins=7,
             my_match_wins=0,
-            my_total_wins=0,
+            my_total_wins=total_wins,
             day=day,
             wins_remaining=2,
             max_days=5,
@@ -155,6 +171,15 @@ class TestBidRequest:
         assert lines[1] == "昨日公布：流局（无分红），作废价位 2 个。"
         assert "获胜" not in lines[1]
         assert "已含昨日分红" in lines[2]
+
+    def test_total_wins_in_first_day_line(self):
+        text = prompts.bid_request(self.make_obs(day=1, total_wins=3))
+        assert "你的累计总胜场：3（已含罚没）" in text.splitlines()[0]
+
+    def test_total_wins_in_later_day_status_line(self):
+        history = [{"day": 1, "winner": "乙", "voided_price_count": 0, "dividend": 4}]
+        text = prompts.bid_request(self.make_obs(day=2, today_history=history, total_wins=5))
+        assert "你的累计总胜场：5（已含罚没）" in text.splitlines()[2]
 
 
 class TestRenderMatchLog:
@@ -233,4 +258,5 @@ class TestPenaltyRendering:
         history = [{"day": 1, "winner": "乙", "voided_price_count": 0, "dividend": 4,
                     "penalties": []}]
         text = prompts.bid_request(TestBidRequest.make_obs(day=2, today_history=history))
-        assert "罚没" not in text
+        announcement_line = text.splitlines()[1]
+        assert "胜场罚没" not in announcement_line  # 昨日公布不提罚没（状态行的「已含罚没」不算）

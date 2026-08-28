@@ -43,6 +43,8 @@ class AIPlayer(Player):
         ]
         self.chat_fn = chat_fn
         self.log_path = log_path
+        # 规划环节（与下一局第 1 天出价合并）缓存的首日出价，decide_bid 第 1 天直接消费
+        self._pending_day1_bid: Optional[int] = None
 
     # ---- 对话线维护 ----
 
@@ -142,6 +144,12 @@ class AIPlayer(Player):
         return data["bid"]
 
     def decide_bid(self, obs: Observation) -> int:
+        # 第 1 天信息恒定，出价已在规划环节一并给出：直接消费缓存，不再发 LLM 调用
+        if obs.day == 1 and self._pending_day1_bid is not None:
+            bid = self._pending_day1_bid
+            self._pending_day1_bid = None
+            return bid
+
         context = f"第{len(obs.past_match_logs) + 1}局第{obs.day}天"
         content = self._guarded_call(prompts.bid_request(obs), "bid", context)
 
@@ -165,8 +173,27 @@ class AIPlayer(Player):
         return self._guarded_call(user_text, phase, context).strip()
 
     def plan_strategy(self, user_text: str, phase: str, context: str = "") -> str:
-        """策略规划：与发言同机制，只给自己看（不进任何公开渠道）。"""
-        return self.give_speech(user_text, phase, context)
+        """策略规划（与下一局第 1 天出价合并）：规划全文进对话线，只给自己看。
+
+        回复末尾的 JSON 出价缓存为下一局第 1 天出价（decide_bid 第 1 天直接消费，
+        缓存只保留到被消费，开局重新规划时先清后写，避免暂停重跑残留旧值）；
+        解析失败与出价同规则：重试 1 次，仍失败记 0。
+        """
+        self._pending_day1_bid = None
+        content = self.give_speech(user_text, phase, context)
+        bid = self.parse_bid(content)
+        if bid is PARSE_FAILED:
+            retry_content = self._guarded_call(
+                prompts.retry_bid_request(), f"{phase}_retry", context
+            )
+            bid = self.parse_bid(retry_content)
+            if bid is PARSE_FAILED:
+                self._write_log({"phase": phase, "parse_failed": True, "result": 0})
+                self._pending_day1_bid = 0
+                return content
+        self._write_log({"phase": phase, "result": bid})
+        self._pending_day1_bid = bid
+        return content
 
     def final_summary(self, user_text: str, context: str = "") -> str:
         """终局观众总结：不回喂任何对话线（连自己的也不进），只落日志。"""

@@ -19,7 +19,7 @@ def make_obs(day=1, coins=6):
         my_match_wins=0,
         my_total_wins=0,
         day=day,
-        wins_remaining=3,
+        wins_remaining=6,
         max_days=5,
         today_history=[],
         standings=[],
@@ -221,6 +221,62 @@ class TestSpeech:
         summary = player.final_summary("请写观众总结")
         assert summary == "给观众的话"
         assert player.messages == before  # 连 user 消息也不进对话线
+
+
+class TestPlanBidMerge:
+    """规划与下一局第 1 天出价合并：规划回复末尾的 JSON 缓存为首日出价。"""
+
+    def test_plan_caches_day1_bid_consumed_without_call(self):
+        chat_fn = fake_chat_fn(["我的策略：……\n```json\n{\"bid\": 3}\n```"])
+        player = make_player(chat_fn)
+        player.plan_strategy("请规划并出价", "opening_plan")
+
+        assert player.decide_bid(make_obs(day=1)) == 3
+        assert len(chat_fn.calls) == 1  # 第 1 天不再发 LLM 调用
+
+    def test_plan_cache_consumed_only_once(self):
+        chat_fn = fake_chat_fn(["策略\n```json\n{\"bid\": 3}\n```", bid_reply(2)])
+        player = make_player(chat_fn)
+        player.plan_strategy("请规划并出价", "opening_plan")
+
+        assert player.decide_bid(make_obs(day=1)) == 3
+        assert player.decide_bid(make_obs(day=2)) == 2  # 缓存已消费，正常调用
+        assert len(chat_fn.calls) == 2
+
+    def test_plan_without_cache_falls_back_to_normal_call(self):
+        # 未经过规划环节（如暂停重跑丢失缓存）：第 1 天照常发出价请求
+        chat_fn = fake_chat_fn([bid_reply(5)])
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_obs(day=1)) == 5
+        assert len(chat_fn.calls) == 1
+
+    def test_plan_parse_failure_retries_once(self):
+        chat_fn = fake_chat_fn(["只有策略没有 JSON", "补出价\n```json\n{\"bid\": 4}\n```"])
+        player = make_player(chat_fn)
+        player.plan_strategy("请规划并出价", "match_1_plan", "第 1 局局末")
+
+        assert player.decide_bid(make_obs(day=1)) == 4
+        assert len(chat_fn.calls) == 2
+        assert "缺少合法的 JSON" in player.messages[-2]["content"]
+
+    def test_plan_double_parse_failure_caches_zero(self, tmp_path):
+        player = make_player(fake_chat_fn(["没有块", "还是没有"]), tmp_path)
+        player.plan_strategy("请规划并出价", "opening_plan")
+
+        assert player.decide_bid(make_obs(day=1)) == 0
+        log_entries = [
+            json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert any(entry.get("parse_failed") and entry.get("result") == 0 for entry in log_entries)
+
+    def test_replan_overwrites_stale_cache(self):
+        # 暂停重跑场景：旧缓存先清后写，不会被残留值污染
+        chat_fn = fake_chat_fn(["旧规划\n```json\n{\"bid\": 1}\n```", "新规划\n```json\n{\"bid\": 6}\n```"])
+        player = make_player(chat_fn)
+        player.plan_strategy("请规划并出价", "match_1_plan")
+        player.plan_strategy("请重新规划并出价", "match_2_plan")
+
+        assert player.decide_bid(make_obs(day=1)) == 6
 
 
 class TestController:

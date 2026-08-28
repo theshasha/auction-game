@@ -26,7 +26,7 @@
 ├── config.yaml     # 6 玩家名字+人设+各自 provider/model + 全局 llm.timeout_seconds
 ├── requirements.txt
 ├── tests/          # test_engine.py / test_tournament.py / test_ai.py / test_prompts.py /
-│                   # test_llm_client.py（98 项全绿，全部零网络）
+│                   # test_llm_client.py（112 项全绿，全部零网络）
 └── logs/           # 按场次分目录 <时间戳>_<bot|ai>/，latest 软链接指向最近一场（gitignore）
                     # 每场内含 match_<n>.json/.txt，AI 模式另有 ai_<名字>.jsonl、speeches.txt
                     # ai_<名字>.md 与 jsonl 同步双写（markdown 视图，VSCode 打开可实时分玩家阅读）
@@ -34,7 +34,7 @@
 
 ```bash
 cd /root/auction_game
-python3 -m pytest tests/ -q     # 98 项测试（全部零网络）
+python3 -m pytest tests/ -q     # 112 项测试（全部零网络）
 python3 main.py --seed 42       # Bot 模式（可复现；冠军随规则变化）
 python3 check_llm.py            # 冒烟测试 6 个 LLM 端点（真实联网，--ai 前必跑）
 python3 main.py --ai            # AI 模式，需 .env 配齐 MODAL_* / HUB_API_KEY（按 config 实际用到的 provider）
@@ -55,7 +55,7 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 | gemini-3.1-pro-preview | hub | OpenAI responses API（hub 默认 protocol） |
 | gpt-5.6-sol | hub | 同上 |
 | MiniMax-M3 | hub | 同上 |
-| glm-5.3 | hub | 同上 |
+| deepseek-v4-flash | hub | OpenAI chat completions（config 中 `protocol: chat`，同 deepseek-v4-pro） |
 
 注：anthropic / gemini 两个 provider 的代码仍保留在 llm_client.py（当前无玩家使用）。
 
@@ -68,7 +68,8 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
   所有环节只 append；唯一允许的截断是暂停回滚到本轮 checkpoint。
 5. **每天只发一条 user 消息**：「当前是第N局第M天。」非首日随后接「昨日公布」（获胜者带
   「获胜」字样，流局写「流局（无分红）」），余额行放最后且标注「（已含昨日分红）」——
-  余额是结算后的值；首日单行不换句。
+  余额是结算后的值；首日单行不换句。状态行固定带「你的累计总胜场：N（已含罚没）」，
+  让模型每天都知道自己的罚没后总胜场（撞车罚没决策依赖它）。
 6. **不采集推理内容**：`chat_fn` 统一返回 `str`（正文），不需要 `reasoning_content`；
   出口统一过 `strip_think_blocks`，剥离正文内嵌的 `<think>` 推理块（含未闭合截断）。
 7. **输出上限内置在 `MODEL_OUTPUT_LIMITS`**（数据来源 https://models.dev/），
@@ -80,10 +81,11 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 9. **连续两次调用失败（网络/余额等基础设施故障）→ 抛 `CallFailedError` 上报轮级别**：
   一轮收完后打印失败名单，回车仅重跑失败的 AI（q 仍可中止）。
   解析失败（输出格式问题）按规则重试 1 次后记 0，不触发轮级重跑。
-10. **发言流程**：开局发言→互看→规划第一局；每局末同上→规划下局；终局感言→互看→
-  观众总结（不回喂任何对话线）。**发言/规划/总结一律不截断**（全文进对话线也全文公开）；
+10. **发言流程**：开局发言→互看→规划第一局（含第 1 天出价）；每局末同上→规划下局
+  （含下一局第 1 天出价）；终局感言→互看→观众总结（不回喂任何对话线）。
+  **发言/规划/总结一律不截断**（全文进对话线也全文公开，规划只给自己看不公开）；
   字数只是软要求：开局/局末提示「不超过 300 字」，终局感言与观众总结不限。
-  加赛预告只在第 5 局或加赛局结束且第一名仍并列时出现。
+  加赛预告只在第 5 局或加赛局结束且第一名仍并列时出现（已达加赛上限则无预告也无规划轮）。
 11. **分红除数恒为 8**（玩家永不退场）；一局结束当天不分红；流局日全额返还无分红。
 12. **日志按场次分目录**：`logs/<YYYYmmdd_HHMMSS>_<bot|ai>/`，`logs/latest` 相对软链接；
   同秒撞名加 `_2` 后缀；旧日志不做移动/删除，清理由用户决定。
@@ -100,6 +102,15 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
   金币与本局流程：engine 双账本（`match_wins` 驱动流程、`match_penalties` 落排名），
   局末 `fold_match_penalties` 从最近有净胜场的局折算进 wins_history（各局值不为负）。
   每日公布第 4 项为罚没情况；`RULES_TEXT` 三.6/三.7 与五.1 是规则源头。
+17. **规划与下一局第 1 天出价合并**：第 1 天信息恒定（6 金币、0 胜场、6 待拍），
+  规划回复末尾必须带 `json {"bid": N}` 块，AIPlayer 解析后缓存为 `_pending_day1_bid`，
+  引擎第 1 天的 `decide_bid` 直接消费缓存、不再发 LLM 调用（每个局边界省 6 次调用）。
+  解析失败与出价同规则（重试 1 次后记 0）；规划开头先清缓存再写，防止暂停重跑残留；
+  无缓存时第 1 天回退为正常独立出价调用。`will_continue` 判断含加赛上限余量
+  （加赛局 playoff_count 已含本局需 +1，正赛局不需），封顶局末不再空跑规划轮。
+18. **打包拍卖**：每局 6 个胜场、每天打包拍 2 个——每天仍只有 1 个最高唯一价，赢家
+  一次拿走 2 个胜场，流局则 2 个整体顺延（6÷2 整除无零头）。常量 `WINS_PER_MATCH=6` /
+  `WINS_PER_DAY=2` 在 models.py；analyze.py 的「单局多胜」口径相应为 ≥4 胜场（赢超过 1 天）。
 
 ## 已踩过的坑（重要）
 

@@ -79,9 +79,11 @@ def run_tournament(
         if on_match_end:
             on_match_end(log, standings)
         if director:
-            will_continue = (
-                match_index < REGULAR_MATCHES
-                or first_place_tied(standings)  # 第 5 局或加赛后仍并列，才有下一局
+            # 第 5 局或加赛后仍并列才有下一局；加赛局还要预留上限余量
+            # （正赛局结束后 playoff_count 未自增，只有加赛局需 +1）
+            will_continue = match_index < REGULAR_MATCHES or (
+                first_place_tied(standings)
+                and result.playoff_count + (1 if is_playoff else 0) < MAX_PLAYOFFS
             )
             director.on_match_end(log, standings, will_continue)
 

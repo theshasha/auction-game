@@ -30,7 +30,7 @@ LOG_DIR = ROOT_DIR / "logs"
 CONFIG_PATH = ROOT_DIR / "config.yaml"
 
 END_REASON_LABELS = {
-    "wins_exhausted": "3 个胜场全部拍出",
+    "wins_exhausted": "6 个胜场全部拍出",
     "max_days": "达到第 5 天上限",
     "all_coins_zero": "全员余额归零",
 }
@@ -153,7 +153,7 @@ class AISpeechDirector:
         self._publish_speeches("开局发言", speeches)
         self._run_round(
             {p: (prompts.opening_plan_request(self._others(speeches, p.name)), "opening_plan") for p in self.players},
-            "第一局策略规划",
+            "第一局策略规划（含首日出价）",
         )
 
     def on_match_end(self, log: MatchLog, standings: list[StandingsEntry], will_continue: bool) -> None:
@@ -168,7 +168,7 @@ class AISpeechDirector:
         if will_continue:
             self._run_round(
                 {p: (prompts.next_match_plan_request(self._others(speeches, p.name)), f"match_{log.match_index}_plan") for p in self.players},
-                "下一局策略规划",
+                "下一局策略规划（含首日出价）",
             )
 
     def on_final(self, standings: list[StandingsEntry]) -> None:

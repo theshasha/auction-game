@@ -28,7 +28,7 @@ HUB_ANTHROPIC_BASE_URL = "https://hub.oaifree.com/anthropic"
 
 # 模型输出上限，数据来源：https://models.dev/api.json 官方 provider 条目（2026-08-28 拉取）
 #   moonshotai | kimi-k3              out=131072
-#   deepseek   | deepseek-v4-pro      out=384000
+#   deepseek   | deepseek-v4-pro / deepseek-v4-flash  out=384000
 #   google     | gemini-3.1-pro-preview / gemini-flash-latest  out=65536
 #   openai     | gpt-5.6-sol          out=128000
 #   anthropic  | claude-opus-4-6      out=128000
@@ -37,6 +37,7 @@ HUB_ANTHROPIC_BASE_URL = "https://hub.oaifree.com/anthropic"
 MODEL_OUTPUT_LIMITS = {
     "moonshotai/Kimi-K3": 131072,
     "deepseek-v4-pro": 384000,
+    "deepseek-v4-flash": 384000,
     "gemini-3.1-pro-preview": 65536,
     "gpt-5.6-sol": 128000,
     "claude-opus-4-6": 128000,

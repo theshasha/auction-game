@@ -10,7 +10,8 @@ NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 def make_players(match_winners: dict[int, str]):
     """构造 6 个 ScriptedPlayer：每一局由 match_winners[局号] 指定的玩家包揽胜场。
 
-    指定赢家每天出 2、其他人每天出 1（余额可持续、价位唯一），因此赢家 3 天连胜。
+    指定赢家每天出 2、其他人每天出 1（余额可持续、价位唯一），因此赢家 3 天连胜、
+    每天拿走打包的 2 个胜场，一局共 6 个。
     局号 = len(obs.past_match_logs) + 1。
     """
     def make_strategy(name):
@@ -38,7 +39,7 @@ class TestRegularSeasonOnly:
         assert len(result.match_logs) == 5
         assert result.playoff_count == 0
         assert not result.playoff_cap_hit
-        assert totals(result) == {"甲": 15, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
+        assert totals(result) == {"甲": 30, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
         assert ranks(result)["甲"] == 1
 
     def test_tie_below_first_place_does_not_trigger_playoff(self):
@@ -54,7 +55,7 @@ class TestRegularSeasonOnly:
 class TestCollisionPenaltyFolding:
     def test_penalties_reduce_final_standings(self):
         # 甲每局出 2 包揽胜场；第 3 局乙也出 2 撞车、丙出 1 唯一获胜、其余出 0。
-        # 第 3 局开局甲已攒 6 胜，每天与 0 胜的乙在高于获胜价的 2 撞车，各被罚 1，共 3。
+        # 第 3 局开局甲已攒 12 胜，每天与 0 胜的乙在高于获胜价的 2 撞车，各被罚 1，共 3。
         def make_strategy(name):
             def strategy(obs):
                 current_match = len(obs.past_match_logs) + 1
@@ -67,11 +68,11 @@ class TestCollisionPenaltyFolding:
         result = run_tournament(players)
 
         assert result.playoff_count == 0
-        # 甲毛胜场 12（第 1/2/4/5 局各 3），第 3 局被罚 3，净 9；罚没从最近有胜场局折算
-        assert totals(result)["甲"] == 9
+        # 甲毛胜场 24（第 1/2/4/5 局各 6），第 3 局被罚 3，净 21；罚没从最近有胜场局折算
+        assert totals(result)["甲"] == 21
         entry = next(e for e in result.final_standings if e.player == "甲")
-        assert entry.wins_per_match == [3, 0, 0, 3, 3]
-        assert totals(result)["丙"] == 3  # 丙的胜场不受影响
+        assert entry.wins_per_match == [6, 3, 0, 6, 6]
+        assert totals(result)["丙"] == 6  # 丙的胜场不受影响
         assert ranks(result)["甲"] == 1
 
 
@@ -83,13 +84,13 @@ class TestPlayoff:
         assert result.playoff_count == 1
         assert len(result.match_logs) == 6
         assert result.match_logs[5].is_playoff
-        # 加赛胜场计入总胜场：甲 6 + 3 = 9，乙 6
-        assert totals(result)["甲"] == 9
-        assert totals(result)["乙"] == 6
+        # 加赛胜场计入总胜场：甲 12 + 6 = 18，乙 12
+        assert totals(result)["甲"] == 18
+        assert totals(result)["乙"] == 12
         assert ranks(result)["甲"] == 1
 
     def test_playoff_continues_when_tie_persists_with_new_leaders(self):
-        # 正赛后甲乙并列 6 胜；第 6 局丙包揽后甲乙丙三人并列（并列者变化），
+        # 正赛后甲乙并列 12 胜；第 6 局丙包揽后甲乙丙三人并列（并列者变化），
         # 第 7 局甲包揽后第一名唯一，加赛结束
         players = make_players({1: "甲", 2: "甲", 3: "乙", 4: "乙", 5: "丙", 6: "丙", 7: "甲"})
         result = run_tournament(players)
@@ -97,7 +98,7 @@ class TestPlayoff:
         assert result.playoff_count == 2
         assert len(result.match_logs) == 7
         assert all(log.is_playoff for log in result.match_logs[5:])
-        assert totals(result) == {"甲": 9, "乙": 6, "丙": 6, "丁": 0, "戊": 0, "己": 0}
+        assert totals(result) == {"甲": 18, "乙": 12, "丙": 12, "丁": 0, "戊": 0, "己": 0}
         assert ranks(result)["甲"] == 1
         assert ranks(result)["乙"] == 2 and ranks(result)["丙"] == 2  # 第二名并列保持
 
@@ -112,13 +113,49 @@ class TestPlayoff:
         assert first_place_tied(result.final_standings)
 
 
+class TestDirectorWillContinue:
+    """will_continue 的准确性：决定局末是否还有「下一局规划」轮，必须考虑加赛上限。"""
+
+    class FakeDirector:
+        def __init__(self):
+            self.will_continue_flags = []
+
+        def on_opening(self):
+            pass
+
+        def on_match_end(self, log, standings, will_continue):
+            self.will_continue_flags.append(will_continue)
+
+        def on_final(self, standings):
+            pass
+
+    def test_will_continue_false_on_last_match_when_decided(self):
+        director = self.FakeDirector()
+        players = make_players({i: "甲" for i in range(1, 6)})
+        run_tournament(players, director=director)
+
+        assert director.will_continue_flags == [True, True, True, True, False]
+
+    def test_will_continue_respects_playoff_cap(self, monkeypatch):
+        # 上限缩到 2：全员每天出 1 撞车永远流局、人人 0 胜永远并列，直到封顶
+        monkeypatch.setattr(tournament, "MAX_PLAYOFFS", 2)
+        director = self.FakeDirector()
+        players = make_players({})  # 无人被指定为赢家，全员每天出 1 撞车流局
+        result = run_tournament(players, director=director)
+
+        assert result.playoff_cap_hit
+        assert result.playoff_count == 2
+        # 第 5 局后还有加赛空间→True；第 6 局（加赛 1/2）→True；第 7 局（加赛 2/2）→False
+        assert director.will_continue_flags == [True, True, True, True, True, True, False]
+
+
 class TestPublicationOnMatchEnd:
     def test_callback_receives_match_log_and_standings_after_each_match(self):
         publications = []
         players = make_players({1: "甲", 2: "乙", 3: "丙", 4: "丁", 5: "戊", 6: "甲"})
         run_tournament(players, on_match_end=lambda log, standings: publications.append((log, standings)))
 
-        # 正赛后甲乙丙丁戊五人 3 胜并列第一，触发加赛；第 6 局甲包揽后唯一
+        # 正赛后甲乙丙丁戊五人 6 胜并列第一，触发加赛；第 6 局甲包揽后唯一
         assert len(publications) == 6
         first_log, first_standings = publications[0]
         # 局日志完整：含每天每人出价
@@ -126,8 +163,8 @@ class TestPublicationOnMatchEnd:
         assert len(first_log.days[0].bids) == 6
         # 局末公开排名含胜场明细，且反映该局结果
         first_entry = next(e for e in first_standings if e.player == "甲")
-        assert first_entry.total_wins == 3
-        assert first_entry.wins_per_match == [3]
+        assert first_entry.total_wins == 6
+        assert first_entry.wins_per_match == [6]
 
     def test_players_observe_past_logs_and_standings(self):
         # 第 2 局第 1 天时，玩家应能看到第 1 局的完整公开日志与当前排名
@@ -147,6 +184,6 @@ class TestPublicationOnMatchEnd:
         assert len(seen) == 6
         obs = seen[0]
         assert obs.past_match_logs[0]["match_index"] == 1
-        assert obs.past_match_logs[0]["wins"]["甲"] == 3
+        assert obs.past_match_logs[0]["wins"]["甲"] == 6
         leader = obs.standings[0]
-        assert leader.player == "甲" and leader.total_wins == 3
+        assert leader.player == "甲" and leader.total_wins == 6
