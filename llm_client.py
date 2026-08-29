@@ -7,6 +7,12 @@ provider 与调用方式：
 - anthropic：oaifree 中转，Anthropic SDK（当前无玩家使用，代码保留）
 
 chat_fn 统一签名为 (messages: list[dict]) -> str，只返回正文 content。
+
+全部 provider 走流式（stream）调用并在本地累积正文：非流式请求在模型长时间
+思考期间一个字节都不吐，hub.oaifree.com 前面的 Cloudflare 非流式 Proxy Read
+Timeout 窗口（约 120 秒）会掐断连接（上游记录「已取消」，客户端收到 524）；
+流式下字节持续流动，空闲窗口不触发。只累积正文增量，不采集推理内容
+（chat 的 reasoning_content、responses 的推理事件一律忽略）。
 """
 
 from __future__ import annotations
@@ -64,6 +70,30 @@ def strip_think_blocks(text: str) -> str:
     return _THINK_UNCLOSED_RE.sub("", _THINK_BLOCK_RE.sub("", text))
 
 
+def collect_chat_stream(chunks) -> str:
+    """累积 chat completions 流式增量的正文（delta.content），忽略推理字段。
+
+    流式末尾可能出现 choices 为空的心跳/用量块，需跳过。
+    """
+    parts = []
+    for chunk in chunks:
+        if not getattr(chunk, "choices", None):
+            continue
+        content = getattr(chunk.choices[0].delta, "content", None)
+        if content:
+            parts.append(content)
+    return "".join(parts)
+
+
+def collect_responses_stream(events) -> str:
+    """累积 responses API 流式事件的正文（response.output_text.delta）。"""
+    parts = []
+    for event in events:
+        if getattr(event, "type", None) == "response.output_text.delta":
+            parts.append(getattr(event, "delta", "") or "")
+    return "".join(parts)
+
+
 class MissingApiKeyError(RuntimeError):
     pass
 
@@ -86,10 +116,10 @@ def _make_gemini_fn(model: str, timeout: int) -> ChatFn:
         kwargs = {}
         if model in MODEL_OUTPUT_LIMITS:
             kwargs["max_tokens"] = MODEL_OUTPUT_LIMITS[model]
-        response = client.chat.completions.create(
-            model=model, messages=messages, timeout=timeout, **kwargs
+        chunks = client.chat.completions.create(
+            model=model, messages=messages, stream=True, timeout=timeout, **kwargs
         )
-        return response.choices[0].message.content or ""
+        return collect_chat_stream(chunks)
 
     return chat_fn
 
@@ -104,10 +134,10 @@ def _make_modal_fn(model: str, timeout: int) -> ChatFn:
         kwargs = {}
         if model in MODEL_OUTPUT_LIMITS:
             kwargs["max_tokens"] = MODEL_OUTPUT_LIMITS[model]
-        response = client.chat.completions.create(
-            model=model, messages=messages, timeout=timeout, **kwargs
+        chunks = client.chat.completions.create(
+            model=model, messages=messages, stream=True, timeout=timeout, **kwargs
         )
-        return response.choices[0].message.content or ""
+        return collect_chat_stream(chunks)
 
     return chat_fn
 
@@ -115,8 +145,8 @@ def _make_modal_fn(model: str, timeout: int) -> ChatFn:
 def _make_hub_fn(model: str, timeout: int, protocol: str = "responses") -> ChatFn:
     """oaifree 中转端点，protocol 二选一：
 
-    - responses：OpenAI responses API，input 直接吃 messages 列表，取 output_text
-    - chat：OpenAI chat completions（/v1/chat/completions），取 choices[0].message.content
+    - responses：OpenAI responses API，input 直接吃 messages 列表，流式累积 output_text 增量
+    - chat：OpenAI chat completions（/v1/chat/completions），流式累积 delta.content
     """
     if protocol not in ("responses", "chat"):
         raise ValueError(f"hub 未知 protocol：{protocol!r}（可选：responses、chat）")
@@ -130,10 +160,10 @@ def _make_hub_fn(model: str, timeout: int, protocol: str = "responses") -> ChatF
             kwargs = {}
             if model in MODEL_OUTPUT_LIMITS:
                 kwargs["max_tokens"] = MODEL_OUTPUT_LIMITS[model]
-            response = client.chat.completions.create(
-                model=model, messages=messages, timeout=timeout, **kwargs
+            chunks = client.chat.completions.create(
+                model=model, messages=messages, stream=True, timeout=timeout, **kwargs
             )
-            return response.choices[0].message.content or ""
+            return collect_chat_stream(chunks)
 
         return chat_fn
 
@@ -141,10 +171,10 @@ def _make_hub_fn(model: str, timeout: int, protocol: str = "responses") -> ChatF
         kwargs = {}
         if model in MODEL_OUTPUT_LIMITS:
             kwargs["max_output_tokens"] = MODEL_OUTPUT_LIMITS[model]
-        response = client.responses.create(
-            model=model, input=messages, timeout=timeout, **kwargs
+        events = client.responses.create(
+            model=model, input=messages, stream=True, timeout=timeout, **kwargs
         )
-        return response.output_text or ""
+        return collect_responses_stream(events)
 
     return responses_fn
 
@@ -162,16 +192,14 @@ def _make_anthropic_fn(model: str, timeout: int) -> ChatFn:
         if messages and messages[0].get("role") == "system":
             system_prompt = messages[0]["content"]
             conversation = messages[1:]
-        response = client.messages.create(
+        with client.messages.stream(
             model=model,
             max_tokens=MODEL_OUTPUT_LIMITS.get(model, ANTHROPIC_FALLBACK_MAX_TOKENS),
             system=system_prompt,
             messages=conversation,
             timeout=timeout,
-        )
-        return "".join(
-            block.text for block in response.content if getattr(block, "type", None) == "text"
-        )
+        ) as stream:
+            return stream.get_final_text()
 
     return chat_fn
 
