@@ -110,3 +110,10 @@ class Observation:
     today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）
     standings: list[StandingsEntry]   # 截至当前的累计排名（含本局已决出的胜场）
     past_match_logs: list[dict]  # 已结束各局的完整公开日志
+    # 昨日自己的结算结果（第 1 天为 None/默认值）。自己的出价与扣款本来就可从
+    # 对话历史与余额变化推出，直接给结论不泄露任何信息——实证模型复盘自己的
+    # 结局时经常推错且不与状态行余额核对，错误随后级联到全场资金推断。
+    my_last_bid: Optional[int] = None      # 昨日自己的有效出价（非法出价已记 0）
+    my_last_deduction: Optional[int] = None  # 昨日自己被扣除的金币（退还为 0）
+    my_last_collided: bool = False         # 昨日自己是否撞车
+    my_last_bid_illegal: bool = False      # 昨日出价是否非法（被规则记 0）

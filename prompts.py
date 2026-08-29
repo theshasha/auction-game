@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from models import (
     DAILY_POOL,
@@ -19,6 +20,18 @@ from models import (
 )
 
 RULES_TEXT = (Path(__file__).parent / "RULES.md").read_text(encoding="utf-8").strip()
+
+# 局末展示出价日志前的精简规则重申：结算四步是模型复盘局日志时的框架，
+# 实证错误（如「转判获得者免费得胜场」「自己撞车推成退款」）都源于复盘时
+# 没套用这四步。只放局末发言请求（局日志唯一展示处），不重发全文。
+RULES_REMINDER = (
+    "【规则要点重申】每日结算按四步：① 某数值被两名及以上玩家出了即撞车，撞车者全部扣除出价；"
+    "② 唯一出价中最高者获胜（0 是合法价位），当天无唯一出价则流局、奖池并入次日；"
+    "③ 获胜价为 6 时，获胜者只得奖池一半（向上取整），另一半（向下取整）转判次高唯一出价者"
+    "——转判获得者照常扣除自己的出价，并非免费获赠；无次高唯一出价者该部分作废；"
+    "④ 获胜者、转判获得者与撞车者扣除各自出价（流局日撞车照扣），其余玩家全额退还。"
+    "他人的出价与余额不公布，只能由每日公布信息推断，推断可能出错。"
+)
 
 
 def bid_format_hint() -> str:
@@ -83,6 +96,43 @@ def opening_plan_request(others_speeches: dict[str, str]) -> str:
     )
 
 
+def _my_last_day_line(obs: Observation) -> Optional[str]:
+    """「昨日你的结果」行：直接告知昨日自己的出价、结局与扣款。
+
+    零信息泄露（自己的出价与余额变化本来就可推出），只是免去推导——实证模型
+    会把自己的撞车推成「唯一未中退款」且不与状态行余额核对，错误随即级联。
+    """
+    if obs.my_last_bid is None:
+        return None
+    yesterday = obs.today_history[-1]
+    if obs.my_last_bid_illegal:
+        segments = ["出价非法按规则记 0"]
+    else:
+        segments = [f"出价 {obs.my_last_bid}"]
+    if yesterday["winner"] == "流局":
+        segments.append(f"当天流局全员撞车，扣除 {obs.my_last_deduction}")
+    elif yesterday["winner"] == obs.my_name:
+        if yesterday["winning_bid"] == MAX_BID:
+            segments.append(
+                f"唯一最高出价获胜，缴冲顶税后实得 {yesterday['wins_taken']} 个胜场，"
+                f"扣除 {obs.my_last_deduction}"
+            )
+        else:
+            segments.append(
+                f"唯一最高出价获胜，赢得 {yesterday['wins_taken']} 个胜场，"
+                f"扣除 {obs.my_last_deduction}"
+            )
+    elif yesterday["transfer_recipient"] == obs.my_name:
+        segments.append(
+            f"获转判 {yesterday['transfer_wins']} 个胜场，照常扣除 {obs.my_last_deduction}"
+        )
+    elif obs.my_last_collided:
+        segments.append(f"与他人撞车，扣除 {obs.my_last_deduction}")
+    else:
+        segments.append("是唯一出价但未获胜，全额退还")
+    return "昨日你的结果：" + "，".join(segments) + "。"
+
+
 def bid_request(obs: Observation) -> str:
     match_index = len(obs.past_match_logs) + 1
     # 第 2 天起每天开始时已发放工资，余额是发放后的值，明示避免模型自己再加一次；
@@ -113,7 +163,8 @@ def bid_request(obs: Observation) -> str:
         )
         if yesterday["transfer_recipient"] is not None:
             announcement += (
-                f"转判 {yesterday['transfer_recipient']} 获得 {yesterday['transfer_wins']} 个，"
+                f"转判 {yesterday['transfer_recipient']} 获得 {yesterday['transfer_wins']} 个"
+                f"（转判获得者照常扣除自己的出价），"
             )
         announcement += f"撞车价位 {yesterday['collision_price_count']} 个。"
     else:
@@ -122,7 +173,11 @@ def bid_request(obs: Observation) -> str:
             f"赢得 {yesterday['pool']} 个胜场，"
             f"撞车价位 {yesterday['collision_price_count']} 个。"
         )
-    lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement, status_line]
+    lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement]
+    my_last_line = _my_last_day_line(obs)
+    if my_last_line is not None:
+        lines.append(my_last_line)
+    lines.append(status_line)
     return "\n".join(lines) + "\n\n" + bid_format_hint()
 
 
@@ -150,7 +205,7 @@ def render_match_log(log: MatchLog) -> str:
             if day.winning_bid == MAX_BID:
                 outcome += f"（冲顶税：{day.pool}→{day.wins_taken}"
                 if day.transfer_recipient is not None:
-                    outcome += f"，转判 {day.transfer_recipient} 得 {day.transfer_wins}"
+                    outcome += f"，转判 {day.transfer_recipient} 得 {day.transfer_wins}，照扣其出价"
                 outcome += "）"
         rows.append(
             f"| {day.day} | {day.pool} | {bid_cells} | {outcome} | {day.collision_price_count} |"
@@ -182,7 +237,11 @@ def render_standings(standings: list[StandingsEntry]) -> str:
 def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], will_continue: bool) -> str:
     kind = "加赛局" if log.is_playoff else "正赛局"
     lines = [
-        f"第 {log.match_index} 局（{kind}）结束。本局完整出价日志：\n{render_match_log(log)}",
+        f"第 {log.match_index} 局（{kind}）结束。",
+        # 局日志是模型复盘他人出价的唯一材料，复盘前先重申结算框架（实证错误
+        # 多因复盘时不套用结算四步，而非遗忘条款）
+        RULES_REMINDER,
+        f"本局完整出价日志：\n{render_match_log(log)}",
         f"截至当前的累计排名与胜场明细：\n{render_standings(standings)}",
     ]
     # 只有正赛打完（或加赛后）第一名仍并列才有信息增量，其余局数无需预告

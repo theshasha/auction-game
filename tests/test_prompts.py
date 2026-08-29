@@ -161,7 +161,9 @@ class TestBidRequest:
     """每日出价消息：首句「当前是」、昨日公布带获胜价、状态行带奖池与工资标注。"""
 
     @staticmethod
-    def make_obs(day=1, today_history=None, total_wins=0, pool=1, coins=7):
+    def make_obs(day=1, today_history=None, total_wins=0, pool=1, coins=7,
+                 my_last_bid=None, my_last_deduction=None,
+                 my_last_collided=False, my_last_bid_illegal=False):
         return Observation(
             my_name="甲",
             my_coins=coins,
@@ -172,6 +174,10 @@ class TestBidRequest:
             today_history=today_history or [],
             standings=[],
             past_match_logs=[{"match_index": 1}],  # 使当前为第 2 局
+            my_last_bid=my_last_bid,
+            my_last_deduction=my_last_deduction,
+            my_last_collided=my_last_collided,
+            my_last_bid_illegal=my_last_bid_illegal,
         )
 
     def test_first_day_single_line(self):
@@ -232,7 +238,7 @@ class TestBidRequest:
         lines = text.splitlines()
 
         assert lines[1] == ("昨日公布：乙 以 6 获胜，奖池 2 个胜场，缴冲顶税后实得 1 个，"
-                            "转判 丁 获得 1 个，撞车价位 1 个。")
+                            "转判 丁 获得 1 个（转判获得者照常扣除自己的出价），撞车价位 1 个。")
 
     def test_total_wins_in_first_day_line(self):
         text = prompts.bid_request(self.make_obs(day=1, total_wins=3))
@@ -242,6 +248,107 @@ class TestBidRequest:
         history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "collision_price_count": 0}]
         text = prompts.bid_request(self.make_obs(day=2, today_history=history, total_wins=5))
         assert "你的累计总胜场：5。" in text.splitlines()[2]
+
+
+class TestMyLastDayLine:
+    """「昨日你的结果」行：直接告知昨日自己的出价、结局与扣款（零信息泄露，
+    自己的出价与余额变化本来就可推出），位于昨日公布之后、今日状态行之前。"""
+
+    make_obs = staticmethod(TestBidRequest.make_obs)
+
+    @staticmethod
+    def history(**overrides):
+        base = {"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
+                "transfer_recipient": None, "transfer_wins": 0, "collision_price_count": 0}
+        base.update(overrides)
+        return [base]
+
+    def test_no_line_when_last_bid_unknown(self):
+        # my_last_bid 为 None（如旧调用方未填）时不渲染该行
+        text = prompts.bid_request(self.make_obs(day=2, today_history=self.history()))
+        assert "昨日你的结果" not in text
+
+    def test_winner_without_tax(self):
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(winner="甲", winning_bid=5, wins_taken=1),
+            my_last_bid=5, my_last_deduction=5,
+        ))
+        assert "昨日你的结果：出价 5，唯一最高出价获胜，赢得 1 个胜场，扣除 5。" in text
+
+    def test_winner_with_cap_tax(self):
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(winner="甲", winning_bid=6, wins_taken=1),
+            my_last_bid=6, my_last_deduction=6,
+        ))
+        assert "昨日你的结果：出价 6，唯一最高出价获胜，缴冲顶税后实得 1 个胜场，扣除 6。" in text
+
+    def test_transfer_recipient_pays(self):
+        # 转判获得者照常扣款——实证有模型把转判当成「免费获赠」
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(winner="乙", winning_bid=6, wins_taken=1,
+                                              transfer_recipient="甲", transfer_wins=1),
+            my_last_bid=3, my_last_deduction=3,
+        ))
+        assert "昨日你的结果：出价 3，获转判 1 个胜场，照常扣除 3。" in text
+
+    def test_collided(self):
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(),
+            my_last_bid=4, my_last_deduction=4, my_last_collided=True,
+        ))
+        assert "昨日你的结果：出价 4，与他人撞车，扣除 4。" in text
+
+    def test_unique_not_won_refunded(self):
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(),
+            my_last_bid=2, my_last_deduction=0,
+        ))
+        assert "昨日你的结果：出价 2，是唯一出价但未获胜，全额退还。" in text
+
+    def test_void_day_all_collided(self):
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(winner="流局", winning_bid=None, wins_taken=0),
+            my_last_bid=1, my_last_deduction=1, my_last_collided=True,
+        ))
+        assert "昨日你的结果：出价 1，当天流局全员撞车，扣除 1。" in text
+
+    def test_illegal_bid_recorded_as_zero(self):
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(),
+            my_last_bid=0, my_last_deduction=0, my_last_bid_illegal=True,
+        ))
+        assert "昨日你的结果：出价非法按规则记 0，是唯一出价但未获胜，全额退还。" in text
+
+    def test_line_position_between_announcement_and_status(self):
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=self.history(),
+            my_last_bid=2, my_last_deduction=0,
+        ))
+        assert text.index("昨日公布") < text.index("昨日你的结果") < text.index("今日奖池")
+
+
+class TestRulesReminder:
+    """局末发言请求在展示局日志前重申结算四步（精简版），其余请求不带。"""
+
+    def test_match_end_speech_contains_reminder_before_log(self):
+        text = prompts.match_end_speech_request(
+            make_log(), make_standings({n: [0] for n in NAMES}), True
+        )
+        assert "【规则要点重申】" in text
+        assert text.index("【规则要点重申】") < text.index("本局完整出价日志")
+
+    def test_reminder_covers_four_steps_and_transfer_payment(self):
+        reminder = prompts.RULES_REMINDER
+        assert "撞车者全部扣除出价" in reminder
+        assert "唯一出价中最高者获胜" in reminder
+        assert "转判获得者照常扣除自己的出价，并非免费获赠" in reminder
+        assert "流局日撞车照扣" in reminder
+        assert "全额退还" in reminder
+
+    def test_other_requests_have_no_reminder(self):
+        standings = make_standings({n: [0] for n in NAMES})
+        assert "【规则要点重申】" not in prompts.next_match_plan_request({"乙": "发言"})
+        assert "【规则要点重申】" not in prompts.final_speech_request(standings, make_log(match_index=5))
 
 
 class TestRenderMatchLog:
@@ -265,11 +372,11 @@ class TestRenderMatchLog:
         assert "| 3 | 2 | 6 | 5 | 5 | 3 | 3 | 3 | 甲 以 6 获胜（冲顶税：2→1） | 2 |" in text
 
     def test_transfer_shown_in_outcome(self):
-        # 获胜价 6 且有次高唯一出价者：结果列带「转判 X 得 N」
+        # 获胜价 6 且有次高唯一出价者：结果列带「转判 X 得 N，照扣其出价」
         log = make_log(days=[make_day(3, [6, 5, 5, 3, 2, 0], 2, "甲", 6, 1, 1,
                                       transfer_recipient="丁", transfer_wins=1)])
         text = prompts.render_match_log(log)
-        assert "| 3 | 2 | 6 | 5 | 5 | 3 | 2 | 0 | 甲 以 6 获胜（冲顶税：2→1，转判 丁 得 1） | 1 |" in text
+        assert "| 3 | 2 | 6 | 5 | 5 | 3 | 2 | 0 | 甲 以 6 获胜（冲顶税：2→1，转判 丁 得 1，照扣其出价） | 1 |" in text
 
     def test_void_day_row(self):
         log = make_log(days=[make_day(1, [2, 2, 2, 1, 1, 1], 1, None, None, 2, is_void=True)])
@@ -340,6 +447,8 @@ class TestRulesText:
         assert "向上取整" in text and "向下取整" in text
         assert "次高唯一出价者" in text
         assert "以 0~5 获胜则获得奖池全部胜场" in text
+        # 强调句：实证有模型把转判当成「免费获赠」
+        assert "转判并非免费获赠" in text
 
     def test_settlement_examples_present(self):
         text = prompts.RULES_TEXT

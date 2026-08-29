@@ -135,6 +135,69 @@ class TestCoinSettlement:
         assert log.wins["乙"] == 3  # 赢家一次拿走含并入的全部奖池
 
 
+class TestMyLastDayObservation:
+    """Observation 携带昨日自我结算结果（出价/扣款/撞车/非法），供提示词直接告知。"""
+
+    def test_day1_has_no_last_day_fields(self):
+        seen = []
+
+        def strategy(obs):
+            if obs.day == 1:
+                seen.append(obs)
+            return 0
+
+        run_one_match({name: strategy for name in NAMES})
+        assert len(seen) == 6
+        for obs in seen:
+            assert obs.my_last_bid is None and obs.my_last_deduction is None
+            assert not obs.my_last_collided and not obs.my_last_bid_illegal
+
+    def test_crash_winner_refund_and_transfer_fields(self):
+        # 第 1 天：己唯一 1 获胜（奖池不滚存）；第 2 天（奖池 2）复现 RULES.md
+        # 结算示例一：6、5、5、3、2、0 → 甲出 6 获胜扣 6，丁出 3 获转判扣 3，
+        # 乙丙出 5 撞车各扣 5，戊出 2 唯一未中退还；第 3 天的 Observation 回看第 2 天
+        captured = {name: [] for name in NAMES}
+
+        def strategy(obs):
+            captured[obs.my_name].append(obs)
+            if obs.day == 1:
+                return 1 if obs.my_name == "己" else 0
+            if obs.day == 2:
+                return {"甲": 6, "乙": 5, "丙": 5, "丁": 3, "戊": 2, "己": 0}[obs.my_name]
+            return 0
+
+        run_one_match({name: strategy for name in NAMES})
+        day3 = {name: captured[name][2] for name in NAMES}
+
+        assert (day3["甲"].my_last_bid, day3["甲"].my_last_deduction) == (6, 6)
+        assert not day3["甲"].my_last_collided
+        assert (day3["丁"].my_last_bid, day3["丁"].my_last_deduction) == (3, 3)
+        assert not day3["丁"].my_last_collided  # 转判获得者不算撞车
+        assert (day3["乙"].my_last_bid, day3["乙"].my_last_deduction) == (5, 5)
+        assert day3["乙"].my_last_collided
+        assert (day3["戊"].my_last_bid, day3["戊"].my_last_deduction) == (2, 0)
+        assert not day3["戊"].my_last_collided
+
+    def test_illegal_bid_marked_and_zero_collision_on_void_day(self):
+        # 甲第 1 天出 6 获胜扣 6（余额 0）；第 2 天 +3 后出 5 非法记 0，
+        # 全员出 0 撞车流局——甲的非法出价记 0 且撞车、扣款 0
+        captured = []
+
+        def strategy(obs):
+            if obs.my_name == "甲":
+                captured.append(obs)
+                return {1: 6, 2: 5}.get(obs.day, 0)
+            return 0
+
+        log = run_one_match({name: strategy for name in NAMES})
+        assert log.days[1].is_void
+
+        day2_obs, day3_obs = captured[1], captured[2]
+        assert (day2_obs.my_last_bid, day2_obs.my_last_deduction) == (6, 6)
+        assert day3_obs.my_last_bid == 0 and day3_obs.my_last_bid_illegal
+        assert day3_obs.my_last_deduction == 0 and day3_obs.my_last_collided
+
+
 class TestPoolRollover:
     """流局奖池并入次日；第 5 天流局（或未拍出）则作废。"""
 

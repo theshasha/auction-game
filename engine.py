@@ -83,25 +83,52 @@ def run_match(
                 coins[name] += DAILY_SALARY
         pool = DAILY_POOL[day - 1] + rollover
 
+        # 昨日各玩家的自我结算结果（出价/扣款/撞车/非法），从昨日 DayResult 复算
+        my_last_by_player: dict[str, tuple[int, int, bool, bool]] = {}
+        if log.days:
+            yesterday_result = log.days[-1]
+            yesterday_counts = Counter(record.bid for record in yesterday_result.bids)
+            for record in yesterday_result.bids:
+                collided = yesterday_counts[record.bid] >= 2
+                paid = (
+                    record.player == yesterday_result.winner
+                    or record.player == yesterday_result.transfer_recipient
+                    or collided
+                )
+                my_last_by_player[record.player] = (
+                    record.bid,
+                    record.bid if paid else 0,
+                    collided,
+                    record.status != "ok",
+                )
+
         # 同一天内 6 人的排名快照完全相同，循环外算一次
         standings_snapshot = compute_standings(wins_history, match_wins)
-        observations = [
-            (
-                player,
-                Observation(
-                    my_name=player.name,
-                    my_coins=coins[player.name],
-                    my_match_wins=match_wins[player.name],
-                    my_total_wins=sum(wins_history[player.name]) + match_wins[player.name],
-                    day=day,
-                    today_pool=pool,
-                    today_history=[day_result.public_view() for day_result in log.days],
-                    standings=standings_snapshot,
-                    past_match_logs=past_log_dicts,
-                ),
+        observations = []
+        for player in players:
+            last_bid, last_deduction, last_collided, last_illegal = my_last_by_player.get(
+                player.name, (None, None, False, False)
             )
-            for player in players
-        ]
+            observations.append(
+                (
+                    player,
+                    Observation(
+                        my_name=player.name,
+                        my_coins=coins[player.name],
+                        my_match_wins=match_wins[player.name],
+                        my_total_wins=sum(wins_history[player.name]) + match_wins[player.name],
+                        day=day,
+                        today_pool=pool,
+                        today_history=[day_result.public_view() for day_result in log.days],
+                        standings=standings_snapshot,
+                        past_match_logs=past_log_dicts,
+                        my_last_bid=last_bid,
+                        my_last_deduction=last_deduction,
+                        my_last_collided=last_collided,
+                        my_last_bid_illegal=last_illegal,
+                    ),
+                )
+            )
 
         if bid_collector is None:
             raw_bids = [player.decide_bid(obs) for player, obs in observations]
