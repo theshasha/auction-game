@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from ai_player import AIPlayer, CallFailedError, PARSE_FAILED, ParseFailedError
+from ai_player import AIPlayer, CallFailedError, InvalidBidError, PARSE_FAILED, ParseFailedError
 from controller import Controller, RoundTask, TournamentAborted, run_parallel_round
 from models import Observation
 
@@ -13,7 +13,7 @@ ALL_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
 TEST_PREDICTIONS = [(name, 10) for name in ALL_NAMES]
 
 
-def make_obs(day=1, coins=6):
+def make_obs(day=1, coins=6, super_available=True):
     return Observation(
         my_name="Alpha",
         my_coins=coins,
@@ -24,6 +24,7 @@ def make_obs(day=1, coins=6):
         today_history=[],
         standings=[],
         past_match_logs=[],
+        my_super_available=super_available,
     )
 
 
@@ -65,29 +66,40 @@ def legacy_speech_reply(speech):
 class TestBidParsing:
     def test_normal_reply_parsed(self):
         player = make_player(fake_chat_fn([bid_reply(3)]))
-        assert player.decide_bid(make_obs()) == 3
+        assert player.decide_bid(make_obs()) == (3, None)
+
+    def test_super_bid_parsed(self):
+        # 同一 JSON 对象内带可选 super_bid 字段：一次提交两笔出价
+        reply = '分析：……\n{"bid": 4, "super_bid": 6}'
+        player = make_player(fake_chat_fn([reply]))
+        assert player.decide_bid(make_obs()) == (4, 6)
+
+    def test_null_super_bid_treated_as_unused(self):
+        reply = '分析：……\n{"bid": 4, "super_bid": null}'
+        player = make_player(fake_chat_fn([reply]))
+        assert player.decide_bid(make_obs()) == (4, None)
 
     def test_uses_last_json_block(self):
         content = "```json\n{\"bid\": 1}\n```\n改主意了\n```json\n{\"bid\": 4}\n```"
         player = make_player(fake_chat_fn([content]))
-        assert player.decide_bid(make_obs()) == 4
+        assert player.decide_bid(make_obs()) == (4, None)
 
     def test_bare_json_without_fence_parsed(self):
         # 提示词示例无围栏，模型直接输出裸 JSON 时必须能解析（实证：deepseek-v4-pro 曾裸输出）
         player = make_player(fake_chat_fn(["我的分析：……\n{\"bid\": 2}"]))
-        assert player.decide_bid(make_obs()) == 2
+        assert player.decide_bid(make_obs()) == (2, None)
 
     def test_bare_json_uses_last_valid_object(self):
         content = "先举个例子 {\"bid\": 1}，但改主意了\n{\"bid\": 5}"
         player = make_player(fake_chat_fn([content]))
-        assert player.decide_bid(make_obs()) == 5
+        assert player.decide_bid(make_obs()) == (5, None)
 
     def test_bare_json_last_object_without_bid_key_fails(self):
         # 最后一个合法 JSON 无 bid 键：不再向前找，按解析失败处理（重试 1 次后成功）
         script = ["正文引用了 {\"note\": \"x\"} 但没出价", bid_reply(3)]
         chat_fn = fake_chat_fn(script)
         player = make_player(chat_fn)
-        assert player.decide_bid(make_obs()) == 3
+        assert player.decide_bid(make_obs()) == (3, None)
         assert len(chat_fn.calls) == 2
 
     def test_missing_json_block_retries_once(self):
@@ -97,7 +109,7 @@ class TestBidParsing:
         ]
         chat_fn = fake_chat_fn(script)
         player = make_player(chat_fn)
-        assert player.decide_bid(make_obs()) == 2
+        assert player.decide_bid(make_obs()) == (2, None)
         assert len(chat_fn.calls) == 2
         retry_user_msg = player.messages[-2]["content"]
         assert "缺少合法的 JSON" in retry_user_msg
@@ -123,7 +135,7 @@ class TestBidParsing:
         # 空回复（渠道故障症状）按调用失败处理：立即重试，第二次正常出价
         chat_fn = fake_chat_fn(["", bid_reply(4)])
         player = make_player(chat_fn)
-        assert player.decide_bid(make_obs()) == 4
+        assert player.decide_bid(make_obs()) == (4, None)
         assert len(chat_fn.calls) == 2
         assert [m["role"] for m in player.messages] == ["system", "user", "assistant"]
 
@@ -140,18 +152,55 @@ class TestBidParsing:
         ]
         assert sum(1 for entry in log_entries if "EmptyResponseError" in entry.get("error", "")) == 2
 
-    def test_invalid_value_not_retried(self):
-        # 数值非法（超上限）由引擎判 illegal，AIPlayer 原样返回且不重试
-        chat_fn = fake_chat_fn([bid_reply(9)])
+    def test_invalid_value_retried_with_reason(self):
+        # 数值非法（超上限）：提醒重试并写清违规原因，第二次合法即通过
+        chat_fn = fake_chat_fn([bid_reply(9), bid_reply(6)])
         player = make_player(chat_fn)
-        assert player.decide_bid(make_obs()) == 9
-        assert len(chat_fn.calls) == 1
+        assert player.decide_bid(make_obs()) == (6, None)
+        assert len(chat_fn.calls) == 2
+        retry_user_msg = player.messages[-2]["content"]
+        assert "上一提交非法" in retry_user_msg
+        assert "超出 0~6 的范围" in retry_user_msg
+
+    def test_bid_over_balance_retried_with_reason(self):
+        # 超余额：提醒文案包含具体余额
+        chat_fn = fake_chat_fn([bid_reply(6), bid_reply(3)])
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_obs(coins=3)) == (3, None)
+        retry_user_msg = player.messages[-2]["content"]
+        assert "超过当前余额 3" in retry_user_msg
+
+    def test_double_invalid_escalates_as_invalid_bid_error(self, tmp_path):
+        # 提醒重试后仍非法：抛 InvalidBidError 升级轮级失败（游戏暂停等人工），
+        # 不再由引擎静默记 0；InvalidBidError 是 CallFailedError 子类
+        chat_fn = fake_chat_fn([bid_reply(9), bid_reply(8)])
+        player = make_player(chat_fn, tmp_path)
+        with pytest.raises(InvalidBidError) as exc_info:
+            player.decide_bid(make_obs())
+        assert isinstance(exc_info.value, CallFailedError)
+        assert "连续两次非法" in str(exc_info.value)
+        assert len(chat_fn.calls) == 2
+
+    def test_super_bid_reused_after_spent_is_invalid(self):
+        # 超级出价本局已用完（obs.my_super_available=False）仍提交 super_bid：
+        # 提醒重试，第二次去掉 super_bid 即通过
+        chat_fn = fake_chat_fn(['{"bid": 3, "super_bid": 6}', bid_reply(3)])
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_obs(super_available=False)) == (3, None)
+        retry_user_msg = player.messages[-2]["content"]
+        assert "超级出价本局已使用" in retry_user_msg
+
+    def test_super_bid_out_of_range_is_invalid(self):
+        chat_fn = fake_chat_fn(['{"bid": 3, "super_bid": 9}', bid_reply(3)])
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_obs()) == (3, None)
+        assert "超级出价 9 超出 0~6 的范围" in player.messages[-2]["content"]
 
     def test_error_then_success_recovers(self):
         # 第一次调用失败（如网络抖动）立即重试，成功后正常出价
         chat_fn = fake_chat_fn([RuntimeError("timeout"), bid_reply(4)])
         player = make_player(chat_fn)
-        assert player.decide_bid(make_obs()) == 4
+        assert player.decide_bid(make_obs()) == (4, None)
         assert len(chat_fn.calls) == 2
         # 失败的 user 消息已回滚，对话线只有 system + 成功的一问一答
         assert [m["role"] for m in player.messages] == ["system", "user", "assistant"]
@@ -214,13 +263,13 @@ class TestMarkdownLog:
         assert "## bid" in md_text
         assert "**【user】**" in md_text and "**【assistant】**" in md_text
         assert '```json\n{"bid": 3}\n```' in md_text  # 正文原样收录，不套外层围栏
-        assert "> 出价结果：3" in md_text
+        assert '> 出价结果：{"bid": 3, "super_bid": null}' in md_text
 
     def test_error_entry_rendered(self, tmp_path):
         # 第一次调用失败重试成功：md 含失败备注，且最终问答仍完整
         chat_fn = fake_chat_fn([RuntimeError("timeout"), bid_reply(4)])
         player = make_player(chat_fn, tmp_path)
-        assert player.decide_bid(make_obs()) == 4
+        assert player.decide_bid(make_obs()) == (4, None)
 
         md_text = self.read_md(player)
         assert "> 调用失败（bid，第1局第1天，第 1 次）：RuntimeError: timeout" in md_text
@@ -360,7 +409,7 @@ class TestSpeech:
     def test_bid_error_log_carries_round_context(self, tmp_path):
         chat_fn = fake_chat_fn([RuntimeError("timeout"), bid_reply(4)])
         player = make_player(chat_fn, tmp_path)
-        assert player.decide_bid(make_obs(day=2)) == 4
+        assert player.decide_bid(make_obs(day=2)) == (4, None)
 
         log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
         error_entry = next(entry for entry in log_entries if "error" in entry)
@@ -408,23 +457,32 @@ class TestPlanBidMerge:
         player = make_player(chat_fn)
         player.plan_strategy("请规划并出价", "opening_plan")
 
-        assert player.decide_bid(make_obs(day=1)) == 3
+        assert player.decide_bid(make_obs(day=1)) == (3, None)
         assert len(chat_fn.calls) == 1  # 第 1 天不再发 LLM 调用
+
+    def test_plan_caches_day1_super_bid(self):
+        # 规划回复的 JSON 可含 super_bid：第 1 天直接使用超级出价
+        chat_fn = fake_chat_fn(['我的策略：首日狙杀\n{"bid": 2, "super_bid": 6}'])
+        player = make_player(chat_fn)
+        player.plan_strategy("请规划并出价", "opening_plan")
+
+        assert player.decide_bid(make_obs(day=1)) == (2, 6)
+        assert len(chat_fn.calls) == 1
 
     def test_plan_cache_consumed_only_once(self):
         chat_fn = fake_chat_fn(["策略\n```json\n{\"bid\": 3}\n```", bid_reply(2)])
         player = make_player(chat_fn)
         player.plan_strategy("请规划并出价", "opening_plan")
 
-        assert player.decide_bid(make_obs(day=1)) == 3
-        assert player.decide_bid(make_obs(day=2)) == 2  # 缓存已消费，正常调用
+        assert player.decide_bid(make_obs(day=1)) == (3, None)
+        assert player.decide_bid(make_obs(day=2)) == (2, None)  # 缓存已消费，正常调用
         assert len(chat_fn.calls) == 2
 
     def test_plan_without_cache_falls_back_to_normal_call(self):
         # 未经过规划环节（如暂停重跑丢失缓存）：第 1 天照常发出价请求
         chat_fn = fake_chat_fn([bid_reply(5)])
         player = make_player(chat_fn)
-        assert player.decide_bid(make_obs(day=1)) == 5
+        assert player.decide_bid(make_obs(day=1)) == (5, None)
         assert len(chat_fn.calls) == 1
 
     def test_plan_parse_failure_retries_once(self):
@@ -432,7 +490,7 @@ class TestPlanBidMerge:
         player = make_player(chat_fn)
         player.plan_strategy("请规划并出价", "match_1_plan", "第 1 局局末")
 
-        assert player.decide_bid(make_obs(day=1)) == 4
+        assert player.decide_bid(make_obs(day=1)) == (4, None)
         assert len(chat_fn.calls) == 2
         assert "缺少合法的 JSON" in player.messages[-2]["content"]
 
@@ -455,7 +513,7 @@ class TestPlanBidMerge:
         player.plan_strategy("请规划并出价", "match_1_plan")
         player.plan_strategy("请重新规划并出价", "match_2_plan")
 
-        assert player.decide_bid(make_obs(day=1)) == 6
+        assert player.decide_bid(make_obs(day=1)) == (6, None)
 
 
 class TestController:
@@ -571,7 +629,7 @@ class TestParallelRound:
 
         controller.offer_command("")              # 回车仅重跑解析失败的 Bravo
         thread.join(timeout=5)
-        assert outcome["results"] == {"Alpha": 1, "Bravo": 2}
+        assert outcome["results"] == {"Alpha": (1, None), "Bravo": (2, None)}
         assert len(bravo_chat.calls) == 3
         assert len(alpha_chat.calls) == 1
         assert alpha.messages == alpha_snapshot
@@ -615,7 +673,7 @@ class TestParallelRound:
         assert "results" not in outcome  # 闸门未放行
         controller.offer_command("")     # 回车一次放行整轮
         thread.join(timeout=5)
-        assert outcome["results"] == {f"P{i}": i for i in range(6)}
+        assert outcome["results"] == {f"P{i}": (i, None) for i in range(6)}
         step_gates = [m for m in announcements if m.startswith("[单步]")]
         assert len(step_gates) == 1      # 整轮只闸门一次
         assert "测试轮" in step_gates[0]
@@ -654,7 +712,7 @@ class TestParallelRound:
 
         controller.offer_command("")              # 回车仅重跑失败的 Bravo
         thread.join(timeout=5)
-        assert outcome["results"] == {"Alpha": 1, "Bravo": 2}
+        assert outcome["results"] == {"Alpha": (1, None), "Bravo": (2, None)}
         assert len(bravo_chat.calls) == 3
         assert len(alpha_chat.calls) == 1         # Alpha 未被重跑
         assert alpha.messages == alpha_snapshot   # 成功者对话线原样保留
@@ -709,7 +767,7 @@ class TestParallelRound:
 
         controller.offer_command("")      # 恢复：仅补跑 Bravo
         thread.join(timeout=5)
-        assert outcome["results"] == {"Alpha": 1, "Bravo": 2}
+        assert outcome["results"] == {"Alpha": (1, None), "Bravo": (2, None)}
         assert len(alpha_chat.calls) == 1  # 已完成者保留，不重跑
         assert len(bravo_calls) == 2       # 在途结果被丢弃，恢复后重跑
         assert alpha.messages == alpha_snapshot

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import prompts
-from models import Observation
+from models import INITIAL_COINS, MAX_BID, Observation
 from players import Player
 
 JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
@@ -35,6 +35,12 @@ class ParseFailedError(CallFailedError):
     """原地重试 1 次后仍解析失败：升级为轮级失败（挂起等人工确认重跑），
     不再静默记 0 或把回复全文 fallback 公开。继承 CallFailedError 是为了
     直接复用 run_parallel_round 的轮级失败收集机制（controller 零改动）。"""
+
+
+class InvalidBidError(CallFailedError):
+    """解析成功但数值非法（超余额/超范围/非整数/超级出价次数已用完），
+    提醒重试 1 次后仍非法：升级为轮级失败挂起等人工，不再静默记 0。
+    与 ParseFailedError 并列区分日志语义（格式问题 vs 规则违反）。"""
 
 
 class AIPlayer(Player):
@@ -67,8 +73,9 @@ class AIPlayer(Player):
         ]
         self.chat_fn = chat_fn
         self.log_path = log_path
-        # 规划环节（与下一局第 1 天出价合并）缓存的首日出价，decide_bid 第 1 天直接消费
-        self._pending_day1_bid: Optional[int] = None
+        # 规划环节（与下一局第 1 天出价合并）缓存的首日提交 (正常出价, 超级出价)，
+        # decide_bid 第 1 天直接消费；缓存只保留到被消费，规划时先清后写
+        self._pending_day1_bid: Optional[tuple[int, Optional[int]]] = None
 
     # ---- 对话线维护 ----
 
@@ -187,11 +194,6 @@ class AIPlayer(Player):
         return PARSE_FAILED
 
     @staticmethod
-    def parse_bid(content: str):
-        """解析 bid 字段：与 parse_json_field(content, "bid") 等价，严格模式。"""
-        return AIPlayer.parse_json_field(content, "bid")
-
-    @staticmethod
     def _field_from_json_text(json_text: str, key: str, strict: bool):
         try:
             data = json.loads(json_text, strict=strict)
@@ -201,31 +203,130 @@ class AIPlayer(Player):
             return PARSE_FAILED
         return data[key]
 
-    def decide_bid(self, obs: Observation) -> int:
-        # 第 1 天信息恒定，出价已在规划环节一并给出：直接消费缓存，不再发 LLM 调用
+    @staticmethod
+    def parse_bid(content: str):
+        """解析 bid 字段：与 parse_json_field(content, "bid") 等价，严格模式。"""
+        return AIPlayer.parse_json_field(content, "bid")
+
+    @staticmethod
+    def parse_bid_object(content: str):
+        """解析含 bid 键的 JSON 对象整体（可同时含可选的 super_bid 键）：
+        优先取最后一个 ```json 围栏块；无围栏块时兜底取全文最后一个合法裸
+        JSON 对象；对象缺 bid 键即 PARSE_FAILED。出价 JSON 是扁平对象。"""
+        blocks = JSON_BLOCK_PATTERN.findall(content)
+        if blocks:
+            try:
+                data = json.loads(blocks[-1])
+            except json.JSONDecodeError:
+                return PARSE_FAILED
+            return data if isinstance(data, dict) and "bid" in data else PARSE_FAILED
+        for candidate in reversed(BARE_JSON_PATTERN.findall(content)):
+            try:
+                data = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue  # 不是合法 JSON，继续向前找
+            if isinstance(data, dict) and "bid" in data:
+                return data
+            return PARSE_FAILED  # 最后一个合法 JSON 对象无 bid 键，不再向前找
+        return PARSE_FAILED
+
+    @staticmethod
+    def validate_submission(
+        bid: object, super_bid: object, coins: int, super_available: bool
+    ) -> Optional[str]:
+        """校验一次出价提交（正常出价 + 可选超级出价），返回违规原因（None = 合法）。
+
+        校验条件与引擎 validate_bid / validate_super_bid 一致，另加次数检查；
+        在 AIPlayer 内拦截是为了能给模型一次带原因的提醒重试，而不是静默记 0。
+        """
+        if type(bid) is not int:  # bool 是 int 子类，同样视为非法
+            return f"bid 不是整数（{bid!r}）"
+        if bid < 0 or bid > MAX_BID:
+            return f"出价 {bid} 超出 0~{MAX_BID} 的范围"
+        if bid > coins:
+            return f"出价 {bid} 超过当前余额 {coins}"
+        if super_bid is None:
+            return None
+        if type(super_bid) is not int:
+            return f"super_bid 不是整数（{super_bid!r}）"
+        if super_bid < 0 or super_bid > MAX_BID:
+            return f"超级出价 {super_bid} 超出 0~{MAX_BID} 的范围"
+        if not super_available:
+            return "超级出价本局已使用，不能再提交"
+        return None
+
+    def _interpret_bid_response(
+        self, content: str, coins: int, super_available: bool
+    ) -> tuple[Optional[tuple[int, Optional[int]]], Optional[str]]:
+        """把一次回复解释为 (提交, None) 或 (None, 失败原因)。
+
+        失败原因 "parse" 表示解析失败（缺少合法 JSON 出价块），
+        其余字符串为具体的数值违规原因（用于提醒重试文案）。
+        """
+        data = self.parse_bid_object(content)
+        if data is PARSE_FAILED:
+            return None, "parse"
+        super_bid = data.get("super_bid")
+        reason = self.validate_submission(data["bid"], super_bid, coins, super_available)
+        if reason is not None:
+            return None, reason
+        return (data["bid"], super_bid), None
+
+    def _request_valid_bid(
+        self,
+        user_text: str,
+        phase: str,
+        context: str,
+        coins: int,
+        super_available: bool,
+    ) -> tuple[tuple[int, Optional[int]], str]:
+        """出价/规划共用的请求-校验闭环：一次请求 + 一次重试，返回 (提交, 正文)。
+
+        解析失败与数值非法共用同一条重试路径，提醒文案各自不同
+        （非法时写清具体违规原因）；第二次仍失败升级轮级失败挂起——
+        解析失败抛 ParseFailedError，数值非法抛 InvalidBidError。
+        """
+        content = self._guarded_call(user_text, phase, context)
+        submission, failure = self._interpret_bid_response(content, coins, super_available)
+        if failure is not None:
+            retry_text = (
+                prompts.retry_bid_request()
+                if failure == "parse"
+                else prompts.invalid_bid_retry_request(failure)
+            )
+            retry_content = self._guarded_call(retry_text, f"{phase}_retry", context)
+            submission, failure = self._interpret_bid_response(
+                retry_content, coins, super_available
+            )
+            if failure is not None:
+                self._write_log({"phase": phase, "parse_failed": True})
+                if failure == "parse":
+                    raise ParseFailedError(f"{self.name} 出价连续两次解析失败（{context}）")
+                raise InvalidBidError(
+                    f"{self.name} 出价连续两次非法（{context}）：{failure}"
+                )
+        result_text = json.dumps(
+            {"bid": submission[0], "super_bid": submission[1]}, ensure_ascii=False
+        )
+        self._write_log({"phase": phase, "result": result_text})
+        return submission, content
+
+    def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
+        """返回 (正常出价, 超级出价或 None)，保证数值合法（非法已走提醒重试）。
+
+        第 1 天信息恒定，出价已在规划环节一并给出并校验过：直接消费缓存，
+        不再发 LLM 调用。
+        """
         if obs.day == 1 and self._pending_day1_bid is not None:
-            bid = self._pending_day1_bid
+            submission = self._pending_day1_bid
             self._pending_day1_bid = None
-            return bid
+            return submission
 
         context = f"第{len(obs.past_match_logs) + 1}局第{obs.day}天"
-        content = self._guarded_call(prompts.bid_request(obs), "bid", context)
-
-        bid = self.parse_bid(content)
-        if bid is PARSE_FAILED:
-            # 模型输出格式问题（非基础设施故障）：原地重试 1 次，仍失败升级为
-            # 轮级失败（挂起等人工确认重跑），不再静默记 0
-            retry_content = self._guarded_call(
-                prompts.retry_bid_request(), "bid_retry", context
-            )
-            bid = self.parse_bid(retry_content)
-            if bid is PARSE_FAILED:
-                self._write_log({"phase": "bid", "parse_failed": True})
-                raise ParseFailedError(f"{self.name} 出价连续两次解析失败（{context}）")
-
-        # 数值是否合法由引擎统一校验（非法记 0 并标 illegal），这里原样返回不重试
-        self._write_log({"phase": "bid", "result": bid})
-        return bid
+        submission, _ = self._request_valid_bid(
+            prompts.bid_request(obs), "bid", context, obs.my_coins, obs.my_super_available
+        )
+        return submission
 
     # ---- 发言与规划 ----
 
@@ -276,23 +377,17 @@ class AIPlayer(Player):
     def plan_strategy(self, user_text: str, phase: str, context: str = "") -> str:
         """策略规划（与下一局第 1 天出价合并）：规划全文进对话线，只给自己看。
 
-        回复末尾的 JSON 出价缓存为下一局第 1 天出价（decide_bid 第 1 天直接消费，
-        缓存只保留到被消费，开局重新规划时先清后写，避免暂停重跑残留旧值）；
-        解析失败与出价同规则：重试 1 次，仍失败抛 ParseFailedError 升级为轮级失败。
+        回复末尾的 JSON 出价（可含 super_bid）缓存为下一局第 1 天提交
+        （decide_bid 第 1 天直接消费，缓存只保留到被消费，开局重新规划时
+        先清后写，避免暂停重跑残留旧值）；解析失败与数值非法同出价规则：
+        提醒重试 1 次，仍失败抛 ParseFailedError / InvalidBidError 升级轮级失败。
+        第 1 天余额恒为 INITIAL_COINS、超级出价恒可用，校验用常量。
         """
         self._pending_day1_bid = None
-        content = self._guarded_call(user_text, phase, context).strip()
-        bid = self.parse_bid(content)
-        if bid is PARSE_FAILED:
-            retry_content = self._guarded_call(
-                prompts.retry_bid_request(), f"{phase}_retry", context
-            )
-            bid = self.parse_bid(retry_content)
-            if bid is PARSE_FAILED:
-                self._write_log({"phase": phase, "parse_failed": True})
-                raise ParseFailedError(f"{self.name} 规划连续两次解析失败（{phase}）")
-        self._write_log({"phase": phase, "result": bid})
-        self._pending_day1_bid = bid
+        submission, content = self._request_valid_bid(
+            user_text, phase, context, INITIAL_COINS, super_available=True
+        )
+        self._pending_day1_bid = submission
         return content
 
     def final_summary(self, user_text: str, context: str = "") -> str:

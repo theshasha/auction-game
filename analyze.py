@@ -41,17 +41,22 @@ def load_match_logs(run_dir: Path) -> list[dict]:
 
 def recompute_remaining_coins(match: dict) -> dict[str, int]:
     """按规则从出价日志重放金币：第 2 天起每天 +3 工资；
-    获胜者、转判获得者（新规则日志）与撞车者扣除出价（流局日撞车照扣），其余全额退还。"""
-    coins = {bid["player"]: INITIAL_COINS for bid in match["days"][0]["bids"]}
+    只扣正常出价——凭正常出价获胜者（旧规则日志含转判获得者）与撞车者扣除出价
+    （流局日撞车照扣），其余全额退还；超级出价（is_super）任何结局都不扣款。"""
+    coins = {bid["player"]: INITIAL_COINS for bid in match["days"][0]["bids"] if not bid.get("is_super")}
     for day in match["days"]:
         if day["day"] >= 2:
             for name in coins:
                 coins[name] += DAILY_SALARY
         price_counts = Counter(bid["bid"] for bid in day["bids"])
-        transfer_recipient = day.get("transfer_recipient")  # 旧规则日志无此字段
+        transfer_recipient = day.get("transfer_recipient")  # 旧规则日志（含冲顶税转判）才有此字段
+        winner_paid_with_super = day.get("winning_is_super", False)
         for bid in day["bids"]:
+            if bid.get("is_super"):
+                continue  # 超级出价永不扣款
             is_collider = price_counts[bid["bid"]] >= 2
-            if bid["player"] == day["winner"] or bid["player"] == transfer_recipient or is_collider:
+            won_with_normal = bid["player"] == day["winner"] and not winner_paid_with_super
+            if won_with_normal or bid["player"] == transfer_recipient or is_collider:
                 coins[bid["player"]] -= bid["bid"]
     return coins
 
@@ -71,18 +76,17 @@ def analyze(run_dir: Path) -> None:
     illegal_bids = 0
     zero_bids = 0
     zero_bid_wins = 0
-    collision_burn = 0   # 因撞车被没收的金币总数（不含获胜者/转判获得者支付）
-    cap_tax_days = 0        # 获胜价=6 触发冲顶税与转判的天数
-    cap_tax_wins_kept = 0      # 冲顶税天获胜者实得的胜场合计
-    transfer_wins_total = 0    # 转判给次高唯一出价者的胜场合计
-    transfer_days = 0          # 实际发生转判的天数
-    forfeited_wins = 0         # 无次高唯一出价者而作废的转判胜场合计（新规则日志才有此口径）
+    collision_burn = 0   # 因撞车被没收的金币总数（只算正常出价；超级出价不扣款）
+    super_uses = 0          # 超级出价使用总次数
+    super_wins = 0          # 凭超级出价获胜的天数
+    super_collisions = 0    # 超级出价撞车的次数（狙杀/对撞）
+    cap_wins = 0            # 获胜价=6 的天数（新规则无冲顶税，仅作分布参考）
 
     for payload in matches:
         match = payload["match"]
         wins = match["wins"]
         for name, win_count in wins.items():
-            if win_count >= 4:  # 单局多胜口径：≥4 胜场（约等于赢 2 个 2-pool 天）
+            if win_count >= 3:  # 单局多胜口径：≥3 胜场（每天奖池 1 个、单局共 5 个）
                 multi_win_matches.append((match["match_index"], name, win_count))
 
         for day in match["days"]:
@@ -94,22 +98,21 @@ def analyze(run_dir: Path) -> None:
                     illegal_bids += 1
                 if bid["bid"] == 0:
                     zero_bids += 1
-                if price_counts[bid["bid"]] >= 2:
+                if bid.get("is_super"):
+                    super_uses += 1
+                    if price_counts[bid["bid"]] >= 2:
+                        super_collisions += 1
+                elif price_counts[bid["bid"]] >= 2:
                     collision_burn += bid["bid"]
             if day["is_void"]:
                 void_days += 1
                 continue
             bids_by_day_index.setdefault(day["day"], []).extend(b["bid"] for b in day["bids"])
             winning_bids.append(day["winning_bid"])
-            if day["winning_bid"] == 6:  # 冲顶税与转判：获胜者得一半（向上取整）
-                cap_tax_days += 1
-                cap_tax_wins_kept += day["wins_taken"]
-                # 旧规则日志（冲顶税=奖池-1 作废）无 transfer 字段，用 .get 容错
-                transfer_wins = day.get("transfer_wins", 0)
-                transfer_wins_total += transfer_wins
-                if day.get("transfer_recipient") is not None:
-                    transfer_days += 1
-                forfeited_wins += day["pool"] - day["wins_taken"] - transfer_wins
+            if day["winning_bid"] == 6:
+                cap_wins += 1
+            if day.get("winning_is_super"):
+                super_wins += 1
             if day["winning_bid"] == 0:
                 zero_bid_wins += 1
         remaining_coins_all.extend(recompute_remaining_coins(match).values())
@@ -144,12 +147,12 @@ def analyze(run_dir: Path) -> None:
     print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
           f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
     print(f"撞车放血：全场因撞车被没收 {collision_burn} 金币"
-          f"（每局平均 {collision_burn / len(matches):.1f}）")
-    print(f"冲顶税与转判：触发 {cap_tax_days} 天，获胜者实得 {cap_tax_wins_kept} 个胜场，"
-          f"转判 {transfer_days} 天共 {transfer_wins_total} 个胜场，作废 {forfeited_wins} 个")
+          f"（每局平均 {collision_burn / len(matches):.1f}，只计正常出价）")
+    print(f"超级出价：使用 {super_uses} 次，凭超级出价获胜 {super_wins} 天，"
+          f"超级出价撞车 {super_collisions} 次")
     print()
 
-    print(f"单局 ≥4 胜场的玩家-局次数：{len(multi_win_matches)}"
+    print(f"单局 ≥3 胜场的玩家-局次数：{len(multi_win_matches)}"
           f"（占 {len(matches)} 局的 {len({m for m, _, _ in multi_win_matches})} 局）")
     for match_index, name, win_count in multi_win_matches:
         print(f"  第 {match_index} 局：{name} 共 {win_count} 胜场")

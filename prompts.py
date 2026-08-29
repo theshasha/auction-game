@@ -21,24 +21,34 @@ from models import (
 
 RULES_TEXT = (Path(__file__).parent / "RULES.md").read_text(encoding="utf-8").strip()
 
-# 局末展示出价日志前的精简规则重申：结算四步是模型复盘局日志时的框架，
-# 实证错误（如「转判获得者免费得胜场」「自己撞车推成退款」）都源于复盘时
-# 没套用这四步。只放局末发言请求（局日志唯一展示处），不重发全文。
+# 局末展示出价日志前的精简规则重申：结算三步是模型复盘局日志时的框架，
+# 实证错误（如「自己撞车推成退款」）都源于复盘时没套用这三步。
+# 只放局末发言请求（局日志唯一展示处），不重发全文。
 RULES_REMINDER = (
-    "【规则要点重申】每日结算按四步：① 某数值被两名及以上玩家出了即撞车，撞车者全部扣除出价；"
-    "② 唯一出价中最高者获胜（0 是合法价位），当天无唯一出价则流局、奖池并入次日；"
-    "③ 获胜价为 6 时，获胜者只得奖池一半（向上取整），另一半（向下取整）转判次高唯一出价者"
-    "——转判获得者照常扣除自己的出价，并非免费获赠；无次高唯一出价者该部分作废；"
-    "④ 获胜者、转判获得者与撞车者扣除各自出价（流局日撞车照扣），其余玩家全额退还。"
-    "他人的出价与余额不公布，只能由每日公布信息推断，推断可能出错。"
+    "【规则要点重申】每日结算按三步：① 当天全部出价（含所有人的超级出价）按数值逐笔计数，"
+    "某数值出现两笔及以上即撞车，撞车的正常出价全部扣除、超级出价不扣款；"
+    "② 唯一出价中最高的一笔获胜、其主人获得当天全部奖池（0 是合法价位），"
+    "当天无唯一出价则流局、奖池并入次日；"
+    "③ 获胜者凭正常出价获胜的扣除该出价、凭超级出价获胜不扣款，"
+    "其余正常出价全额退还。超级出价每人每局一次、不受余额限制、任何结局都不扣金币；"
+    "每天只公布谁使用了超级出价，不公布其数值。"
+    "他人的出价与余额不公布，只能由公布信息推断，推断可能出错。"
 )
 
 
 def bid_format_hint() -> str:
-    """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。"""
+    """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。
+
+    super_bid 为可选字段：不使用就不要包含该字段；使用时两笔出价放在一个
+    JSON 对象里一次提交。
+    """
     return (
         "请先分析当前局势，然后在回复末尾用如下 JSON 给出今日出价：\n"
-        f'{{"bid": <0到{MAX_BID}的整数，不得超过你的余额>}}'
+        f'{{"bid": <0到{MAX_BID}的整数，不得超过你的余额>}}\n'
+        f"若要同时使用超级出价（本局仅 1 次机会，0到{MAX_BID}的整数，不受余额限制，"
+        "参与撞车与获胜判定，但任何结局都不扣金币），格式为：\n"
+        '{"bid": <正常出价>, "super_bid": <超级出价>}\n'
+        "不使用超级出价就不要包含 super_bid 字段。"
     )
 
 
@@ -124,35 +134,43 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
 
     零信息泄露（自己的出价与余额变化本来就可推出），只是免去推导——实证模型
     会把自己的撞车推成「唯一未中退款」且不与状态行余额核对，错误随即级联。
+    正常出价与超级出价的结局分段给出（超级出价任何结局都不扣款）。
     """
     if obs.my_last_bid is None:
         return None
     yesterday = obs.today_history[-1]
+    is_void = yesterday["winner"] == "流局"
+    won = yesterday["winner"] == obs.my_name
+    # 我凭哪笔出价获胜可由自己的两笔数值推出：获胜价等于我的哪笔就是哪笔
+    # （两笔同值必然撞车不可能获胜，故无歧义）
+    won_with_super = won and obs.my_last_super_bid == yesterday["winning_bid"]
+
     if obs.my_last_bid_illegal:
-        segments = ["出价非法按规则记 0"]
+        segments = ["正常出价非法按规则记 0"]
     else:
-        segments = [f"出价 {obs.my_last_bid}"]
-    if yesterday["winner"] == "流局":
+        segments = [f"正常出价 {obs.my_last_bid}"]
+    if is_void:
         segments.append(f"当天流局全员撞车，扣除 {obs.my_last_deduction}")
-    elif yesterday["winner"] == obs.my_name:
-        if yesterday["winning_bid"] == MAX_BID:
-            segments.append(
-                f"唯一最高出价获胜，缴冲顶税后实得 {yesterday['wins_taken']} 个胜场，"
-                f"扣除 {obs.my_last_deduction}"
-            )
-        else:
-            segments.append(
-                f"唯一最高出价获胜，赢得 {yesterday['wins_taken']} 个胜场，"
-                f"扣除 {obs.my_last_deduction}"
-            )
-    elif yesterday["transfer_recipient"] == obs.my_name:
+    elif won and not won_with_super:
         segments.append(
-            f"获转判 {yesterday['transfer_wins']} 个胜场，照常扣除 {obs.my_last_deduction}"
+            f"唯一最高出价获胜，赢得 {yesterday['wins_taken']} 个胜场，"
+            f"扣除 {obs.my_last_deduction}"
         )
     elif obs.my_last_collided:
         segments.append(f"与他人撞车，扣除 {obs.my_last_deduction}")
     else:
         segments.append("是唯一出价但未获胜，全额退还")
+
+    if obs.my_last_super_bid is not None:
+        if won_with_super:
+            segments.append(
+                f"超级出价 {obs.my_last_super_bid} 唯一最高获胜，"
+                f"赢得 {yesterday['wins_taken']} 个胜场，不扣金币"
+            )
+        elif is_void or obs.my_last_super_collided:
+            segments.append(f"超级出价 {obs.my_last_super_bid} 撞车，不扣款")
+        else:
+            segments.append(f"超级出价 {obs.my_last_super_bid} 是唯一出价但未获胜，不扣款")
     return "昨日你的结果：" + "，".join(segments) + "。"
 
 
@@ -167,7 +185,8 @@ def bid_request(obs: Observation) -> str:
     status_line = (
         f"今日奖池：{obs.today_pool} 个胜场；"
         f"你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）；"
-        f"本局已获胜场：{obs.my_match_wins}；你的累计总胜场：{obs.my_total_wins}。"
+        f"本局已获胜场：{obs.my_match_wins}；你的累计总胜场：{obs.my_total_wins}；"
+        f"{_super_status_text(obs)}。"
     )
     if not obs.today_history:
         # 首日：单行不换句
@@ -179,23 +198,14 @@ def bid_request(obs: Observation) -> str:
             f"昨日公布：流局，奖池 {yesterday['pool']} 个胜场并入今日，"
             f"撞车价位 {yesterday['collision_price_count']} 个。"
         )
-    elif yesterday["winning_bid"] == MAX_BID:
-        announcement = (
-            f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
-            f"奖池 {yesterday['pool']} 个胜场，缴冲顶税后实得 {yesterday['wins_taken']} 个，"
-        )
-        if yesterday["transfer_recipient"] is not None:
-            announcement += (
-                f"转判 {yesterday['transfer_recipient']} 获得 {yesterday['transfer_wins']} 个"
-                f"（转判获得者照常扣除自己的出价），"
-            )
-        announcement += f"撞车价位 {yesterday['collision_price_count']} 个。"
     else:
         announcement = (
             f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
             f"赢得 {yesterday['pool']} 个胜场，"
             f"撞车价位 {yesterday['collision_price_count']} 个。"
         )
+    if yesterday["super_users"]:
+        announcement += f"昨日使用超级出价：{'、'.join(yesterday['super_users'])}（数值不公布）。"
     lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement]
     my_last_line = _my_last_day_line(obs)
     if my_last_line is not None:
@@ -204,34 +214,56 @@ def bid_request(obs: Observation) -> str:
     return "\n".join(lines) + "\n\n" + bid_format_hint()
 
 
+def _super_status_text(obs: Observation) -> str:
+    """状态行中的超级出价状态：明示剩余次数，模型不用自己记。"""
+    if obs.my_super_available:
+        return f"超级出价：可用（本局仅 1 次，0到{MAX_BID}任意整数，不受余额限制）"
+    return f"超级出价：已用（本局第 {obs.my_super_used_day} 天）"
+
+
 def retry_bid_request() -> str:
     return (
         "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + bid_format_hint()
     )
 
 
+def invalid_bid_retry_request(reason: str) -> str:
+    """数值非法（解析成功但违反出价规则）的提醒重试：写清具体违规原因。"""
+    return f"你的上一提交非法：{reason}。请重新出价。\n\n" + bid_format_hint()
+
+
 def render_match_log(log: MatchLog) -> str:
-    """整局出价日志渲染为 markdown 表格：玩家列顺序取首日出价顺序（即 config 顺序）。"""
+    """整局出价日志渲染为 markdown 表格：玩家列顺序取首日正常出价顺序（即 config 顺序）。
+
+    出价单元格含超级出价时写作「5+超6」；凭超级出价获胜在结果列标注
+    （获胜也不扣金币）。
+    """
     if not log.days:
         return "  （本局未进行任何拍卖）"
-    player_names = [record.player for record in log.days[0].bids]
+    player_names = [record.player for record in log.days[0].bids if not record.is_super]
     header = "| 天 | 奖池 | " + " | ".join(player_names) + " | 结果 | 撞车价位 |"
     separator = "|" + " --- |" * (len(player_names) + 4)
     rows = []
     for day in log.days:
-        bid_by_player = {record.player: record.bid for record in day.bids}
-        bid_cells = " | ".join(str(bid_by_player[name]) for name in player_names)
+        cells = []
+        for name in player_names:
+            normal = next(record for record in day.bids if record.player == name and not record.is_super)
+            super_record = next(
+                (record for record in day.bids if record.player == name and record.is_super),
+                None,
+            )
+            cell = str(normal.bid)
+            if super_record is not None:
+                cell += f"+超{super_record.bid}"
+            cells.append(cell)
         if day.is_void:
             outcome = "流局（奖池作废）" if day.day == MAX_DAYS else "流局（奖池并入次日）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
-            if day.winning_bid == MAX_BID:
-                outcome += f"（冲顶税：{day.pool}→{day.wins_taken}"
-                if day.transfer_recipient is not None:
-                    outcome += f"，转判 {day.transfer_recipient} 得 {day.transfer_wins}，照扣其出价"
-                outcome += "）"
+            if day.winning_is_super:
+                outcome += "（凭超级出价，不扣金币）"
         rows.append(
-            f"| {day.day} | {day.pool} | {bid_cells} | {outcome} | {day.collision_price_count} |"
+            f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {day.collision_price_count} |"
         )
     wins_text = "、".join(f"{name} {w} 胜" for name, w in log.wins.items())
     lines = [header, separator, *rows, "", f"本局胜场：{wins_text}"]
@@ -262,7 +294,7 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], wil
     lines = [
         f"第 {log.match_index} 局（{kind}）结束。",
         # 局日志是模型复盘他人出价的唯一材料，复盘前先重申结算框架（实证错误
-        # 多因复盘时不套用结算四步，而非遗忘条款）
+        # 多因复盘时不套用结算步骤，而非遗忘条款）
         RULES_REMINDER,
         f"本局完整出价日志：\n{render_match_log(log)}",
         f"截至当前的累计排名与胜场明细：\n{render_standings(standings)}",

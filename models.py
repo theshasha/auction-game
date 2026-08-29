@@ -8,19 +8,21 @@ from typing import Any, Optional
 INITIAL_COINS = 6              # 每局初始金币
 DAILY_SALARY = 3               # 第 2 天起每天开始时每人发放的工资
 MAX_DAYS = 5                   # 每局固定天数（流局不顺延天数，只把奖池并入次日）
-MAX_BID = 6                    # 出价上限（固定）
-DAILY_POOL = (1, 2, 2, 2, 2)   # 每天奖池的胜场数（后载：第 5 天永远有货，不用提前结束）
-WINS_PER_MATCH = sum(DAILY_POOL)  # 每局拍卖的胜场总数（9）
+MAX_BID = 6                    # 出价上限（固定；超级出价同上限但不查余额）
+DAILY_POOL = (1, 1, 1, 1, 1)   # 每天奖池的胜场数（固定 1，流局并入次日）
+WINS_PER_MATCH = sum(DAILY_POOL)  # 每局拍卖的胜场总数（5）
 
 
 @dataclass
 class BidRecord:
-    """一名玩家某一天的出价记录（对局内保密，局末公开）。"""
+    """一笔出价记录（对局内保密，局末公开）。一名玩家一天最多产生两笔：
+    正常出价 + 超级出价（is_super=True，不消耗金币、不受余额限制）。"""
 
     player: str
     raw_bid: Any          # 玩家提交的原始值，用于审计非法出价
-    bid: int              # 校验后的有效出价（非法一律记 0）
-    status: str = "ok"    # "ok" | "illegal"
+    bid: int              # 校验后的有效出价（正常出价非法一律记 0）
+    status: str = "ok"    # "ok" | "illegal"（超级出价只可能为 "ok"，非法则在收集层拦截重试）
+    is_super: bool = False  # 超级出价：参与撞车与获胜判定，但任何结局都不扣金币
 
 
 @dataclass
@@ -32,22 +34,22 @@ class DayResult:
     pool: int                    # 当天奖池的胜场数（含流局并入）
     winner: Optional[str]        # None 表示流局
     winning_bid: Optional[int]
-    wins_taken: int              # 获胜者实际获得的胜场数（冲顶税后；流局为 0）
-    transfer_recipient: Optional[str] = None  # 冲顶税转判获得者（次高唯一出价者；无则 None）
-    transfer_wins: int = 0       # 转判获得的胜场数（无转判对象时该部分作废，此字段为 0）
+    wins_taken: int              # 获胜者实际获得的胜场数（恒等于 pool；流局为 0）
+    winning_is_super: bool = False   # 获胜的是否为超级出价（获胜也不扣款）
+    super_users: list[str] = field(default_factory=list)  # 当天使用超级出价的玩家（每日公布）
     collision_price_count: int = 0   # 当天撞车价位的个数（全部撞车价位）
     is_void: bool = False            # 是否流局（奖池并入次日；第 5 天流局则作废）
 
     def public_view(self) -> dict:
-        """规则四.1：每天结束时系统公布的信息（获胜者身份与获胜价 + 撞车价位个数 + 转判获得者）。"""
+        """规则五.1：每天结束时系统公布的信息（获胜者身份与获胜价 + 撞车价位个数
+        + 超级出价使用情况——只公布谁用了，不公布数值）。"""
         return {
             "day": self.day,
             "winner": self.winner if not self.is_void else "流局",
             "winning_bid": self.winning_bid,
             "pool": self.pool,
             "wins_taken": self.wins_taken,
-            "transfer_recipient": self.transfer_recipient,
-            "transfer_wins": self.transfer_wins,
+            "super_users": list(self.super_users),
             "collision_price_count": self.collision_price_count,
         }
 
@@ -70,15 +72,21 @@ class MatchLog:
                 {
                     "day": day.day,
                     "bids": [
-                        {"player": b.player, "raw_bid": b.raw_bid, "bid": b.bid, "status": b.status}
+                        {
+                            "player": b.player,
+                            "raw_bid": b.raw_bid,
+                            "bid": b.bid,
+                            "status": b.status,
+                            "is_super": b.is_super,
+                        }
                         for b in day.bids
                     ],
                     "pool": day.pool,
                     "winner": day.winner,
                     "winning_bid": day.winning_bid,
                     "wins_taken": day.wins_taken,
-                    "transfer_recipient": day.transfer_recipient,
-                    "transfer_wins": day.transfer_wins,
+                    "winning_is_super": day.winning_is_super,
+                    "super_users": list(day.super_users),
                     "collision_price_count": day.collision_price_count,
                     "is_void": day.is_void,
                 }
@@ -110,10 +118,16 @@ class Observation:
     today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）
     standings: list[StandingsEntry]   # 截至当前的累计排名（含本局已决出的胜场）
     past_match_logs: list[dict]  # 已结束各局的完整公开日志
+    # 超级出价状态：由引擎按本局已落日志权威计算（不用玩家自己记，暂停回滚
+    # 丢弃结果时状态天然一致）。available=False 时 used_day 为使用日。
+    my_super_available: bool = True
+    my_super_used_day: Optional[int] = None
     # 昨日自己的结算结果（第 1 天为 None/默认值）。自己的出价与扣款本来就可从
     # 对话历史与余额变化推出，直接给结论不泄露任何信息——实证模型复盘自己的
     # 结局时经常推错且不与状态行余额核对，错误随后级联到全场资金推断。
-    my_last_bid: Optional[int] = None      # 昨日自己的有效出价（非法出价已记 0）
-    my_last_deduction: Optional[int] = None  # 昨日自己被扣除的金币（退还为 0）
-    my_last_collided: bool = False         # 昨日自己是否撞车
-    my_last_bid_illegal: bool = False      # 昨日出价是否非法（被规则记 0）
+    my_last_bid: Optional[int] = None      # 昨日自己的有效正常出价（非法出价已记 0）
+    my_last_deduction: Optional[int] = None  # 昨日自己被扣除的金币（退还为 0；超级出价永不计入）
+    my_last_collided: bool = False         # 昨日自己的正常出价是否撞车
+    my_last_bid_illegal: bool = False      # 昨日正常出价是否非法（被规则记 0）
+    my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
+    my_last_super_collided: bool = False     # 昨日自己的超级出价是否撞车（公开信息推不出，引擎直接给）
