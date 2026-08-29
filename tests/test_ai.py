@@ -10,6 +10,7 @@ from controller import Controller, RoundTask, TournamentAborted, run_parallel_ro
 from models import Observation
 
 ALL_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
+TEST_PREDICTIONS = [(name, 10) for name in ALL_NAMES]
 
 
 def make_obs(day=1, coins=6):
@@ -44,7 +45,7 @@ def fake_chat_fn(script):
 
 def make_player(chat_fn, tmp_path=None):
     log_path = (tmp_path / "ai_Alpha.jsonl") if tmp_path else None
-    return AIPlayer("Alpha", "测试人设", ALL_NAMES, chat_fn, log_path=log_path)
+    return AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, chat_fn, log_path=log_path)
 
 
 def bid_reply(bid):
@@ -450,7 +451,7 @@ class TestParallelRound:
         controller = Controller(mode="step", announce=announcements.append)
         barrier = threading.Barrier(6)  # 若被串行执行将超时破碎，以此证明并发
         players = [
-            AIPlayer(f"P{i}", "测试人设", ALL_NAMES, fake_chat_fn([bid_reply(i)]))
+            AIPlayer(f"P{i}", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, fake_chat_fn([bid_reply(i)]))
             for i in range(6)
         ]
 
@@ -488,9 +489,9 @@ class TestParallelRound:
 
         controller = Controller(mode="continuous", announce=announce)
         alpha_chat = fake_chat_fn([bid_reply(1)])
-        alpha = AIPlayer("Alpha", "测试人设", ALL_NAMES, alpha_chat)
+        alpha = AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, alpha_chat)
         bravo_chat = fake_chat_fn([RuntimeError("超时"), RuntimeError("余额不足"), bid_reply(2)])
-        bravo = AIPlayer("Bravo", "测试人设", ALL_NAMES, bravo_chat)
+        bravo = AIPlayer("Bravo", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, bravo_chat)
         tasks = [
             RoundTask(key="Alpha", player=alpha, fn=lambda: alpha.decide_bid(make_obs())),
             RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_obs())),
@@ -528,7 +529,7 @@ class TestParallelRound:
         controller = Controller(mode="continuous", announce=announce)
         alpha_done = threading.Event()
         alpha_chat = fake_chat_fn([bid_reply(1)])
-        alpha = AIPlayer("Alpha", "测试人设", ALL_NAMES, alpha_chat)
+        alpha = AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, alpha_chat)
 
         def alpha_fn():
             result = alpha.decide_bid(make_obs())
@@ -543,7 +544,7 @@ class TestParallelRound:
             release_bravo.wait(timeout=5)
             return bid_reply(2)
 
-        bravo = AIPlayer("Bravo", "测试人设", ALL_NAMES, bravo_chat)
+        bravo = AIPlayer("Bravo", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, bravo_chat)
         tasks = [
             RoundTask(key="Alpha", player=alpha, fn=alpha_fn),
             RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_obs())),

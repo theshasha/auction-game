@@ -194,7 +194,12 @@ def run_ai() -> None:
     timeout = llm_config.get("timeout_seconds", 60)
 
     player_configs = config["players"]
+    personas = config["personas"]
+    if len(personas) != len(player_configs):
+        print(f"错误：config.yaml 中 personas 数量（{len(personas)}）与 players 数量（{len(player_configs)}）不一致")
+        return
     all_names = [pc["name"] for pc in player_configs]
+    predictions = [(pc["name"], pc.get("predicted_win_rate", 0)) for pc in player_configs]
 
     chat_fns = {}
     for pc in player_configs:
@@ -215,15 +220,17 @@ def run_ai() -> None:
     players = [
         AIPlayer(
             name=pc["name"],
-            persona=pc["persona"],
+            persona_title=persona["title"],
+            persona_text=persona["text"],
+            predictions=predictions,
             all_names=all_names,
             chat_fn=chat_fns[pc["name"]],
             log_path=run_dir / f"ai_{pc['name']}.jsonl",
         )
-        for pc in player_configs
+        for pc, persona in zip(player_configs, personas)
     ]
-    for pc in player_configs:
-        print(f"{pc['name']}: {pc['provider']} / {pc['model']}")
+    for pc, persona in zip(player_configs, personas):
+        print(f"{pc['name']}: {pc['provider']} / {pc['model']}（人设：{persona['title']}）")
 
     controller.start_stdin_reader()
     print("命令：回车=推进一轮 / c=连续模式 / s=单步模式 / p=暂停（保留已完成，恢复后仅补跑未完成）/ q=中止比赛")

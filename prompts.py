@@ -60,13 +60,28 @@ def retry_speech_request() -> str:
     return "你的上一条回复缺少合法的 JSON 发言块，请重新发言。\n\n" + speech_format_hint()
 
 
-def build_system_prompt(name: str, persona: str, all_names: list[str]) -> str:
+def build_system_prompt(
+    name: str,
+    persona_title: str,
+    persona_text: str,
+    predictions: list[tuple[str, int]],
+    all_names: list[str],
+) -> str:
+    """system 提示词：规则 + 身份 + 人设 + 全员公开的赛前预测。
+
+    人设只约束公开发言的口吻（开局/局末/终局感言），出价推理与策略规划
+    明确要求保持冷静认真——实证三无/天然呆类人设若带入推理会拉低决策质量。
+    predictions 是虚构数字（config 静态配置），与真实表现无关。
+    """
     others = "、".join(n for n in all_names if n != name)
+    prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
     return (
         f"{RULES_TEXT}\n"
         f"【你的身份】\n你叫 {name}，其他五位玩家是：{others}。\n"
-        f"【你的人设】\n{persona}\n"
-        "请始终以这个人设的口吻思考、发言和决策。"
+        f"【你的人设】\n{persona_title}：{persona_text}\n"
+        f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
+        "公开发言（开局发言、局末发言、终局感言）请始终以人设的口吻进行；"
+        "出价推理与策略规划请保持冷静认真的分析，不需要维持角色口吻。"
     )
 
 

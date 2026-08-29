@@ -42,6 +42,27 @@ def make_standings(wins_history: dict[str, list[int]]):
     return entries
 
 
+class TestSystemPrompt:
+    """system 提示词：规则全文 + 身份 + 人设 + 全员公开的赛前预测 + 人设作用范围。"""
+
+    def test_includes_persona_and_scope(self):
+        system = prompts.build_system_prompt(
+            "甲", "傲娇大小姐", "自称本小姐。", [(name, 10) for name in NAMES], NAMES
+        )
+        assert "你叫 甲" in system
+        assert "傲娇大小姐：自称本小姐。" in system
+        # 人设只约束公开发言，出价推理明确要求保持冷静认真
+        assert "不需要维持角色口吻" in system
+
+    def test_predictions_public_to_everyone(self):
+        predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
+        for name in NAMES:
+            system = prompts.build_system_prompt(name, "人设", "正文", predictions, NAMES)
+            assert "甲 50%" in system and "己 0%" in system  # 全员可见，含他人与自己的
+        system = prompts.build_system_prompt("甲", "人设", "正文", predictions, NAMES)
+        assert "乙、丙、丁、戊、己" in system  # 其他五位玩家名单
+
+
 class TestSpeechWordLimits:
     """字数只是提示词软要求：开局/局末 300 字，感言/总结不限，规则文本不提字数。"""
 

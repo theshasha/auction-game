@@ -34,14 +34,21 @@ class AIPlayer(Player):
     def __init__(
         self,
         name: str,
-        persona: str,
+        persona_title: str,
+        persona_text: str,
+        predictions: list[tuple[str, int]],
         all_names: list[str],
         chat_fn: Callable[[list[dict]], str],
         log_path: Optional[Path] = None,
     ):
         super().__init__(name)
         self.messages: list[dict] = [
-            {"role": "system", "content": prompts.build_system_prompt(name, persona, all_names)}
+            {
+                "role": "system",
+                "content": prompts.build_system_prompt(
+                    name, persona_title, persona_text, predictions, all_names
+                ),
+            }
         ]
         self.chat_fn = chat_fn
         self.log_path = log_path
