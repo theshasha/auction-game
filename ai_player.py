@@ -14,6 +14,10 @@ from players import Player
 JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
 # 兜底用：提示词示例无围栏，模型常直接输出裸 JSON；出价 JSON 是扁平对象，不匹配嵌套花括号
 BARE_JSON_PATTERN = re.compile(r"\{[^{}]*\}")
+# 发言定界符：取代 JSON 字符串承载自由文本发言（实证模型内嵌未转义的 " 会毁掉 JSON）
+SPEECH_OPEN_MARKER = "【公开发言】"
+SPEECH_CLOSE_MARKER = "【发言结束】"
+SPEECH_BLOCK_PATTERN = re.compile(r"【公开发言】\s*(.*?)\s*【发言结束】", re.DOTALL)
 
 PARSE_FAILED = object()  # 解析失败的哨兵值，区别于任何合法出价
 
@@ -103,7 +107,7 @@ class AIPlayer(Player):
             if entry.get("kind") == "speech":
                 return f"> 公开发言内容：{entry['result']}\n\n---\n\n"
             if entry.get("kind") == "speech_fallback":
-                return "> 发言 JSON 解析失败，重试回复全文已作为公开发言\n\n---\n\n"
+                return "> 发言块解析失败，重试回复全文已作为公开发言\n\n---\n\n"
             if entry.get("parse_failed"):
                 return "> 出价解析失败，按规则记 0\n\n---\n\n"
             return f"> 出价结果：{entry['result']}\n\n---\n\n"
@@ -203,21 +207,41 @@ class AIPlayer(Player):
 
     # ---- 发言与规划 ----
 
+    @staticmethod
+    def parse_speech(content: str):
+        """解析公开发言：三级路径——① 定界符提取（【公开发言】…【发言结束】，
+        定界符之间是纯文本，引号与换行不受 JSON 转义约束）；② 缺结束标记时
+        宽容取最后一个开始标记到回复末尾（发言按提示词必须放末尾）；
+        ③ 兜底旧 JSON 格式（strict=False 宽容字面换行），仍无则 PARSE_FAILED。"""
+        blocks = SPEECH_BLOCK_PATTERN.findall(content)
+        if blocks and blocks[-1].strip():
+            return blocks[-1].strip()
+        open_index = content.rfind(SPEECH_OPEN_MARKER)
+        if open_index != -1:
+            tail = content[open_index + len(SPEECH_OPEN_MARKER):].strip()
+            # 空块（开始标记后紧跟结束标记）：剥掉结束标记再看余量，空则继续兜底
+            if tail.startswith(SPEECH_CLOSE_MARKER):
+                tail = tail[len(SPEECH_CLOSE_MARKER):].strip()
+            if tail:
+                return tail
+        return AIPlayer.parse_json_field(content, "speech", strict=False)
+
     def give_speech(self, user_text: str, phase: str, context: str = "") -> str:
-        """公开发言：先规划发言策略，末尾 JSON {"speech": ...} 给出实际公开内容。
+        """公开发言：先规划发言策略，末尾【公开发言】…【发言结束】给出实际公开内容
+        （旧 JSON 格式仍兼容，见 parse_speech）。
 
         返回实际公开的发言文本（其他玩家互看与 speeches.txt 只含此内容）；
         assistant 全文（含规划部分）照常进自己的对话线与日志，不做任何截断。
-        speech 解析宽容字面换行（strict=False）。解析失败重试 1 次，仍失败
-        则把重试回复全文当作公开发言（不丢内容）。双调用失败抛 CallFailedError。
+        解析失败重试 1 次，仍失败则把重试回复全文当作公开发言（不丢内容）。
+        双调用失败抛 CallFailedError。
         """
         content = self._guarded_call(user_text, phase, context).strip()
-        speech = self.parse_json_field(content, "speech", strict=False)
+        speech = self.parse_speech(content)
         if speech is PARSE_FAILED:
             retry_content = self._guarded_call(
                 prompts.retry_speech_request(), f"{phase}_retry", context
             ).strip()
-            speech = self.parse_json_field(retry_content, "speech", strict=False)
+            speech = self.parse_speech(retry_content)
             if speech is PARSE_FAILED:
                 self._write_log(
                     {"phase": phase, "kind": "speech_fallback", "result": retry_content}
