@@ -26,6 +26,17 @@ class CallFailedError(Exception):
     """连续两次调用失败（网络/余额等基础设施故障）：由轮级别收集后仅重跑本玩家。"""
 
 
+class EmptyResponseError(Exception):
+    """模型返回空正文（渠道故障的典型症状，如 responses 输出在 think 中被截断）：
+    按调用失败处理——立即重试 1 次，仍空则升级 CallFailedError。"""
+
+
+class ParseFailedError(CallFailedError):
+    """原地重试 1 次后仍解析失败：升级为轮级失败（挂起等人工确认重跑），
+    不再静默记 0 或把回复全文 fallback 公开。继承 CallFailedError 是为了
+    直接复用 run_parallel_round 的轮级失败收集机制（controller 零改动）。"""
+
+
 class AIPlayer(Player):
     """LLM 驱动的玩家。
 
@@ -103,20 +114,30 @@ class AIPlayer(Player):
             context = entry.get("context")
             where = f"{entry['phase']}，{context}" if context else entry["phase"]
             return f"> 调用失败（{where}，第 {entry['attempt']} 次）：{entry['error']}\n\n"
+        if entry.get("parse_failed"):
+            if "result" in entry:
+                # 旧场次日志的历史条目形态：当时静默记 0，新日志不再产生
+                return "> 出价解析失败，按规则记 0（旧场次条目）\n\n---\n\n"
+            return f"> {entry['phase']}：解析连续失败，已挂起等待人工重跑\n\n---\n\n"
         if "result" in entry:
             if entry.get("kind") == "speech":
                 return f"> 公开发言内容：{entry['result']}\n\n---\n\n"
+            # 旧场次日志的历史条目形态（fallback 机制已取消，新日志不再产生）
             if entry.get("kind") == "speech_fallback":
                 return "> 发言块解析失败，重试回复全文已作为公开发言\n\n---\n\n"
-            if entry.get("parse_failed"):
-                return "> 出价解析失败，按规则记 0\n\n---\n\n"
             return f"> 出价结果：{entry['result']}\n\n---\n\n"
         return ""
 
     def _call(self, user_text: str, phase: str) -> str:
-        """追加一条 user 消息并调用 LLM，assistant 正文进对话线。"""
+        """追加一条 user 消息并调用 LLM，assistant 正文进对话线。
+
+        空正文抛 EmptyResponseError：空回基本是渠道/基础设施故障（如输出在
+        think 块中被截断、剥离后为空），按调用失败走重试，不进解析路径。
+        """
         self.messages.append({"role": "user", "content": user_text})
         content = self.chat_fn(self.messages)
+        if not content.strip():
+            raise EmptyResponseError("模型返回空正文")
         self.messages.append({"role": "assistant", "content": content})
         self._write_log({"phase": phase, "user": user_text, "content": content})
         return content
@@ -192,14 +213,15 @@ class AIPlayer(Player):
 
         bid = self.parse_bid(content)
         if bid is PARSE_FAILED:
-            # 模型输出格式问题（非基础设施故障）：按规则重试 1 次，仍失败记 0
+            # 模型输出格式问题（非基础设施故障）：原地重试 1 次，仍失败升级为
+            # 轮级失败（挂起等人工确认重跑），不再静默记 0
             retry_content = self._guarded_call(
                 prompts.retry_bid_request(), "bid_retry", context
             )
             bid = self.parse_bid(retry_content)
             if bid is PARSE_FAILED:
-                self._write_log({"phase": "bid", "parse_failed": True, "result": 0})
-                return 0
+                self._write_log({"phase": "bid", "parse_failed": True})
+                raise ParseFailedError(f"{self.name} 出价连续两次解析失败（{context}）")
 
         # 数值是否合法由引擎统一校验（非法记 0 并标 illegal），这里原样返回不重试
         self._write_log({"phase": "bid", "result": bid})
@@ -232,7 +254,9 @@ class AIPlayer(Player):
 
         返回实际公开的发言文本（其他玩家互看与 speeches.txt 只含此内容）；
         assistant 全文（含规划部分）照常进自己的对话线与日志，不做任何截断。
-        解析失败重试 1 次，仍失败则把重试回复全文当作公开发言（不丢内容）。
+        解析失败重试 1 次，仍失败抛 ParseFailedError 升级为轮级失败
+        （挂起等人工确认重跑）——不把无法解析的回复全文公开给其他玩家，
+        垃圾全文会污染他们的对话线；原文已由 _call 完整记入日志，不丢内容。
         双调用失败抛 CallFailedError。
         """
         content = self._guarded_call(user_text, phase, context).strip()
@@ -243,10 +267,8 @@ class AIPlayer(Player):
             ).strip()
             speech = self.parse_speech(retry_content)
             if speech is PARSE_FAILED:
-                self._write_log(
-                    {"phase": phase, "kind": "speech_fallback", "result": retry_content}
-                )
-                return retry_content
+                self._write_log({"phase": phase, "parse_failed": True})
+                raise ParseFailedError(f"{self.name} 发言连续两次解析失败（{phase}）")
         speech_text = speech if isinstance(speech, str) else json.dumps(speech, ensure_ascii=False)
         self._write_log({"phase": phase, "kind": "speech", "result": speech_text})
         return speech_text.strip()
@@ -256,7 +278,7 @@ class AIPlayer(Player):
 
         回复末尾的 JSON 出价缓存为下一局第 1 天出价（decide_bid 第 1 天直接消费，
         缓存只保留到被消费，开局重新规划时先清后写，避免暂停重跑残留旧值）；
-        解析失败与出价同规则：重试 1 次，仍失败记 0。
+        解析失败与出价同规则：重试 1 次，仍失败抛 ParseFailedError 升级为轮级失败。
         """
         self._pending_day1_bid = None
         content = self._guarded_call(user_text, phase, context).strip()
@@ -267,19 +289,21 @@ class AIPlayer(Player):
             )
             bid = self.parse_bid(retry_content)
             if bid is PARSE_FAILED:
-                self._write_log({"phase": phase, "parse_failed": True, "result": 0})
-                self._pending_day1_bid = 0
-                return content
+                self._write_log({"phase": phase, "parse_failed": True})
+                raise ParseFailedError(f"{self.name} 规划连续两次解析失败（{phase}）")
         self._write_log({"phase": phase, "result": bid})
         self._pending_day1_bid = bid
         return content
 
     def final_summary(self, user_text: str, context: str = "") -> str:
-        """终局观众总结：不回喂任何对话线（连自己的也不进），只落日志。"""
+        """终局观众总结：不回喂任何对话线（连自己的也不进），只落日志。
+        空正文与调用异常同等处理（重试 1 次，仍失败抛 CallFailedError）。"""
         last_error: Optional[Exception] = None
         for attempt in (1, 2):
             try:
                 content = self.chat_fn(self.messages + [{"role": "user", "content": user_text}])
+                if not content.strip():
+                    raise EmptyResponseError("模型返回空正文")
                 break
             except Exception as exc:
                 last_error = exc

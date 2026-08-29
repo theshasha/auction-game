@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from ai_player import AIPlayer, CallFailedError, PARSE_FAILED
+from ai_player import AIPlayer, CallFailedError, PARSE_FAILED, ParseFailedError
 from controller import Controller, RoundTask, TournamentAborted, run_parallel_round
 from models import Observation
 
@@ -73,7 +73,7 @@ class TestBidParsing:
         assert player.decide_bid(make_obs()) == 4
 
     def test_bare_json_without_fence_parsed(self):
-        # 提示词示例无围栏，模型直接输出裸 JSON 时必须能解析（实证：deepseek-v4-pro 双失败记 0）
+        # 提示词示例无围栏，模型直接输出裸 JSON 时必须能解析（实证：deepseek-v4-pro 曾裸输出）
         player = make_player(fake_chat_fn(["我的分析：……\n{\"bid\": 2}"]))
         assert player.decide_bid(make_obs()) == 2
 
@@ -102,10 +102,43 @@ class TestBidParsing:
         retry_user_msg = player.messages[-2]["content"]
         assert "缺少合法的 JSON" in retry_user_msg
 
-    def test_double_parse_failure_returns_zero(self):
+    def test_double_parse_failure_escalates(self, tmp_path):
+        # 原地重试仍解析失败：抛 ParseFailedError 升级轮级失败（挂起等人工重跑），
+        # 不再静默记 0；ParseFailedError 是 CallFailedError 子类，轮级机制直接接住
         script = ["没有块", "还是没有"]
-        player = make_player(fake_chat_fn(script))
-        assert player.decide_bid(make_obs()) == 0
+        chat_fn = fake_chat_fn(script)
+        player = make_player(chat_fn, tmp_path)
+        with pytest.raises(ParseFailedError) as exc_info:
+            player.decide_bid(make_obs())
+        assert isinstance(exc_info.value, CallFailedError)
+        assert "连续两次解析失败" in str(exc_info.value)
+        assert len(chat_fn.calls) == 2
+        # 垃圾问答对在对话线中（由轮级 rollback 清掉），日志含 parse_failed 标记
+        log_entries = [
+            json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert any(entry.get("parse_failed") and "result" not in entry for entry in log_entries)
+
+    def test_empty_reply_treated_as_call_failure(self):
+        # 空回复（渠道故障症状）按调用失败处理：立即重试，第二次正常出价
+        chat_fn = fake_chat_fn(["", bid_reply(4)])
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_obs()) == 4
+        assert len(chat_fn.calls) == 2
+        assert [m["role"] for m in player.messages] == ["system", "user", "assistant"]
+
+    def test_double_empty_reply_raises_call_failed(self, tmp_path):
+        # 连续两次空回复：抛 CallFailedError 进轮级失败名单
+        chat_fn = fake_chat_fn(["", "  \n"])
+        player = make_player(chat_fn, tmp_path)
+        with pytest.raises(CallFailedError) as exc_info:
+            player.decide_bid(make_obs())
+        assert "EmptyResponseError" in str(exc_info.value)
+        assert len(player.messages) == 1
+        log_entries = [
+            json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert sum(1 for entry in log_entries if "EmptyResponseError" in entry.get("error", "")) == 2
 
     def test_invalid_value_not_retried(self):
         # 数值非法（超上限）由引擎判 illegal，AIPlayer 原样返回且不重试
@@ -203,9 +236,17 @@ class TestMarkdownLog:
 
     def test_parse_failed_entry_rendered(self, tmp_path):
         player = make_player(fake_chat_fn(["没有块", "还是没有"]), tmp_path)
-        assert player.decide_bid(make_obs()) == 0
+        with pytest.raises(ParseFailedError):
+            player.decide_bid(make_obs())
 
-        assert "> 出价解析失败，按规则记 0" in self.read_md(player)
+        assert "> bid：解析连续失败，已挂起等待人工重跑" in self.read_md(player)
+
+    def test_legacy_parse_failed_entry_rendered(self, tmp_path):
+        # 旧场次日志的 parse_failed 条目带 result: 0（当时静默记 0），渲染保持可识别
+        player = make_player(fake_chat_fn([bid_reply(3)]), tmp_path)
+        player._write_log({"phase": "bid", "parse_failed": True, "result": 0})
+
+        assert "> 出价解析失败，按规则记 0（旧场次条目）" in self.read_md(player)
 
     def test_speech_result_entry_rendered(self, tmp_path):
         player = make_player(fake_chat_fn([speech_reply("公开内容")]), tmp_path)
@@ -213,9 +254,10 @@ class TestMarkdownLog:
 
         assert "> 公开发言内容：公开内容" in self.read_md(player)
 
-    def test_speech_fallback_entry_rendered(self, tmp_path):
-        player = make_player(fake_chat_fn(["没有发言块", "直接就是发言全文"]), tmp_path)
-        player.give_speech("请发言", "opening_speech")
+    def test_legacy_speech_fallback_entry_rendered(self, tmp_path):
+        # 旧场次日志的 speech_fallback 条目（fallback 机制已取消），渲染保持可识别
+        player = make_player(fake_chat_fn([bid_reply(3)]), tmp_path)
+        player._write_log({"phase": "match_4_speech", "kind": "speech_fallback", "result": "垃圾全文"})
 
         assert "> 发言块解析失败，重试回复全文已作为公开发言" in self.read_md(player)
 
@@ -287,14 +329,17 @@ class TestSpeech:
         assert len(chat_fn.calls) == 2
         assert "缺少合法的发言块" in player.messages[-2]["content"]
 
-    def test_double_parse_failure_falls_back_to_fulltext(self, tmp_path):
-        # 重试仍无合法发言块：把重试回复全文当作公开发言（不丢内容）
+    def test_double_parse_failure_escalates(self, tmp_path):
+        # 重试仍无合法发言块：抛 ParseFailedError 升级轮级失败（挂起等人工重跑），
+        # 不把无法解析的回复全文公开给其他玩家（实证 gemini-3.7-flash 渠道退化时
+        # 垃圾全文经 fallback 污染了全场对话线）；原文已由 _call 完整记入日志
         player = make_player(fake_chat_fn(["没有发言块", "直接就是发言全文"]), tmp_path)
-        speech = player.give_speech("请发言", "opening_speech")
-        assert speech == "直接就是发言全文"
+        with pytest.raises(ParseFailedError) as exc_info:
+            player.give_speech("请发言", "opening_speech")
+        assert "连续两次解析失败" in str(exc_info.value)
         log_entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
-        fallback = next(entry for entry in log_entries if entry.get("kind") == "speech_fallback")
-        assert fallback["result"] == "直接就是发言全文"
+        assert any(entry.get("parse_failed") for entry in log_entries)
+        assert not any(entry.get("kind") == "speech_fallback" for entry in log_entries)
 
     def test_speech_result_logged(self, tmp_path):
         player = make_player(fake_chat_fn([speech_reply("公开内容")]), tmp_path)
@@ -335,6 +380,17 @@ class TestSpeech:
         player = make_player(fake_chat_fn([RuntimeError("boom"), RuntimeError("boom")]))
         with pytest.raises(CallFailedError):
             player.final_summary("请写观众总结")
+
+    def test_final_summary_empty_reply_retries(self):
+        # 空正文与调用异常同等处理：重试 1 次，第二次正常返回
+        player = make_player(fake_chat_fn(["", "给观众的话"]))
+        assert player.final_summary("请写观众总结") == "给观众的话"
+
+    def test_final_summary_double_empty_raises(self):
+        player = make_player(fake_chat_fn(["", ""]))
+        with pytest.raises(CallFailedError) as exc_info:
+            player.final_summary("请写观众总结")
+        assert "EmptyResponseError" in str(exc_info.value)
 
     def test_final_summary_not_added_to_context(self):
         player = make_player(fake_chat_fn(["给观众的话"]))
@@ -380,15 +436,17 @@ class TestPlanBidMerge:
         assert len(chat_fn.calls) == 2
         assert "缺少合法的 JSON" in player.messages[-2]["content"]
 
-    def test_plan_double_parse_failure_caches_zero(self, tmp_path):
-        player = make_player(fake_chat_fn(["没有块", "还是没有"]), tmp_path)
-        player.plan_strategy("请规划并出价", "opening_plan")
-
-        assert player.decide_bid(make_obs(day=1)) == 0
+    def test_plan_double_parse_failure_escalates(self, tmp_path):
+        # 规划双重解析失败：抛 ParseFailedError 升级轮级失败，不再缓存 0
+        chat_fn = fake_chat_fn(["没有块", "还是没有"])
+        player = make_player(chat_fn, tmp_path)
+        with pytest.raises(ParseFailedError):
+            player.plan_strategy("请规划并出价", "opening_plan")
+        assert player._pending_day1_bid is None  # 缓存保持清空，等重跑成功后写入
         log_entries = [
             json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()
         ]
-        assert any(entry.get("parse_failed") and entry.get("result") == 0 for entry in log_entries)
+        assert any(entry.get("parse_failed") and "result" not in entry for entry in log_entries)
 
     def test_replan_overwrites_stale_cache(self):
         # 暂停重跑场景：旧缓存先清后写，不会被残留值污染
@@ -477,6 +535,50 @@ class TestController:
 
 
 class TestParallelRound:
+    def test_parse_failure_escalates_to_round_rerun(self):
+        # 解析连续失败（ParseFailedError）与调用失败同路径：轮级挂起等确认，
+        # 回车仅重跑失败玩家，成功者不重跑
+        failure_announced = threading.Event()
+        announcements = []
+
+        def announce(msg):
+            announcements.append(msg)
+            if msg.startswith("[失败]"):
+                failure_announced.set()
+
+        controller = Controller(mode="continuous", announce=announce)
+        alpha_chat = fake_chat_fn([bid_reply(1)])
+        alpha = AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, alpha_chat)
+        # Bravo 连续两次输出无 JSON 的垃圾 → ParseFailedError；重跑后正常
+        bravo_chat = fake_chat_fn(["没有块", "还是没有", bid_reply(2)])
+        bravo = AIPlayer("Bravo", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, bravo_chat)
+        tasks = [
+            RoundTask(key="Alpha", player=alpha, fn=lambda: alpha.decide_bid(make_obs())),
+            RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_obs())),
+        ]
+        outcome = {}
+
+        def run():
+            outcome["results"] = run_parallel_round(tasks, controller, label="测试轮")
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert failure_announced.wait(timeout=5)
+        thread.join(timeout=0.3)
+        assert "results" not in outcome
+        assert len(bravo_chat.calls) == 2
+        alpha_snapshot = list(alpha.messages)
+
+        controller.offer_command("")              # 回车仅重跑解析失败的 Bravo
+        thread.join(timeout=5)
+        assert outcome["results"] == {"Alpha": 1, "Bravo": 2}
+        assert len(bravo_chat.calls) == 3
+        assert len(alpha_chat.calls) == 1
+        assert alpha.messages == alpha_snapshot
+        # 垃圾问答对已随轮级 rollback 清除，重跑后对话线只有成功的一问一答
+        assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]
+        assert any("连续两次解析失败" in m for m in announcements)
+
     def test_completed_round_returns_all_results(self):
         controller = Controller(mode="continuous", announce=lambda msg: None)
         tasks = [
