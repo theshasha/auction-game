@@ -11,7 +11,7 @@ def make_players(match_winners: dict[int, str]):
     """构造 6 个 ScriptedPlayer：每一局由 match_winners[局号] 指定的玩家包揽胜场。
 
     指定赢家每天出 1（唯一获胜，每天付 1，工资 +3 足以 sustain），其他人每天出 0
-    （撞车但支付 0，无代价）；赢家 5 天连赢，按每天奖池 1 共拿 5 个胜场。
+    （撞车但支付 0，无代价）；赢家 6 天连赢，按每天奖池 1 共拿 6 个胜场。
     局号 = len(obs.past_match_logs) + 1。
     """
     def make_strategy(name):
@@ -39,7 +39,7 @@ class TestRegularSeasonOnly:
         assert len(result.match_logs) == 5
         assert result.playoff_count == 0
         assert not result.playoff_cap_hit
-        assert totals(result) == {"甲": 25, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
+        assert totals(result) == {"甲": 30, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
         assert ranks(result)["甲"] == 1
 
     def test_tie_below_first_place_does_not_trigger_playoff(self):
@@ -57,16 +57,16 @@ class TestSalarySustainsBalances:
 
     def test_daily_salary_keeps_balance_positive(self):
         # 甲每天出 2（唯一最高）获胜付 2，其余人每天出 1 撞车各付 1；
-        # 工资 +3 覆盖双方支出：5 天全程无人余额耗尽、无人非法出价
+        # 工资 +3 覆盖双方支出：6 天全程无人余额耗尽、无人非法出价
         players = [ScriptedPlayer(n, (lambda b: lambda obs: b)(2 if n == "甲" else 1)) for n in NAMES]
         result = run_tournament(players)
 
         first_log = result.match_logs[0]
-        assert len(first_log.days) == 5
+        assert len(first_log.days) == 6
         assert all(not day.is_void for day in first_log.days)
         assert all(day.winner == "甲" and day.winning_bid == 2 for day in first_log.days)
-        assert [day.pool for day in first_log.days] == [1, 1, 1, 1, 1]
-        assert first_log.wins["甲"] == 5
+        assert [day.pool for day in first_log.days] == [1, 1, 1, 1, 1, 1]
+        assert first_log.wins["甲"] == 6
         assert all(
             record.status == "ok"
             for day in first_log.days
@@ -82,13 +82,13 @@ class TestPlayoff:
         assert result.playoff_count == 1
         assert len(result.match_logs) == 6
         assert result.match_logs[5].is_playoff
-        # 加赛胜场计入总胜场：甲 10 + 5 = 15，乙 10
-        assert totals(result)["甲"] == 15
-        assert totals(result)["乙"] == 10
+        # 加赛胜场计入总胜场：甲 12 + 6 = 18，乙 12
+        assert totals(result)["甲"] == 18
+        assert totals(result)["乙"] == 12
         assert ranks(result)["甲"] == 1
 
     def test_playoff_continues_when_tie_persists_with_new_leaders(self):
-        # 正赛后甲乙并列 10 胜；第 6 局丙包揽后甲乙丙三人并列（并列者变化），
+        # 正赛后甲乙并列 12 胜；第 6 局丙包揽后甲乙丙三人并列（并列者变化），
         # 第 7 局甲包揽后第一名唯一，加赛结束
         players = make_players({1: "甲", 2: "甲", 3: "乙", 4: "乙", 5: "丙", 6: "丙", 7: "甲"})
         result = run_tournament(players)
@@ -96,7 +96,7 @@ class TestPlayoff:
         assert result.playoff_count == 2
         assert len(result.match_logs) == 7
         assert all(log.is_playoff for log in result.match_logs[5:])
-        assert totals(result) == {"甲": 15, "乙": 10, "丙": 10, "丁": 0, "戊": 0, "己": 0}
+        assert totals(result) == {"甲": 18, "乙": 12, "丙": 12, "丁": 0, "戊": 0, "己": 0}
         assert ranks(result)["甲"] == 1
         assert ranks(result)["乙"] == 2 and ranks(result)["丙"] == 2  # 第二名并列保持
 
@@ -168,16 +168,16 @@ class TestPublicationOnMatchEnd:
         players = make_players({1: "甲", 2: "乙", 3: "丙", 4: "丁", 5: "戊", 6: "甲"})
         run_tournament(players, on_match_end=lambda log, standings: publications.append((log, standings)))
 
-        # 正赛后甲乙丙丁戊五人 5 胜并列第一，触发加赛；第 6 局甲包揽后唯一
+        # 正赛后甲乙丙丁戊五人 6 胜并列第一，触发加赛；第 6 局甲包揽后唯一
         assert len(publications) == 6
         first_log, first_standings = publications[0]
-        # 局日志完整：固定 5 天，含每天每人出价
-        assert len(first_log.days) == 5
+        # 局日志完整：固定 6 天，含每天每人出价
+        assert len(first_log.days) == 6
         assert len(first_log.days[0].bids) == 6
         # 局末公开排名含胜场明细，且反映该局结果
         first_entry = next(e for e in first_standings if e.player == "甲")
-        assert first_entry.total_wins == 5
-        assert first_entry.wins_per_match == [5]
+        assert first_entry.total_wins == 6
+        assert first_entry.wins_per_match == [6]
 
     def test_players_observe_past_logs_and_standings(self):
         # 第 2 局第 1 天时，玩家应能看到第 1 局的完整公开日志与当前排名
@@ -197,6 +197,6 @@ class TestPublicationOnMatchEnd:
         assert len(seen) == 6
         obs = seen[0]
         assert obs.past_match_logs[0]["match_index"] == 1
-        assert obs.past_match_logs[0]["wins"]["甲"] == 5
+        assert obs.past_match_logs[0]["wins"]["甲"] == 6
         leader = obs.standings[0]
-        assert leader.player == "甲" and leader.total_wins == 5
+        assert leader.player == "甲" and leader.total_wins == 6

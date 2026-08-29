@@ -7,10 +7,10 @@ from typing import Any, Optional
 
 INITIAL_COINS = 6              # 每局初始金币
 DAILY_SALARY = 3               # 第 2 天起每天开始时每人发放的工资
-MAX_DAYS = 5                   # 每局固定天数（流局不顺延天数，只把奖池并入次日）
+MAX_DAYS = 6                   # 每局固定天数（流局不顺延天数，只把奖池并入次日）
 MAX_BID = 6                    # 出价上限（固定；超级出价同上限但不查余额）
-DAILY_POOL = (1, 1, 1, 1, 1)   # 每天奖池的胜场数（固定 1，流局并入次日）
-WINS_PER_MATCH = sum(DAILY_POOL)  # 每局拍卖的胜场总数（5）
+DAILY_POOL = (1, 1, 1, 1, 1, 1)  # 每天奖池的胜场数（固定 1，流局并入次日）
+WINS_PER_MATCH = sum(DAILY_POOL)  # 每局拍卖的胜场总数（6）
 
 
 @dataclass
@@ -22,7 +22,7 @@ class BidRecord:
     raw_bid: Any          # 玩家提交的原始值，用于审计非法出价
     bid: int              # 校验后的有效出价（正常出价非法一律记 0）
     status: str = "ok"    # "ok" | "illegal"（超级出价只可能为 "ok"，非法则在收集层拦截重试）
-    is_super: bool = False  # 超级出价：参与撞车与获胜判定，但任何结局都不扣金币
+    is_super: bool = False  # 超级出价：参与撞车判定但不能获胜，任何结局都不扣金币
 
 
 @dataclass
@@ -35,10 +35,9 @@ class DayResult:
     winner: Optional[str]        # None 表示流局
     winning_bid: Optional[int]
     wins_taken: int              # 获胜者实际获得的胜场数（恒等于 pool；流局为 0）
-    winning_is_super: bool = False   # 获胜的是否为超级出价（获胜也不扣款）
     super_users: list[str] = field(default_factory=list)  # 当天使用超级出价的玩家（每日公布）
     collision_price_count: int = 0   # 当天撞车价位的个数（全部撞车价位）
-    is_void: bool = False            # 是否流局（奖池并入次日；第 5 天流局则作废）
+    is_void: bool = False            # 是否流局（奖池并入次日；第 6 天流局则作废）
 
     def public_view(self) -> dict:
         """规则五.1：每天结束时系统公布的信息（获胜者身份与获胜价 + 撞车价位个数
@@ -85,7 +84,6 @@ class MatchLog:
                     "winner": day.winner,
                     "winning_bid": day.winning_bid,
                     "wins_taken": day.wins_taken,
-                    "winning_is_super": day.winning_is_super,
                     "super_users": list(day.super_users),
                     "collision_price_count": day.collision_price_count,
                     "is_void": day.is_void,
@@ -131,3 +129,6 @@ class Observation:
     my_last_bid_illegal: bool = False      # 昨日正常出价是否非法（被规则记 0）
     my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
     my_last_super_collided: bool = False     # 昨日自己的超级出价是否撞车（公开信息推不出，引擎直接给）
+    # 全场平均金币余额（含自己、含当日工资，保留 1 位小数）：规则五.1 规定
+    # 第 2 天起每天开始时公布；第 1 天为 None（恒定 6.0 无信息量，不渲染）。
+    avg_coins: Optional[float] = None

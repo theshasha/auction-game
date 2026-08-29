@@ -1,7 +1,8 @@
 """单局规则引擎的边界测试。全部使用 ScriptedPlayer 构造确定性场景。
 
-现行规则要点：每天奖池固定 1 个（流局并入次日）；无冲顶税、无转判；
-超级出价每人每局一次，0~6 不查余额，按笔数参与撞车、可获胜、永不扣款。
+现行规则要点：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
+超级出价每人每局一次，0~6 不查余额，按笔数参与撞车、不能获胜、永不扣款；
+第 2 天起每天开始时公布全场平均金币余额。
 """
 
 from engine import compute_standings, run_match, validate_bid, validate_super_bid
@@ -102,7 +103,6 @@ class TestWinningRules:
         assert day2.pool == 2
         assert day2.winner == "甲" and day2.winning_bid == 6
         assert day2.wins_taken == 2
-        assert not day2.winning_is_super
         assert log.wins["甲"] == 2
 
 
@@ -176,7 +176,7 @@ class TestCoinSettlement:
 
 
 class TestSuperBid:
-    """超级出价：每局一次的免费额外出价（按笔数参与撞车、可获胜、永不扣款）。"""
+    """超级出价：每局一次的免费额外出价（按笔数参与撞车、不能获胜、永不扣款）。"""
 
     def test_super_bid_collides_whale_and_sniping_is_free(self):
         # RULES.md 结算示例一：甲出 6；乙正常出 4 + 超级出价 6；丙 5；丁戊 3；己 2。
@@ -193,7 +193,6 @@ class TestSuperBid:
         )
         day1 = log.days[0]
         assert day1.winner == "丙" and day1.winning_bid == 5
-        assert not day1.winning_is_super
         assert day1.super_users == ["乙"]
         assert day1.collision_price_count == 2  # 6 与 3 两个撞车价位
 
@@ -220,8 +219,10 @@ class TestSuperBid:
         )
         assert record_jia.bid == 0 and record_jia.status == "illegal"
 
-    def test_super_bid_can_win_and_pays_nothing(self):
-        # 乙正常出 4 + 超级出价 6：6 唯一最高获胜、白拿奖池，正常出价 4 唯一未中退还
+    def test_super_bid_cannot_win_falls_through_to_normal(self):
+        # 乙正常出 4 + 超级出价 6：6 是当天最高唯一出价但超级出价不能获胜，
+        # 胜场顺延给唯一正常出价中最高的甲的 5；乙的超级未撞车不扣款、
+        # 正常出价 4 唯一未中退还——乙当天零成本
         def strategy(obs):
             if obs.day == 1:
                 return {"甲": 5, "乙": 4, "丙": 3, "丁": 2, "戊": 1, "己": 0}[obs.my_name]
@@ -234,14 +235,14 @@ class TestSuperBid:
             super_strategies={"乙": lambda obs: 6 if obs.day == 1 else None},
         )
         day1 = log.days[0]
-        assert day1.winner == "乙" and day1.winning_bid == 6
-        assert day1.winning_is_super
-        assert day1.wins_taken == 1
+        assert day1.winner == "甲" and day1.winning_bid == 5
+        assert day1.super_users == ["乙"]
+        assert day1.collision_price_count == 0  # 超级出价 6 是唯一出价，未撞车
 
         record_yi = next(
             r for r in log.days[1].bids if r.player == "乙" and not r.is_super
         )
-        assert record_yi.bid == 6 and record_yi.status == "ok"  # 余额 9：获胜也没花钱
+        assert record_yi.bid == 6 and record_yi.status == "ok"  # 余额 9：分文未扣
 
     def test_super_bid_ignores_balance(self):
         # 甲第 1 天出 6 获胜余额归零；第 2 天 +3 后正常出价最多出 3，
@@ -260,8 +261,10 @@ class TestSuperBid:
             (r for r in day2.bids if r.player == "甲" and r.is_super), None
         )
         assert super_record is not None and super_record.bid == 6
-        # 第 2 天所有人正常出 0（六笔 0 撞车），甲的超级出价 6 唯一最高获胜
-        assert day2.winner == "甲" and day2.winning_is_super
+        # 第 2 天所有人正常出 0（六笔 0 撞车），甲的超级出价 6 是唯一最高
+        # 但不能获胜：没有唯一正常出价，当天流局，奖池并入第 3 天
+        assert day2.is_void and day2.winner is None
+        assert log.days[2].pool == 2
 
     def test_super_bid_once_per_match_engine_enforced(self):
         # 引擎权威去重：第 1 天已用超级出价，第 2 天再提交直接丢弃（不进日志）
@@ -405,7 +408,7 @@ class TestMyLastDayObservation:
 
 
 class TestPoolRollover:
-    """流局奖池并入次日；第 5 天流局（或未拍出）则作废。每天基础奖池 1。"""
+    """流局奖池并入次日；第 6 天流局（或未拍出）则作废。每天基础奖池 1。"""
 
     def test_consecutive_voids_accumulate_pool(self):
         # 第 1~2 天全员出 1 撞车流局（各付 1）；第 3 天奖池 = 1 + 1 + 1 = 3
@@ -422,47 +425,47 @@ class TestPoolRollover:
         assert log.days[2].winner == "甲"
         assert log.wins["甲"] == 3  # 第 3 天奖池 3 个胜场全部拿走
 
-    def test_day5_pool_includes_full_rollover(self):
+    def test_late_pool_includes_full_rollover(self):
         # 前 4 天全员出 1 撞车流局，第 5 天奖池滚到 5；差异化出价，甲唯一 6 获胜
-        # 拿全部 5 个（无冲顶税、无转判）
+        # 拿全部 5 个；第 6 天奖池回到 1，甲再拿 1 个
         def strategy(obs):
             if obs.day <= 4:
                 return 1
             return {"甲": 6, "乙": 5, "丙": 4, "丁": 3, "戊": 2, "己": 0}[obs.my_name]
 
         log = run_one_match({name: strategy for name in NAMES})
-        assert [day.pool for day in log.days] == [1, 2, 3, 4, 5]
+        assert [day.pool for day in log.days] == [1, 2, 3, 4, 5, 1]
         day5 = log.days[4]
         assert day5.winner == "甲"
         assert day5.wins_taken == 5
-        assert log.wins["甲"] == 5
+        assert log.wins["甲"] == 6
 
-    def test_day5_void_forfeits_pool(self):
-        # 5 天全流局（全员每天出 0 撞车，支付 0 无损失）：未拍出的胜场全部作废
+    def test_last_day_void_forfeits_pool(self):
+        # 6 天全流局（全员每天出 0 撞车，支付 0 无损失）：未拍出的胜场全部作废
         log = run_one_match({name: (lambda obs: 0) for name in NAMES})
-        assert len(log.days) == 5
+        assert len(log.days) == 6
         assert all(day.is_void for day in log.days)
-        assert [day.pool for day in log.days] == [1, 2, 3, 4, 5]
+        assert [day.pool for day in log.days] == [1, 2, 3, 4, 5, 6]
         assert all(wins == 0 for wins in log.wins.values())
 
 
-class TestFixedFiveDays:
-    """每局固定 5 天：不存在提前结束；每天奖池固定 1 个，第 5 天永远有货。"""
+class TestFixedSixDays:
+    """每局固定 6 天：不存在提前结束；每天奖池固定 1 个，第 6 天永远有货。"""
 
-    def test_match_always_runs_five_days(self):
+    def test_match_always_runs_six_days(self):
         # 甲每天出 1 唯一获胜，其余人出 0 撞车（支付 0 无代价）：
-        # 即便甲一路通吃也打满 5 天，按奖池 1,1,1,1,1 共拿 5 个胜场
+        # 即便甲一路通吃也打满 6 天，按每天奖池 1 共拿 6 个胜场
         def strategy(obs):
             return 1 if obs.my_name == "甲" else 0
 
         log = run_one_match({name: strategy for name in NAMES})
-        assert len(log.days) == 5
-        assert [day.pool for day in log.days] == [1, 1, 1, 1, 1]
+        assert len(log.days) == 6
+        assert [day.pool for day in log.days] == [1, 1, 1, 1, 1, 1]
         assert all(day.winner == "甲" for day in log.days)
-        assert log.wins["甲"] == 5
+        assert log.wins["甲"] == 6
 
     def test_observation_carries_pool_and_salary(self):
-        # 全员每天出 0 撞车：天天流局、无人花钱；奖池 1→2→3→4→5，工资每天 +3
+        # 全员每天出 0 撞车：天天流局、无人花钱；奖池 1→…→6，工资每天 +3
         seen = []
 
         def strategy(obs):
@@ -477,7 +480,51 @@ class TestFixedFiveDays:
             (3, 3, 12, 0, 0),
             (4, 4, 15, 0, 0),
             (5, 5, 18, 0, 0),
+            (6, 6, 21, 0, 0),
         ]
+
+
+class TestAvgCoinsPublication:
+    """全场平均金币余额：第 2 天起每天开始时公布（含当日工资，保留 1 位小数），
+    第 1 天不公布（恒定 6.0 无信息量）。"""
+
+    def test_day1_not_published(self):
+        captured = []
+
+        def strategy(obs):
+            if obs.my_name == "甲":
+                captured.append(obs)
+            return 0
+
+        run_one_match({name: strategy for name in NAMES})
+        assert captured[0].avg_coins is None
+
+    def test_average_reflects_spending_and_salary(self):
+        # 第 1 天：甲出 6 唯一获胜付 6（余额 0），其余五人出 1 撞车各付 1（余额 5）；
+        # 第 2 天工资 +3：甲 3、其余 8，平均 = 43/6 ≈ 7.2
+        captured = []
+
+        def strategy(obs):
+            if obs.my_name == "甲":
+                captured.append(obs)
+            if obs.day == 1:
+                return 6 if obs.my_name == "甲" else 1
+            return 0
+
+        run_one_match({name: strategy for name in NAMES})
+        assert captured[1].avg_coins == 7.2
+
+    def test_average_same_for_all_players(self):
+        # 公布值对全场一致（含自己）：同一天 6 人看到的平均值相同
+        captured = {name: [] for name in NAMES}
+
+        def strategy(obs):
+            captured[obs.my_name].append(obs)
+            return 1  # 全员出 1 撞车：流局日撞车照扣，每人付 1
+
+        run_one_match({name: strategy for name in NAMES})
+        day2_values = {captured[name][1].avg_coins for name in NAMES}
+        assert day2_values == {8.0}  # 6 - 1（撞车扣除）+ 3（工资）
 
 
 class TestIllegalBidInMatch:
@@ -517,7 +564,7 @@ class TestMatchLogPublication:
 
         assert data["match_index"] == 1
         assert data["is_playoff"] is False
-        assert len(data["days"]) == 5  # 固定 5 天
+        assert len(data["days"]) == 6  # 固定 6 天
         first_day = data["days"][0]
         assert {b["player"]: b["bid"] for b in first_day["bids"]} == dict(
             zip(NAMES, [5, 4, 3, 2, 1, 0])
@@ -526,11 +573,11 @@ class TestMatchLogPublication:
         assert first_day["winner"] == "甲"
         assert first_day["winning_bid"] == 5
         assert first_day["pool"] == 1
-        assert first_day["winning_is_super"] is False
+        assert "winning_is_super" not in first_day  # 规则 v4 起超级出价不能获胜，字段移除
         assert first_day["super_users"] == []
         assert first_day["collision_price_count"] == 0
         assert first_day["is_void"] is False
-        assert sum(data["wins"].values()) == 5  # 无流局：5 个胜场全部拍出
+        assert sum(data["wins"].values()) == 6  # 无流局：6 个胜场全部拍出
 
     def test_super_bid_visible_in_match_end_log(self):
         # 局末完整日志含超级出价的数值（对局内只公布使用情况）
@@ -543,8 +590,8 @@ class TestMatchLogPublication:
         assert len(super_records) == 1
         assert super_records[0]["player"] == "乙" and super_records[0]["bid"] == 6
         assert day1["super_users"] == ["乙"]
-        # 超级出价 6 唯一最高：乙获胜且 winning_is_super 标注
-        assert day1["winner"] == "乙" and day1["winning_is_super"] is True
+        # 超级出价 6 是唯一最高但不能获胜：胜场顺延给唯一正常价最高的甲（5）
+        assert day1["winner"] == "甲" and day1["winning_bid"] == 5
 
 
 class TestComputeStandings:

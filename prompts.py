@@ -27,12 +27,13 @@ RULES_TEXT = (Path(__file__).parent / "RULES.md").read_text(encoding="utf-8").st
 RULES_REMINDER = (
     "【规则要点重申】每日结算按三步：① 当天全部出价（含所有人的超级出价）按数值逐笔计数，"
     "某数值出现两笔及以上即撞车，撞车的正常出价全部扣除、超级出价不扣款；"
-    "② 唯一出价中最高的一笔获胜、其主人获得当天全部奖池（0 是合法价位），"
-    "当天无唯一出价则流局、奖池并入次日；"
-    "③ 获胜者凭正常出价获胜的扣除该出价、凭超级出价获胜不扣款，"
-    "其余正常出价全额退还。超级出价每人每局一次、不受余额限制、任何结局都不扣金币；"
+    "② 唯一正常出价中最高的一笔获胜、其主人获得当天全部奖池"
+    "（超级出价不能获胜，是唯一出价也会被跳过；0 是合法价位），"
+    "当天没有唯一正常出价则流局、奖池并入次日；"
+    "③ 获胜者扣除其获胜的正常出价，其余正常出价全额退还。"
+    "超级出价每人每局一次、不受余额限制、只参与撞车不能获胜、任何结局都不扣金币；"
     "每天只公布谁使用了超级出价，不公布其数值。"
-    "他人的出价与余额不公布，只能由公布信息推断，推断可能出错。"
+    "他人的出价与余额不公布（第 2 天起公布全场平均金币），只能由公布信息推断，推断可能出错。"
 )
 
 
@@ -46,7 +47,7 @@ def bid_format_hint() -> str:
         "请先分析当前局势，然后在回复末尾用如下 JSON 给出今日出价：\n"
         f'{{"bid": <0到{MAX_BID}的整数，不得超过你的余额>}}\n'
         f"若要同时使用超级出价（本局仅 1 次机会，0到{MAX_BID}的整数，不受余额限制，"
-        "参与撞车与获胜判定，但任何结局都不扣金币），格式为：\n"
+        "只参与撞车判定、不能获胜，任何结局都不扣金币），格式为：\n"
         '{"bid": <正常出价>, "super_bid": <超级出价>}\n'
         "不使用超级出价就不要包含 super_bid 字段。"
     )
@@ -141,9 +142,6 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
     yesterday = obs.today_history[-1]
     is_void = yesterday["winner"] == "流局"
     won = yesterday["winner"] == obs.my_name
-    # 我凭哪笔出价获胜可由自己的两笔数值推出：获胜价等于我的哪笔就是哪笔
-    # （两笔同值必然撞车不可能获胜，故无歧义）
-    won_with_super = won and obs.my_last_super_bid == yesterday["winning_bid"]
 
     if obs.my_last_bid_illegal:
         segments = ["正常出价非法按规则记 0"]
@@ -151,7 +149,7 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
         segments = [f"正常出价 {obs.my_last_bid}"]
     if is_void:
         segments.append(f"当天流局全员撞车，扣除 {obs.my_last_deduction}")
-    elif won and not won_with_super:
+    elif won:
         segments.append(
             f"唯一最高出价获胜，赢得 {yesterday['wins_taken']} 个胜场，"
             f"扣除 {obs.my_last_deduction}"
@@ -162,15 +160,11 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
         segments.append("是唯一出价但未获胜，全额退还")
 
     if obs.my_last_super_bid is not None:
-        if won_with_super:
-            segments.append(
-                f"超级出价 {obs.my_last_super_bid} 唯一最高获胜，"
-                f"赢得 {yesterday['wins_taken']} 个胜场，不扣金币"
-            )
-        elif is_void or obs.my_last_super_collided:
+        # 超级出价不能获胜，结局只有撞车/未撞车两种，任何结局都不扣款
+        if obs.my_last_super_collided:
             segments.append(f"超级出价 {obs.my_last_super_bid} 撞车，不扣款")
         else:
-            segments.append(f"超级出价 {obs.my_last_super_bid} 是唯一出价但未获胜，不扣款")
+            segments.append(f"超级出价 {obs.my_last_super_bid} 未撞车，不扣款")
     return "昨日你的结果：" + "，".join(segments) + "。"
 
 
@@ -182,9 +176,15 @@ def bid_request(obs: Observation) -> str:
     if obs.day >= 2:
         status_notes.append("已含今日工资")
     status_notes.append(f"今日可出最高价：{min(MAX_BID, obs.my_coins)}")
+    # 全场平均金币（第 2 天起公布，规则五.1）：一个数校准「对手还有多少钱」，
+    # 比逐价位直方图轻量，避免慢模型在算术上出错
+    avg_coins_text = (
+        f"全场平均金币：{obs.avg_coins:.1f}；" if obs.avg_coins is not None else ""
+    )
     status_line = (
         f"今日奖池：{obs.today_pool} 个胜场；"
         f"你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）；"
+        f"{avg_coins_text}"
         f"本局已获胜场：{obs.my_match_wins}；你的累计总胜场：{obs.my_total_wins}；"
         f"{_super_status_text(obs)}。"
     )
@@ -235,8 +235,8 @@ def invalid_bid_retry_request(reason: str) -> str:
 def render_match_log(log: MatchLog) -> str:
     """整局出价日志渲染为 markdown 表格：玩家列顺序取首日正常出价顺序（即 config 顺序）。
 
-    出价单元格含超级出价时写作「5+超6」；凭超级出价获胜在结果列标注
-    （获胜也不扣金币）。
+    出价单元格含超级出价时写作「5+超6」；超级出价不能获胜，
+    结果列的获胜者必定凭正常出价。
     """
     if not log.days:
         return "  （本局未进行任何拍卖）"
@@ -260,8 +260,6 @@ def render_match_log(log: MatchLog) -> str:
             outcome = "流局（奖池作废）" if day.day == MAX_DAYS else "流局（奖池并入次日）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
-            if day.winning_is_super:
-                outcome += "（凭超级出价，不扣金币）"
         rows.append(
             f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {day.collision_price_count} |"
         )

@@ -8,7 +8,7 @@ NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 
 
 def make_day(day, bids, pool, winner, winning_bid, collision_count, wins_taken=0,
-             is_void=False, super_bids=None, winning_is_super=False):
+             is_void=False, super_bids=None):
     """构造一天结果。bids 为六人正常出价；super_bids 为 {玩家: 超级出价}，
     每个使用者在出价表里追加一笔 is_super=True 的记录。"""
     records = [BidRecord(player=name, raw_bid=bid, bid=bid) for name, bid in zip(NAMES, bids)]
@@ -23,7 +23,6 @@ def make_day(day, bids, pool, winner, winning_bid, collision_count, wins_taken=0
         winner=winner,
         winning_bid=winning_bid,
         wins_taken=wins_taken,
-        winning_is_super=winning_is_super,
         super_users=list((super_bids or {}).keys()),
         collision_price_count=collision_count,
         is_void=is_void,
@@ -206,7 +205,8 @@ class TestBidRequest:
                  my_last_bid=None, my_last_deduction=None,
                  my_last_collided=False, my_last_bid_illegal=False,
                  my_super_available=True, my_super_used_day=None,
-                 my_last_super_bid=None, my_last_super_collided=False):
+                 my_last_super_bid=None, my_last_super_collided=False,
+                 avg_coins=None):
         return Observation(
             my_name="甲",
             my_coins=coins,
@@ -225,6 +225,7 @@ class TestBidRequest:
             my_last_bid_illegal=my_last_bid_illegal,
             my_last_super_bid=my_last_super_bid,
             my_last_super_collided=my_last_super_collided,
+            avg_coins=avg_coins,
         )
 
     def test_first_day_single_line(self):
@@ -302,6 +303,19 @@ class TestBidRequest:
         text = prompts.bid_request(self.make_obs(day=2, today_history=history, total_wins=5))
         assert "你的累计总胜场：5；" in text.splitlines()[2]
 
+    def test_avg_coins_shown_from_day2(self):
+        # 全场平均金币（第 2 天起公布）：状态行余额之后，保留 1 位小数
+        history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
+                    "super_users": [], "collision_price_count": 0}]
+        text = prompts.bid_request(self.make_obs(day=2, today_history=history, avg_coins=7.2))
+        status_line = text.splitlines()[2]
+        assert "全场平均金币：7.2；" in status_line
+        assert status_line.index("你的金币余额") < status_line.index("全场平均金币")
+
+    def test_avg_coins_absent_on_day1(self):
+        text = prompts.bid_request(self.make_obs(day=1))
+        assert "全场平均金币" not in text  # 第 1 天 avg_coins 为 None，不渲染
+
 
 class TestMyLastDayLine:
     """「昨日你的结果」行：直接告知昨日自己的出价、结局与扣款（零信息泄露，
@@ -357,17 +371,18 @@ class TestMyLastDayLine:
         ))
         assert "昨日你的结果：正常出价非法按规则记 0，是唯一出价但未获胜，全额退还。" in text
 
-    def test_super_bid_won_free_of_charge(self):
-        # 凭超级出价获胜：赢得胜场但不扣金币；正常出价分段照常（唯一未中退还）
+    def test_super_bid_unique_highest_still_cannot_win(self):
+        # 超级出价即使是唯一最高也不能获胜（胜场顺延给他人）：
+        # 自己的结果行如实报「未撞车，不扣款」，不出现获胜字样
         text = prompts.bid_request(self.make_obs(
             day=2,
-            today_history=self.history(winner="甲", winning_bid=6, wins_taken=1,
+            today_history=self.history(winner="乙", winning_bid=5, wins_taken=1,
                                        super_users=["甲"]),
             my_last_bid=4, my_last_deduction=0,
             my_last_super_bid=6, my_super_available=False, my_super_used_day=1,
         ))
         assert ("昨日你的结果：正常出价 4，是唯一出价但未获胜，全额退还，"
-                "超级出价 6 唯一最高获胜，赢得 1 个胜场，不扣金币。") in text
+                "超级出价 6 未撞车，不扣款。") in text
 
     def test_super_bid_collided_no_charge(self):
         # 超级出价撞车（狙杀场景）：不扣款；正常出价分段照常
@@ -389,7 +404,7 @@ class TestMyLastDayLine:
             my_last_super_bid=3, my_super_available=False, my_super_used_day=1,
         ))
         assert ("昨日你的结果：正常出价 4，与他人撞车，扣除 4，"
-                "超级出价 3 是唯一出价但未获胜，不扣款。") in text
+                "超级出价 3 未撞车，不扣款。") in text
 
     def test_line_position_between_announcement_and_status(self):
         text = prompts.bid_request(self.make_obs(
@@ -412,10 +427,11 @@ class TestRulesReminder:
     def test_reminder_covers_three_steps_and_super_bid(self):
         reminder = prompts.RULES_REMINDER
         assert "两笔及以上即撞车" in reminder
-        assert "唯一出价中最高的一笔获胜" in reminder
+        assert "唯一正常出价中最高的一笔获胜" in reminder
         assert "全额退还" in reminder
-        # 超级出价要点：每局一次、不扣金币、使用情况只公布谁用了
+        # 超级出价要点：每局一次、只参与撞车不能获胜、不扣金币、只公布谁用了
         assert "超级出价每人每局一次" in reminder
+        assert "不能获胜" in reminder
         assert "不公布其数值" in reminder
 
     def test_other_requests_have_no_reminder(self):
@@ -446,24 +462,25 @@ class TestRenderMatchLog:
         text = prompts.render_match_log(log)
         assert "| 1 | 1 | 6 | 4+超6 | 5 | 3 | 3 | 2 | 丙 以 5 获胜 | 2 |" in text
 
-    def test_super_bid_win_marked_free_of_charge(self):
-        # 凭超级出价获胜：结果列标注不扣金币
+    def test_super_unique_highest_day_renders_normal_winner(self):
+        # 超级出价是唯一最高也不能获胜：胜场顺延给唯一正常价最高的丙，
+        # 结果列渲染正常获胜、无任何超级获胜标注
         log = make_log(days=[
-            make_day(1, [3, 4, 5, 3, 2, 1], 1, "甲", 6, 1, 1,
-                     super_bids={"甲": 6}, winning_is_super=True),
+            make_day(1, [3, 4, 5, 3, 2, 1], 1, "丙", 5, 1, 1, super_bids={"甲": 6}),
         ])
         text = prompts.render_match_log(log)
-        assert "甲 以 6 获胜（凭超级出价，不扣金币）" in text
+        assert "丙 以 5 获胜" in text
+        assert "凭超级出价" not in text
 
     def test_void_day_row(self):
         log = make_log(days=[make_day(1, [2, 2, 2, 1, 1, 1], 1, None, None, 2, is_void=True)])
         text = prompts.render_match_log(log)
         assert "| 1 | 1 | 2 | 2 | 2 | 1 | 1 | 1 | 流局（奖池并入次日） | 2 |" in text
 
-    def test_day5_void_row_marks_pool_forfeited(self):
-        log = make_log(days=[make_day(5, [2, 2, 2, 1, 1, 1], 3, None, None, 2, is_void=True)])
+    def test_day6_void_row_marks_pool_forfeited(self):
+        log = make_log(days=[make_day(6, [2, 2, 2, 1, 1, 1], 3, None, None, 2, is_void=True)])
         text = prompts.render_match_log(log)
-        assert "| 5 | 3 | 2 | 2 | 2 | 1 | 1 | 1 | 流局（奖池作废） | 2 |" in text
+        assert "| 6 | 3 | 2 | 2 | 2 | 1 | 1 | 1 | 流局（奖池作废） | 2 |" in text
 
     def test_empty_log(self):
         log = make_log(days=[])
@@ -512,8 +529,8 @@ class TestRulesText:
 
     def test_core_mechanics_present(self):
         text = prompts.RULES_TEXT
-        assert "每局固定 5 天" in text
-        assert "每天拍卖 1 个胜场，每局共 5 个胜场" in text
+        assert "每局固定 6 天" in text
+        assert "每天拍卖 1 个胜场，每局共 6 个胜场" in text
         assert "奖池并入次日" in text
         assert "每天开始时每人发放 3 枚金币（工资）" in text
         assert "出价为 0 到 6 的整数" in text
@@ -522,7 +539,9 @@ class TestRulesText:
         text = prompts.RULES_TEXT
         assert "每名玩家每局拥有 1 次超级出价机会" in text
         assert "不受余额限制" in text
-        assert "无论获胜、撞车还是未中，超级出价都不扣除金币" in text
+        # 规则 v4：超级出价只参与撞车、不能获胜（胜场顺延给最高唯一正常价）
+        assert "本身不能获胜" in text
+        assert "无论撞车与否、是否压过全场，超级出价都不扣除金币" in text
         assert "每一笔单独计数" in text
 
     def test_settlement_three_steps_present(self):
@@ -551,3 +570,8 @@ class TestRulesText:
         assert "获胜者身份与获胜价" in text
         assert "撞车价位的个数" in text
         assert "只公布谁使用了，不公布其数值" in text
+
+    def test_publication_includes_avg_coins_from_day2(self):
+        # 规则 v4：第 2 天起每天开始时公布全场平均金币余额（保留 1 位小数）
+        text = prompts.RULES_TEXT
+        assert "平均金币余额" in text

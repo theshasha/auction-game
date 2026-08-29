@@ -87,7 +87,7 @@ def run_match(
     past_logs: list[MatchLog],
     bid_collector=None,
 ) -> MatchLog:
-    """运行一局（正赛局或加赛局规则相同），固定 5 天，返回完整局日志。
+    """运行一局（正赛局或加赛局规则相同），固定 6 天，返回完整局日志。
 
     wins_history: 每名玩家在已结束各局的胜场分布，用于构造 Observation 中的排名。
     past_logs: 已结束各局的完整日志，局末公开后玩家可见。
@@ -111,7 +111,7 @@ def run_match(
 
         # 昨日各玩家的自我结算结果（正常出价/扣款/撞车/非法/超级出价），
         # 从昨日 DayResult 复算。扣款只可能来自正常出价（获胜或撞车）；
-        # 超级出价任何结局都不扣款。
+        # 超级出价不能获胜、任何结局都不扣款。
         my_last_by_player: dict[str, tuple[int, int, bool, bool, Optional[int], bool]] = {}
         if log.days:
             yesterday_result = log.days[-1]
@@ -122,7 +122,6 @@ def run_match(
                 collided = yesterday_counts[record.bid] >= 2
                 won_with_normal = (
                     record.player == yesterday_result.winner
-                    and not yesterday_result.winning_is_super
                     and record.bid == yesterday_result.winning_bid
                 )
                 paid = won_with_normal or collided
@@ -143,7 +142,9 @@ def run_match(
                     yesterday_super is not None and yesterday_counts[yesterday_super] >= 2,
                 )
 
-        # 同一天内 6 人的排名快照完全相同，循环外算一次
+        # 同一天内 6 人的排名快照完全相同，循环外算一次；
+        # 全场平均金币（规则五.1，第 2 天起公布）同理，取工资发放后的余额
+        avg_coins = round(sum(coins.values()) / len(coins), 1) if day >= 2 else None
         standings_snapshot = compute_standings(wins_history, match_wins)
         observations = []
         for player in players:
@@ -176,6 +177,7 @@ def run_match(
                         my_last_bid_illegal=last_illegal,
                         my_last_super_bid=last_super,
                         my_last_super_collided=last_super_collided,
+                        avg_coins=avg_coins,
                     ),
                 )
             )
@@ -214,23 +216,27 @@ def run_match(
             reverse=True,
         )
 
-        if unique_prices_desc:
-            winning_bid = unique_prices_desc[0]
-            # 唯一价只有一笔，取到的那笔就是获胜出价（可能是超级出价）
-            winning_record = next(record for record in bids if record.bid == winning_bid)
+        # 判定胜负：超级出价只参与撞车、不能获胜——从最高唯一价往下找，
+        # 第一笔正常出价获胜；唯一价全是超级出价（或没有唯一价）则流局
+        winning_record = None
+        for price in unique_prices_desc:
+            record = next(record for record in bids if record.bid == price)
+            if not record.is_super:
+                winning_record = record
+                break
+
+        if winning_record is not None:
+            winning_bid = winning_record.bid
             winner = winning_record.player
-            winning_is_super = winning_record.is_super
-            wins_taken = pool  # 任何价位获胜都拿全部奖池（无冲顶税、无转判）
+            wins_taken = pool  # 任何价位获胜都拿全部奖池
             match_wins[winner] += wins_taken
             rollover = 0
             is_void = False
         else:
-            winning_record = None
             winner = None
             winning_bid = None
-            winning_is_super = False
             wins_taken = 0
-            rollover = pool  # 流局：奖池整体并入次日（第 5 天流局则随循环结束作废）
+            rollover = pool  # 流局：奖池整体并入次日（第 6 天流局则随循环结束作废）
             is_void = True
 
         # 金币结算：只扣正常出价——获胜的那笔正常出价、以及所有撞车的正常出价
@@ -250,7 +256,6 @@ def run_match(
                 winner=winner,
                 winning_bid=winning_bid,
                 wins_taken=wins_taken,
-                winning_is_super=winning_is_super,
                 super_users=super_users,
                 collision_price_count=sum(1 for count in price_counts.values() if count >= 2),
                 is_void=is_void,
