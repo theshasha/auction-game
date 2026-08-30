@@ -142,9 +142,10 @@ def run_match(
                     yesterday_super is not None and yesterday_counts[yesterday_super] >= 2,
                 )
 
-        # 同一天内 6 人的排名快照完全相同，循环外算一次；
-        # 全场平均金币（规则五.1，第 2 天起公布）同理，取工资发放后的余额
-        avg_coins = round(sum(coins.values()) / len(coins), 1) if day >= 2 else None
+        # 同一天内 6 人的排名快照完全相同，循环外算一次；全场总金币
+        # （规则五.1「其他人总金币」的全场部分，第 2 天起公布）同理，
+        # 取工资发放后的余额，每人观察到的是全场减自己
+        total_coins = sum(coins.values()) if day >= 2 else None
         standings_snapshot = compute_standings(wins_history, match_wins)
         observations = []
         for player in players:
@@ -177,7 +178,20 @@ def run_match(
                         my_last_bid_illegal=last_illegal,
                         my_last_super_bid=last_super,
                         my_last_super_collided=last_super_collided,
-                        avg_coins=avg_coins,
+                        others_coins_total=(
+                            total_coins - coins[player.name]
+                            if total_coins is not None
+                            else None
+                        ),
+                        others_super_remaining=(
+                            sum(
+                                1
+                                for name in coins
+                                if name != player.name and name not in super_used_day
+                            )
+                            if day >= 2
+                            else None
+                        ),
                     ),
                 )
             )

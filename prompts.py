@@ -33,7 +33,8 @@ RULES_REMINDER = (
     "③ 获胜者扣除其获胜的正常出价，其余正常出价全额退还。"
     "超级出价每人每局一次、不受余额限制、只参与撞车不能获胜、任何结局都不扣金币；"
     "每天只公布谁使用了超级出价，不公布其数值。"
-    "他人的出价与余额不公布（第 2 天起公布全场平均金币），只能由公布信息推断，推断可能出错。"
+    "他人的出价与余额不公布（第 2 天起公布其他人总金币与剩余超级出价总数），"
+    "只能由公布信息推断。"
 )
 
 
@@ -41,13 +42,15 @@ def bid_format_hint() -> str:
     """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。
 
     super_bid 为可选字段：不使用就不要包含该字段；使用时两笔出价放在一个
-    JSON 对象里一次提交。
+    JSON 对象里一次提交。规则细节（每局 1 次、只参与撞车、不能获胜、不扣金币）
+    不在此每日复述——规则有 system 的 RULES.md 与局末重申兜底，每日复述实证是
+    诱导弱模型跳读的冗余（20260829_230755 场次：超级规则一天出现 3 遍约 155
+    字符，误解仍集中在不读上下文的模型身上，复述并未起到防误解作用）。
     """
     return (
-        "请先分析当前局势，然后在回复末尾用如下 JSON 给出今日出价：\n"
+        "请先回复你对当前局势的简要分析，然后在回复末尾用如下 JSON 给出今日出价：\n"
         f'{{"bid": <0到{MAX_BID}的整数，不得超过你的余额>}}\n'
-        f"若要同时使用超级出价（本局仅 1 次机会，0到{MAX_BID}的整数，不受余额限制，"
-        "只参与撞车判定、不能获胜，任何结局都不扣金币），格式为：\n"
+        "若要同时使用超级出价，格式为：\n"
         '{"bid": <正常出价>, "super_bid": <超级出价>}\n'
         "不使用超级出价就不要包含 super_bid 字段。"
     )
@@ -63,7 +66,7 @@ def speech_format_hint() -> str:
     接下来要做的事（说出去的话泼出去的水效应）。
     """
     return (
-        "请先规划你的发言策略（想对其他玩家释放什么信号、是否放烟雾弹），"
+        "请先规划你的发言策略，"
         "然后在回复末尾按如下格式给出你实际要公开的发言：\n"
         "【公开发言】\n"
         "<你实际要公开的发言，可自由使用引号与换行>\n"
@@ -99,8 +102,7 @@ def build_system_prompt(
         f"【你的身份】\n你叫 {name}，其他五位玩家是：{others}。\n"
         f"【你的人设】\n{persona_title}：{persona_text}\n"
         f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
-        "公开发言（开局发言、局末发言、终局感言）请始终以人设的口吻进行；"
-        "出价推理与策略规划请保持冷静认真的分析，不需要维持角色口吻。"
+        "请在游戏过程中认真思考，不要被人设的说话方式影响你的思考。"
     )
 
 
@@ -162,9 +164,9 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
     if obs.my_last_super_bid is not None:
         # 超级出价不能获胜，结局只有撞车/未撞车两种，任何结局都不扣款
         if obs.my_last_super_collided:
-            segments.append(f"超级出价 {obs.my_last_super_bid} 撞车，不扣款")
+            segments.append(f"超级出价 {obs.my_last_super_bid} 撞车")
         else:
-            segments.append(f"超级出价 {obs.my_last_super_bid} 未撞车，不扣款")
+            segments.append(f"超级出价 {obs.my_last_super_bid} 未撞车")
     return "昨日你的结果：" + "，".join(segments) + "。"
 
 
@@ -176,15 +178,19 @@ def bid_request(obs: Observation) -> str:
     if obs.day >= 2:
         status_notes.append("已含今日工资")
     status_notes.append(f"今日可出最高价：{min(MAX_BID, obs.my_coins)}")
-    # 全场平均金币（第 2 天起公布，规则五.1）：一个数校准「对手还有多少钱」，
-    # 比逐价位直方图轻量，避免慢模型在算术上出错
-    avg_coins_text = (
-        f"全场平均金币：{obs.avg_coins:.1f}；" if obs.avg_coins is not None else ""
+    # 其他人总金币 + 其他人剩余超级出价总数（第 2 天起公布，规则五.1）：
+    # 两个现成数字校准「对手还有多少钱、还有几发狙杀」，省掉模型由平均数
+    # 反推的乘法与由每日名单点人头两步推导（实证模型在算术/记忆上出错）
+    others_info_text = (
+        f"其他人总金币：{obs.others_coins_total}；"
+        f"其他人剩余超级出价：{obs.others_super_remaining} 次；"
+        if obs.others_coins_total is not None
+        else ""
     )
     status_line = (
         f"今日奖池：{obs.today_pool} 个胜场；"
         f"你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）；"
-        f"{avg_coins_text}"
+        f"{others_info_text}"
         f"本局已获胜场：{obs.my_match_wins}；你的累计总胜场：{obs.my_total_wins}；"
         f"{_super_status_text(obs)}。"
     )
@@ -205,7 +211,9 @@ def bid_request(obs: Observation) -> str:
             f"撞车价位 {yesterday['collision_price_count']} 个。"
         )
     if yesterday["super_users"]:
-        announcement += f"昨日使用超级出价：{'、'.join(yesterday['super_users'])}（数值不公布）。"
+        announcement += f"昨日使用超级出价：{'、'.join(yesterday['super_users'])}。"
+    else:
+        announcement += "昨日无人使用超级出价。"
     lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement]
     my_last_line = _my_last_day_line(obs)
     if my_last_line is not None:
@@ -215,10 +223,11 @@ def bid_request(obs: Observation) -> str:
 
 
 def _super_status_text(obs: Observation) -> str:
-    """状态行中的超级出价状态：明示剩余次数，模型不用自己记。"""
+    """状态行中的超级出价状态：只报可用/已用，不复述规则细节
+    （规则强调由 system 与局末重申承担，每日复述实证无防误解效果）。"""
     if obs.my_super_available:
-        return f"超级出价：可用（本局仅 1 次，0到{MAX_BID}任意整数，不受余额限制）"
-    return f"超级出价：已用（本局第 {obs.my_super_used_day} 天）"
+        return "超级出价：可用"
+    return "超级出价：已用"
 
 
 def retry_bid_request() -> str:
@@ -332,6 +341,5 @@ def final_summary_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家的最终感言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
-        + "\n最后，请写一段只给观众看的总结发言（不会给其他玩家看到），"
-        "回顾你整场比赛的表现与得失（纯文本）。"
+        + "\n最后，请写一段只给观众看的总结发言（不会给其他玩家看到）。"
     )

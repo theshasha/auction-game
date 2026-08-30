@@ -129,6 +129,10 @@ class Observation:
     my_last_bid_illegal: bool = False      # 昨日正常出价是否非法（被规则记 0）
     my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
     my_last_super_collided: bool = False     # 昨日自己的超级出价是否撞车（公开信息推不出，引擎直接给）
-    # 全场平均金币余额（含自己、含当日工资，保留 1 位小数）：规则五.1 规定
-    # 第 2 天起每天开始时公布；第 1 天为 None（恒定 6.0 无信息量，不渲染）。
-    avg_coins: Optional[float] = None
+    # 其他人总金币（其余 5 人余额之和，含当日工资）与其他人剩余超级出价总数：
+    # 规则五.1 规定第 2 天起每天开始时公布；第 1 天为 None（恒定 30 与 5，
+    # 无信息量，不渲染）。与原「全场平均金币」信息等价（他人总金币 =
+    # 平均×6 − 自己余额；剩余超级数可由每日使用名单点人头推出），直给
+    # 省模型一步乘法与一步记忆（v4 信息呈现微调）。
+    others_coins_total: Optional[int] = None
+    others_super_remaining: Optional[int] = None

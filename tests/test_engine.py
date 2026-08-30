@@ -2,7 +2,7 @@
 
 现行规则要点：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
 超级出价每人每局一次，0~6 不查余额，按笔数参与撞车、不能获胜、永不扣款；
-第 2 天起每天开始时公布全场平均金币余额。
+第 2 天起每天开始时公布其他人总金币与剩余超级出价总数。
 """
 
 from engine import compute_standings, run_match, validate_bid, validate_super_bid
@@ -484,9 +484,9 @@ class TestFixedSixDays:
         ]
 
 
-class TestAvgCoinsPublication:
-    """全场平均金币余额：第 2 天起每天开始时公布（含当日工资，保留 1 位小数），
-    第 1 天不公布（恒定 6.0 无信息量）。"""
+class TestOthersInfoPublication:
+    """其他人总金币与剩余超级出价总数：第 2 天起每天开始时公布（含当日工资），
+    第 1 天不公布（恒定 30 与 5 无信息量）。每人观察到的都是全场减自己。"""
 
     def test_day1_not_published(self):
         captured = []
@@ -497,34 +497,38 @@ class TestAvgCoinsPublication:
             return 0
 
         run_one_match({name: strategy for name in NAMES})
-        assert captured[0].avg_coins is None
+        assert captured[0].others_coins_total is None
+        assert captured[0].others_super_remaining is None
 
-    def test_average_reflects_spending_and_salary(self):
+    def test_others_coins_total_excludes_self(self):
         # 第 1 天：甲出 6 唯一获胜付 6（余额 0），其余五人出 1 撞车各付 1（余额 5）；
-        # 第 2 天工资 +3：甲 3、其余 8，平均 = 43/6 ≈ 7.2
-        captured = []
+        # 第 2 天工资 +3：甲 3、其余 8 → 甲看到其他人总金币 5×8=40，乙看到 3+4×8=35
+        captured = {name: [] for name in NAMES}
 
         def strategy(obs):
-            if obs.my_name == "甲":
-                captured.append(obs)
+            captured[obs.my_name].append(obs)
             if obs.day == 1:
                 return 6 if obs.my_name == "甲" else 1
             return 0
 
         run_one_match({name: strategy for name in NAMES})
-        assert captured[1].avg_coins == 7.2
+        assert captured["甲"][1].others_coins_total == 40
+        assert captured["乙"][1].others_coins_total == 35
 
-    def test_average_same_for_all_players(self):
-        # 公布值对全场一致（含自己）：同一天 6 人看到的平均值相同
+    def test_others_super_remaining_excludes_self(self):
+        # 乙第 1 天用掉超级出价：第 2 天其他人看到剩余 4，乙自己看到剩余 5
         captured = {name: [] for name in NAMES}
 
         def strategy(obs):
             captured[obs.my_name].append(obs)
-            return 1  # 全员出 1 撞车：流局日撞车照扣，每人付 1
+            return 0
 
-        run_one_match({name: strategy for name in NAMES})
-        day2_values = {captured[name][1].avg_coins for name in NAMES}
-        assert day2_values == {8.0}  # 6 - 1（撞车扣除）+ 3（工资）
+        run_one_match(
+            {name: strategy for name in NAMES},
+            super_strategies={"乙": lambda obs: 6 if obs.day == 1 else None},
+        )
+        assert captured["甲"][1].others_super_remaining == 4
+        assert captured["乙"][1].others_super_remaining == 5
 
 
 class TestIllegalBidInMatch:

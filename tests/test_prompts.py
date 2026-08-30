@@ -58,8 +58,8 @@ class TestSystemPrompt:
         )
         assert "你叫 甲" in system
         assert "傲娇大小姐：自称本小姐。" in system
-        # 人设只约束公开发言，出价推理明确要求保持冷静认真
-        assert "不需要维持角色口吻" in system
+        # 人设只影响说话方式，思考要求保持认真
+        assert "不要被人设的说话方式影响你的思考" in system
 
     def test_predictions_public_to_everyone(self):
         predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
@@ -111,7 +111,7 @@ class TestSpeechBlockFormat:
     def test_final_summary_stays_plain_text(self):
         text = prompts.final_summary_request({"乙": "感言"})
         assert "【公开发言】" not in text
-        assert "纯文本" in text
+        assert "不会给其他玩家看到" in text
 
     def test_retry_speech_request(self):
         text = prompts.retry_speech_request()
@@ -191,7 +191,9 @@ class TestPlanBidMerge:
     def test_bid_format_hint_covers_super_bid(self):
         text = prompts.bid_format_hint()
         assert '"super_bid"' in text
-        assert "不受余额限制" in text
+        # 规则细节（每局 1 次、不受余额限制、不能获胜等）不在每日消息复述，
+        # 由 system 的 RULES.md 与局末重申兜底
+        assert "不受余额限制" not in text
         assert "不使用超级出价就不要包含 super_bid 字段" in text
         assert "```json" not in text
 
@@ -206,7 +208,7 @@ class TestBidRequest:
                  my_last_collided=False, my_last_bid_illegal=False,
                  my_super_available=True, my_super_used_day=None,
                  my_last_super_bid=None, my_last_super_collided=False,
-                 avg_coins=None):
+                 others_coins_total=None, others_super_remaining=None):
         return Observation(
             my_name="甲",
             my_coins=coins,
@@ -225,7 +227,8 @@ class TestBidRequest:
             my_last_bid_illegal=my_last_bid_illegal,
             my_last_super_bid=my_last_super_bid,
             my_last_super_collided=my_last_super_collided,
-            avg_coins=avg_coins,
+            others_coins_total=others_coins_total,
+            others_super_remaining=others_super_remaining,
         )
 
     def test_first_day_single_line(self):
@@ -244,16 +247,17 @@ class TestBidRequest:
 
     def test_super_status_available_in_first_day_line(self):
         text = prompts.bid_request(self.make_obs(day=1))
-        assert "超级出价：可用（本局仅 1 次" in text.splitlines()[0]
-        assert "不受余额限制" in text.splitlines()[0]
+        # 只报可用/已用，不复述规则细节（每局次数、余额限制等见 RULES.md 与局末重申）
+        assert "超级出价：可用。" in text.splitlines()[0]
+        assert "不受余额限制" not in text.splitlines()[0]
 
-    def test_super_status_used_shows_day(self):
+    def test_super_status_used(self):
         history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
                     "super_users": [], "collision_price_count": 0}]
         text = prompts.bid_request(self.make_obs(
             day=2, today_history=history, my_super_available=False, my_super_used_day=1,
         ))
-        assert "超级出价：已用（本局第 1 天）" in text
+        assert "超级出价：已用。" in text
 
     def test_later_day_three_lines_with_salary_note(self):
         history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
@@ -262,25 +266,25 @@ class TestBidRequest:
         lines = text.splitlines()
 
         assert lines[0] == "当前是第 2 局第 2 天。"
-        assert lines[1] == "昨日公布：乙 以 5 获胜，赢得 1 个胜场，撞车价位 0 个。"
+        assert lines[1] == "昨日公布：乙 以 5 获胜，赢得 1 个胜场，撞车价位 0 个。昨日无人使用超级出价。"
         assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：7（已含今日工资，今日可出最高价：6）；")
         # 余额行必须在昨日公布之后
         assert text.index("昨日公布") < text.index("你的金币余额")
 
     def test_super_users_announcement_names_only(self):
-        # 超级出价使用情况：只公布谁使用了，不公布数值
+        # 超级出价使用情况：每天公布（含无人使用的明示），只报名单不报数值
         history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
                     "super_users": ["丙", "丁"], "collision_price_count": 0}]
         text = prompts.bid_request(self.make_obs(day=2, today_history=history))
         lines = text.splitlines()
 
-        assert lines[1].endswith("昨日使用超级出价：丙、丁（数值不公布）。")
+        assert lines[1].endswith("昨日使用超级出价：丙、丁。")
 
-    def test_no_super_users_no_announcement(self):
+    def test_no_super_users_announcement_says_none(self):
         history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
                     "super_users": [], "collision_price_count": 0}]
         text = prompts.bid_request(self.make_obs(day=2, today_history=history))
-        assert "超级出价：" not in text.splitlines()[1]  # 昨日公布行不含使用情况
+        assert text.splitlines()[1].endswith("昨日无人使用超级出价。")
 
     def test_void_day_announcement_has_no_winner_wording(self):
         history = [{"day": 1, "winner": "流局", "winning_bid": None, "pool": 1, "wins_taken": 0,
@@ -288,7 +292,7 @@ class TestBidRequest:
         text = prompts.bid_request(self.make_obs(day=2, today_history=history, pool=2))
         lines = text.splitlines()
 
-        assert lines[1] == "昨日公布：流局，奖池 1 个胜场并入今日，撞车价位 2 个。"
+        assert lines[1] == "昨日公布：流局，奖池 1 个胜场并入今日，撞车价位 2 个。昨日无人使用超级出价。"
         assert "获胜" not in lines[1]
         assert "已含今日工资" in lines[2]
         assert "今日奖池：2 个胜场" in lines[2]  # 并入后的奖池
@@ -303,18 +307,22 @@ class TestBidRequest:
         text = prompts.bid_request(self.make_obs(day=2, today_history=history, total_wins=5))
         assert "你的累计总胜场：5；" in text.splitlines()[2]
 
-    def test_avg_coins_shown_from_day2(self):
-        # 全场平均金币（第 2 天起公布）：状态行余额之后，保留 1 位小数
+    def test_others_info_shown_from_day2(self):
+        # 其他人总金币 + 其他人剩余超级出价总数（第 2 天起公布）：状态行余额之后
         history = [{"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
                     "super_users": [], "collision_price_count": 0}]
-        text = prompts.bid_request(self.make_obs(day=2, today_history=history, avg_coins=7.2))
+        text = prompts.bid_request(self.make_obs(
+            day=2, today_history=history,
+            others_coins_total=36, others_super_remaining=4,
+        ))
         status_line = text.splitlines()[2]
-        assert "全场平均金币：7.2；" in status_line
-        assert status_line.index("你的金币余额") < status_line.index("全场平均金币")
+        assert "其他人总金币：36；" in status_line
+        assert "其他人剩余超级出价：4 次；" in status_line
+        assert status_line.index("你的金币余额") < status_line.index("其他人总金币")
 
-    def test_avg_coins_absent_on_day1(self):
+    def test_others_info_absent_on_day1(self):
         text = prompts.bid_request(self.make_obs(day=1))
-        assert "全场平均金币" not in text  # 第 1 天 avg_coins 为 None，不渲染
+        assert "其他人总金币" not in text  # 第 1 天为 None（恒定无信息量），不渲染
 
 
 class TestMyLastDayLine:
@@ -571,7 +579,8 @@ class TestRulesText:
         assert "撞车价位的个数" in text
         assert "只公布谁使用了，不公布其数值" in text
 
-    def test_publication_includes_avg_coins_from_day2(self):
-        # 规则 v4：第 2 天起每天开始时公布全场平均金币余额（保留 1 位小数）
+    def test_publication_includes_others_info_from_day2(self):
+        # 规则五.1：第 2 天起每天开始时公布其他人总金币与剩余超级出价总数
         text = prompts.RULES_TEXT
-        assert "平均金币余额" in text
+        assert "其他玩家的总金币余额" in text
+        assert "剩余超级出价总数" in text
