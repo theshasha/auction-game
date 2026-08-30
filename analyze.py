@@ -20,6 +20,7 @@ RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(_\d+)?$")  # 时间戳场次目�
 
 INITIAL_COINS = 6  # 与 models.py 保持一致：每局初始金币
 DAILY_SALARY = 3   # 与 models.py 保持一致：第 2 天起每天开始时的工资
+SUPER_BOUNTY = 3   # 与 models.py 保持一致：超级出价命中的悬赏金币（v5 起）
 
 
 def find_latest_ai_run() -> Path:
@@ -40,14 +41,30 @@ def load_match_logs(run_dir: Path) -> list[dict]:
 
 
 def recompute_remaining_coins(match: dict) -> dict[str, int]:
-    """按规则从出价日志重放金币：第 2 天起每天 +3 工资；
-    只扣正常出价——凭正常出价获胜者（旧规则日志含转判获得者）与撞车者扣除出价
-    （流局日撞车照扣），其余全额退还；超级出价（is_super）任何结局都不扣款。"""
-    coins = {bid["player"]: INITIAL_COINS for bid in match["days"][0]["bids"] if not bid.get("is_super")}
-    for day in match["days"]:
+    """按规则从出价日志重放金币：第 2 天起每天 +3 工资。
+    新格式日志（v5，含 collision_values 字段）：撞车判定只数正常出价笔数
+    （互撞 ≥2 笔或被超级出价命中），命中悬赏 +3 由系统印发。
+    旧格式日志：正常与超级出价混在一起按笔数计撞车；凭正常出价获胜者
+    （旧规则含冲顶税转判获得者）与撞车者扣除出价，超级出价永不扣款。"""
+    days = match["days"]
+    is_new_format = bool(days) and "collision_values" in days[0]
+    coins = {bid["player"]: INITIAL_COINS for bid in days[0]["bids"] if not bid.get("is_super")}
+    for day in days:
         if day["day"] >= 2:
             for name in coins:
                 coins[name] += DAILY_SALARY
+        if is_new_format:
+            burned_values = set(day["collision_values"])
+            for bid in day["bids"]:
+                if bid.get("is_super"):
+                    continue
+                won = bid["player"] == day["winner"] and bid["bid"] == day["winning_bid"]
+                if won or bid["bid"] in burned_values:
+                    coins[bid["player"]] -= bid["bid"]
+            for use in day.get("super_uses", []):
+                if use["hit"]:
+                    coins[use["player"]] += SUPER_BOUNTY
+            continue
         price_counts = Counter(bid["bid"] for bid in day["bids"])
         transfer_recipient = day.get("transfer_recipient")  # 旧规则日志（含冲顶税转判）才有此字段
         winner_paid_with_super = day.get("winning_is_super", False)
@@ -63,7 +80,9 @@ def recompute_remaining_coins(match: dict) -> dict[str, int]:
 
 def analyze(run_dir: Path) -> None:
     matches = load_match_logs(run_dir)
-    player_names = [bid["player"] for bid in matches[0]["match"]["days"][0]["bids"]]
+    player_names = [
+        bid["player"] for bid in matches[0]["match"]["days"][0]["bids"] if not bid.get("is_super")
+    ]
 
     total_days = 0
     void_days = 0
@@ -78,12 +97,15 @@ def analyze(run_dir: Path) -> None:
     zero_bid_wins = 0
     collision_burn = 0   # 因撞车被没收的金币总数（只算正常出价；超级出价不扣款）
     super_uses = 0          # 超级出价使用总次数
-    super_wins = 0          # 凭超级出价获胜的天数
-    super_collisions = 0    # 超级出价撞车的次数（狙杀/对撞）
+    super_wins = 0          # 凭超级出价获胜的天数（旧规则日志才有意义，v4 起恒 0）
+    super_collisions = 0    # 旧格式（v4 及以前）：超级出价撞车的次数（狙杀/对撞）
+    super_hits = 0          # 新格式（v5）：超级出价命中次数（命中即 +3 悬赏且机会恢复）
+    super_bounty_minted = 0  # 新格式（v5）：命中悬赏印发的金币总数
     cap_wins = 0            # 获胜价=6 的天数（新规则无冲顶税，仅作分布参考）
 
     for payload in matches:
         match = payload["match"]
+        is_new_format = bool(match["days"]) and "collision_values" in match["days"][0]
         wins = match["wins"]
         for name, win_count in wins.items():
             if win_count >= 3:  # 单局多胜口径：≥3 胜场（每天奖池 1 个、单局共 5 个）
@@ -93,6 +115,7 @@ def analyze(run_dir: Path) -> None:
             total_days += 1
             pools_by_day_index.setdefault(day["day"], []).append(day["pool"])
             price_counts = Counter(bid["bid"] for bid in day["bids"])
+            burned_values = set(day["collision_values"]) if is_new_format else set()
             for bid in day["bids"]:
                 if bid["status"] == "illegal":
                     illegal_bids += 1
@@ -100,10 +123,17 @@ def analyze(run_dir: Path) -> None:
                     zero_bids += 1
                 if bid.get("is_super"):
                     super_uses += 1
-                    if price_counts[bid["bid"]] >= 2:
+                    if not is_new_format and price_counts[bid["bid"]] >= 2:
                         super_collisions += 1
+                elif is_new_format:
+                    if bid["bid"] in burned_values:
+                        collision_burn += bid["bid"]
                 elif price_counts[bid["bid"]] >= 2:
                     collision_burn += bid["bid"]
+            for use in day.get("super_uses", []):
+                if use["hit"]:
+                    super_hits += 1
+                    super_bounty_minted += SUPER_BOUNTY
             if day["is_void"]:
                 void_days += 1
                 continue
@@ -148,8 +178,17 @@ def analyze(run_dir: Path) -> None:
           f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
     print(f"撞车放血：全场因撞车被没收 {collision_burn} 金币"
           f"（每局平均 {collision_burn / len(matches):.1f}，只计正常出价）")
-    print(f"超级出价：使用 {super_uses} 次，凭超级出价获胜 {super_wins} 天，"
-          f"超级出价撞车 {super_collisions} 次")
+    has_new_format = any(
+        payload["match"]["days"] and "collision_values" in payload["match"]["days"][0]
+        for payload in matches
+    )
+    if has_new_format:
+        hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
+        print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
+              f"悬赏印发 {super_bounty_minted} 金币")
+    else:
+        print(f"超级出价：使用 {super_uses} 次，凭超级出价获胜 {super_wins} 天，"
+              f"超级出价撞车 {super_collisions} 次")
     print()
 
     print(f"单局 ≥3 胜场的玩家-局次数：{len(multi_win_matches)}"

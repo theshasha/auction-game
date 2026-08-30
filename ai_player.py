@@ -38,7 +38,8 @@ class ParseFailedError(CallFailedError):
 
 
 class InvalidBidError(CallFailedError):
-    """解析成功但数值非法（超余额/超范围/非整数/超级出价次数已用完），
+    """解析成功但数值非法（超余额/超范围/非整数/超级出价与正常出价同值/
+    超级出价机会已消耗），
     提醒重试 1 次后仍非法：升级为轮级失败挂起等人工，不再静默记 0。
     与 ParseFailedError 并列区分日志语义（格式问题 vs 规则违反）。"""
 
@@ -251,8 +252,10 @@ class AIPlayer(Player):
             return f"super_bid 不是整数（{super_bid!r}）"
         if super_bid < 0 or super_bid > MAX_BID:
             return f"超级出价 {super_bid} 超出 0~{MAX_BID} 的范围"
+        if super_bid == bid:
+            return f"超级出价 {super_bid} 不能等于你的正常出价"
         if not super_available:
-            return "超级出价本局已使用，不能再提交"
+            return "超级出价本局机会已消耗且未命中恢复，不能再提交"
         return None
 
     def _interpret_bid_response(

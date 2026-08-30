@@ -14,6 +14,7 @@ from models import (
     INITIAL_COINS,
     MAX_BID,
     MAX_DAYS,
+    SUPER_BOUNTY,
     MatchLog,
     Observation,
     StandingsEntry,
@@ -25,15 +26,19 @@ RULES_TEXT = (Path(__file__).parent / "RULES.md").read_text(encoding="utf-8").st
 # 实证错误（如「自己撞车推成退款」）都源于复盘时没套用这三步。
 # 只放局末发言请求（局日志唯一展示处），不重发全文。
 RULES_REMINDER = (
-    "【规则要点重申】每日结算按三步：① 当天全部出价（含所有人的超级出价）按数值逐笔计数，"
-    "某数值出现两笔及以上即撞车，撞车的正常出价全部扣除、超级出价不扣款；"
-    "② 唯一正常出价中最高的一笔获胜、其主人获得当天全部奖池"
-    "（超级出价不能获胜，是唯一出价也会被跳过；0 是合法价位），"
-    "当天没有唯一正常出价则流局、奖池并入次日；"
-    "③ 获胜者扣除其获胜的正常出价，其余正常出价全额退还。"
-    "超级出价每人每局一次、不受余额限制、只参与撞车不能获胜、任何结局都不扣金币；"
-    "每天只公布谁使用了超级出价，不公布其数值。"
-    "他人的出价与余额不公布（第 2 天起公布其他人总金币与剩余超级出价总数），"
+    "【规则要点重申】每日结算按三步：① 当天全部正常出价按数值逐笔计数"
+    "（超级出价不计入），某数值两笔及以上即撞车；此外，被超级出价命中的"
+    "唯一正常出价也视为撞车——撞车的正常出价全部扣除且不能获胜，"
+    "超级出价永不扣款；"
+    "② 未撞车的正常出价中最高的一笔获胜、其主人获得当天全部奖池"
+    "（0 是合法价位），当天正常出价全部撞车则流局、奖池并入次日；"
+    "③ 获胜者扣除其获胜的正常出价，其余未撞车正常出价全额退还，"
+    "超级出价命中的玩家获得系统印发的 3 金币悬赏且机会立即恢复。"
+    "超级出价每人每局 1 次（命中即恢复，无上限）、0~6 且不能等于当天正常出价、"
+    "不受余额限制、只狙击不能获胜、任何结局都不扣金币；"
+    "命中 = 其数值上恰好只有 1 笔正常出价（被命中的正常出价按撞车处理）。"
+    "每天公布撞车价位的具体数值与超级出价使用情况（谁用了、数值几、是否命中）；"
+    "他人的正常出价与余额不公布（第 2 天起公布其他人总金币与剩余超级出价总数），"
     "只能由公布信息推断。"
 )
 
@@ -42,15 +47,17 @@ def bid_format_hint() -> str:
     """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。
 
     super_bid 为可选字段：不使用就不要包含该字段；使用时两笔出价放在一个
-    JSON 对象里一次提交。规则细节（每局 1 次、只参与撞车、不能获胜、不扣金币）
+    JSON 对象里一次提交。规则细节（每局 1 次、命中恢复、不能获胜、不扣金币）
     不在此每日复述——规则有 system 的 RULES.md 与局末重申兜底，每日复述实证是
     诱导弱模型跳读的冗余（20260829_230755 场次：超级规则一天出现 3 遍约 155
     字符，误解仍集中在不读上下文的模型身上，复述并未起到防误解作用）。
+    唯一例外是「不得与正常出价同值」：这是提交合法性约束（同值直接非法），
+    而非策略规则，放在模板里防止无谓的非法提交。
     """
     return (
         "请先回复你对当前局势的简要分析，然后在回复末尾用如下 JSON 给出今日出价：\n"
         f'{{"bid": <0到{MAX_BID}的整数，不得超过你的余额>}}\n'
-        "若要同时使用超级出价，格式为：\n"
+        "若要同时使用超级出价（不得与正常出价同值），格式为：\n"
         '{"bid": <正常出价>, "super_bid": <超级出价>}\n'
         "不使用超级出价就不要包含 super_bid 字段。"
     )
@@ -132,12 +139,21 @@ def opening_plan_request(others_speeches: dict[str, str]) -> str:
     )
 
 
+def _collision_values_text(day_public: dict) -> str:
+    """撞车价位公布：具体数值（只含正常出价被扣款的价位），无则明示无撞车。"""
+    values = day_public["collision_values"]
+    if not values:
+        return "无撞车价位"
+    return f"撞车价位：{'、'.join(str(value) for value in values)}"
+
+
 def _my_last_day_line(obs: Observation) -> Optional[str]:
     """「昨日你的结果」行：直接告知昨日自己的出价、结局与扣款。
 
     零信息泄露（自己的出价与余额变化本来就可推出），只是免去推导——实证模型
     会把自己的撞车推成「唯一未中退款」且不与状态行余额核对，错误随即级联。
-    正常出价与超级出价的结局分段给出（超级出价任何结局都不扣款）。
+    正常出价与超级出价的结局分段给出（超级出价任何结局都不扣款，
+    命中则 +3 悬赏且机会恢复）。
     """
     if obs.my_last_bid is None:
         return None
@@ -150,23 +166,28 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
     else:
         segments = [f"正常出价 {obs.my_last_bid}"]
     if is_void:
-        segments.append(f"当天流局全员撞车，扣除 {obs.my_last_deduction}")
+        segments.append(f"当天流局（正常出价全部撞车），扣除 {obs.my_last_deduction}")
     elif won:
         segments.append(
             f"唯一最高出价获胜，赢得 {yesterday['wins_taken']} 个胜场，"
             f"扣除 {obs.my_last_deduction}"
         )
+    elif obs.my_last_sniped:
+        segments.append(f"被超级出价狙中，扣除 {obs.my_last_deduction}")
     elif obs.my_last_collided:
         segments.append(f"与他人撞车，扣除 {obs.my_last_deduction}")
     else:
-        segments.append("是唯一出价但未获胜，全额退还")
+        segments.append("未撞车但也不是最高，全额退还")
 
     if obs.my_last_super_bid is not None:
-        # 超级出价不能获胜，结局只有撞车/未撞车两种，任何结局都不扣款
-        if obs.my_last_super_collided:
-            segments.append(f"超级出价 {obs.my_last_super_bid} 撞车")
+        # 超级出价的结局只有命中/落空两种：命中 +3 悬赏且机会恢复，落空机会消耗
+        if obs.my_last_super_hit:
+            segments.append(
+                f"超级出价 {obs.my_last_super_bid} 命中，"
+                f"获得 {SUPER_BOUNTY} 金币悬赏，机会已恢复"
+            )
         else:
-            segments.append(f"超级出价 {obs.my_last_super_bid} 未撞车")
+            segments.append(f"超级出价 {obs.my_last_super_bid} 落空")
     return "昨日你的结果：" + "，".join(segments) + "。"
 
 
@@ -202,16 +223,20 @@ def bid_request(obs: Observation) -> str:
     if yesterday["winner"] == "流局":
         announcement = (
             f"昨日公布：流局，奖池 {yesterday['pool']} 个胜场并入今日，"
-            f"撞车价位 {yesterday['collision_price_count']} 个。"
+            f"{_collision_values_text(yesterday)}。"
         )
     else:
         announcement = (
             f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
             f"赢得 {yesterday['pool']} 个胜场，"
-            f"撞车价位 {yesterday['collision_price_count']} 个。"
+            f"{_collision_values_text(yesterday)}。"
         )
-    if yesterday["super_users"]:
-        announcement += f"昨日使用超级出价：{'、'.join(yesterday['super_users'])}。"
+    if yesterday["super_uses"]:
+        uses_text = "、".join(
+            f"{use['player']} 出 {use['value']}（{'命中' if use['hit'] else '落空'}）"
+            for use in yesterday["super_uses"]
+        )
+        announcement += f"昨日使用超级出价：{uses_text}。"
     else:
         announcement += "昨日无人使用超级出价。"
     lines = [f"当前是第 {match_index} 局第 {obs.day} 天。", announcement]
@@ -244,8 +269,9 @@ def invalid_bid_retry_request(reason: str) -> str:
 def render_match_log(log: MatchLog) -> str:
     """整局出价日志渲染为 markdown 表格：玩家列顺序取首日正常出价顺序（即 config 顺序）。
 
-    出价单元格含超级出价时写作「5+超6」；超级出价不能获胜，
-    结果列的获胜者必定凭正常出价。
+    出价单元格含超级出价时写作「5+超6」，命中再加注「中」（如「4+超6中」）；
+    超级出价不能获胜，结果列的获胜者必定凭正常出价。
+    撞车价位列给具体数值（只含正常出价被扣款的价位）。
     """
     if not log.days:
         return "  （本局未进行任何拍卖）"
@@ -254,6 +280,7 @@ def render_match_log(log: MatchLog) -> str:
     separator = "|" + " --- |" * (len(player_names) + 4)
     rows = []
     for day in log.days:
+        hit_by_player = {use["player"] for use in day.super_uses if use["hit"]}
         cells = []
         for name in player_names:
             normal = next(record for record in day.bids if record.player == name and not record.is_super)
@@ -264,13 +291,16 @@ def render_match_log(log: MatchLog) -> str:
             cell = str(normal.bid)
             if super_record is not None:
                 cell += f"+超{super_record.bid}"
+                if name in hit_by_player:
+                    cell += "中"
             cells.append(cell)
         if day.is_void:
             outcome = "流局（奖池作废）" if day.day == MAX_DAYS else "流局（奖池并入次日）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
+        collision_text = "、".join(str(value) for value in day.collision_values) or "—"
         rows.append(
-            f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {day.collision_price_count} |"
+            f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {collision_text} |"
         )
     wins_text = "、".join(f"{name} {w} 胜" for name, w in log.wins.items())
     lines = [header, separator, *rows, "", f"本局胜场：{wins_text}"]
