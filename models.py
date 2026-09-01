@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-INITIAL_COINS = 6              # 每局初始金币
+INITIAL_COINS = 7              # 每局初始金币
 DAILY_SALARY = 3               # 第 2 天起每天开始时每人发放的工资
 MAX_DAYS = 6                   # 每局固定天数（流局不顺延天数，只把奖池并入次日）
-MAX_BID = 6                    # 出价上限（正常出价与超级出价共用）
+MAX_BID = 7                    # 出价上限（正常出价与超级出价共用）
 SUPER_COST = 2                 # 超级出价每次提交的固定消耗（无论是否命中都扣，v6 起）
 SUPER_BOUNTY = 3               # 超级出价命中（数值上 ≥1 笔正常出价）的悬赏金币（系统印发）
-RULES_VERSION = "v6"           # 当前规则版本，写入局日志供 analyze.py 按版本分发统计口径
+RULES_VERSION = "v7"           # 当前规则版本，写入局日志供 analyze.py 按版本分发统计口径
 DAILY_POOL = (1, 1, 1, 1, 1, 1)  # 每天奖池的胜场数（固定 1，流局并入次日）
 WINS_PER_MATCH = sum(DAILY_POOL)  # 每局拍卖的胜场总数（6）
 
@@ -91,6 +91,9 @@ class MatchLog:
     def to_dict(self) -> dict:
         return {
             "rules_version": RULES_VERSION,  # v6 起写入；旧日志无此字段，analyze.py 按 v5 口径处理
+            # v7 起写入：金币重放与极点统计直接从日志取值，analyze.py 无需按版本硬编码
+            "initial_coins": INITIAL_COINS,
+            "max_bid": MAX_BID,
             "match_index": self.match_index,
             "is_playoff": self.is_playoff,
             "wins": dict(self.wins),
@@ -154,5 +157,5 @@ class Observation:
     my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
     my_last_super_hit: bool = False        # 昨日自己的超级出价是否命中（命中 +3 悬赏）
     # 全场每人金币余额（含自己，含当日工资）：规则四.1（v6）规定第 2 天起每天
-    # 开始时公布；第 1 天为 None（恒定每人 6，无信息量，不渲染）。
+    # 开始时公布；第 1 天为 None（恒定每人 INITIAL_COINS，无信息量，不渲染）。
     all_coins: Optional[dict[str, int]] = None

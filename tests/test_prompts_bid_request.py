@@ -22,7 +22,7 @@ class TestBidRequest:
         first_line = text.splitlines()[0]
         assert first_line.startswith("当前是第 2 局第 1 天。")
         # 首日不换行分句；状态行附「今日可出最高价」（= min(上限, 余额)），防止模型自己算错
-        assert "今日奖池：1 个胜场；你的金币余额：7（今日可出最高价：6）；" in first_line
+        assert "今日奖池：1 个胜场；你的金币余额：7（今日可出最高价：7）；" in first_line
         assert "昨日公布" not in text
         assert "已含今日工资" not in text  # 第 1 天没有工资
 
@@ -46,7 +46,7 @@ class TestBidRequest:
             "昨日公布：乙 以 5 获胜，赢得 1 个胜场。"
             "昨日出价明细：甲 6、乙 5、丙 4、丁 3、戊 2、己 1。"
         )
-        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：7（已含今日工资，今日可出最高价：6）；")
+        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：7（已含今日工资，今日可出最高价：7）；")
         # 余额行必须在昨日公布之后
         assert text.index("昨日公布") < text.index("你的金币余额")
 

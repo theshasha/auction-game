@@ -18,7 +18,8 @@ LOG_DIR = ROOT_DIR / "logs"
 
 RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(_\d+)?$")  # 时间戳场次目录，排除 archive 等归档目录
 
-INITIAL_COINS = 6  # 与 models.py 保持一致：每局初始金币
+FALLBACK_INITIAL_COINS = 6  # v7 起日志自带 initial_coins 字段；旧日志回退到此值（与 v5/v6 一致）
+FALLBACK_MAX_BID = 6        # 同上：v7 起日志自带 max_bid，旧日志上限为 6
 DAILY_SALARY = 3   # 与 models.py 保持一致：第 2 天起每天开始时的工资
 SUPER_BOUNTY = 3   # 与 models.py 保持一致：超级出价命中的悬赏金币（v5 起）
 SUPER_COST = 2     # 与 models.py 保持一致：超级出价每次提交的固定消耗（v6 起）
@@ -49,9 +50,10 @@ def recompute_remaining_coins(match: dict) -> dict[str, int]:
     旧格式日志：正常与超级出价混在一起按笔数计撞车；凭正常出价获胜者
     （旧规则含冲顶税转判获得者）与撞车者扣除出价，超级出价永不扣款。"""
     days = match["days"]
-    is_v6 = match.get("rules_version") == "v6"
+    is_v6 = match.get("rules_version") in ("v6", "v7")
     is_new_format = bool(days) and "collision_values" in days[0]
-    coins = {bid["player"]: INITIAL_COINS for bid in days[0]["bids"] if not bid.get("is_super")}
+    initial_coins = match.get("initial_coins", FALLBACK_INITIAL_COINS)
+    coins = {bid["player"]: initial_coins for bid in days[0]["bids"] if not bid.get("is_super")}
     for day in days:
         if day["day"] >= 2:
             for name in coins:
@@ -106,12 +108,13 @@ def analyze(run_dir: Path) -> None:
     super_collisions = 0    # 旧格式（v4 及以前）：超级出价撞车的次数（狙杀/对撞）
     super_hits = 0          # 新格式（v5/v6）：超级出价命中次数（命中即 +3 悬赏）
     super_bounty_minted = 0  # 新格式（v5/v6）：命中悬赏印发的金币总数
-    super_cost_spent = 0    # v6：超级出价固定成本消耗的金币总数（2 × 使用次数）
-    cap_wins = 0            # 获胜价=6 的天数（新规则无冲顶税，仅作分布参考）
+    super_cost_spent = 0    # v6 起：超级出价固定成本消耗的金币总数（2 × 使用次数）
+    cap_wins = 0            # 获胜价=当日上限（极点）的天数（新规则无冲顶税，仅作分布参考）
+    cap_bid = matches[0]["match"].get("max_bid", FALLBACK_MAX_BID)  # 极点数值（v7 起从日志读）
 
     for payload in matches:
         match = payload["match"]
-        is_v6 = match.get("rules_version") == "v6"
+        is_v6 = match.get("rules_version") in ("v6", "v7")
         is_new_format = bool(match["days"]) and "collision_values" in match["days"][0]
         wins = match["wins"]
         for name, win_count in wins.items():
@@ -148,7 +151,7 @@ def analyze(run_dir: Path) -> None:
                 continue
             bids_by_day_index.setdefault(day["day"], []).extend(b["bid"] for b in day["bids"])
             winning_bids.append(day["winning_bid"])
-            if day["winning_bid"] == 6:
+            if day["winning_bid"] == match.get("max_bid", FALLBACK_MAX_BID):
                 cap_wins += 1
             if day.get("winning_is_super"):
                 super_wins += 1
@@ -178,9 +181,8 @@ def analyze(run_dir: Path) -> None:
         print(f"  全天总体：平均 {sum(all_bids) / len(all_bids):.2f}（{len(all_bids)} 笔）")
     if winning_bids:
         win_dist = dict(sorted(Counter(winning_bids).items()))
-        cap_wins = sum(1 for bid in winning_bids if bid == 6)
         print(f"  获胜价平均：{sum(winning_bids) / len(winning_bids):.2f}（{len(winning_bids)} 个获胜日）")
-        print(f"  获胜价分布：{win_dist}；获胜价=6（极点）占比 {cap_wins / len(winning_bids):.1%}")
+        print(f"  获胜价分布：{win_dist}；获胜价={cap_bid}（极点）占比 {cap_wins / len(winning_bids):.1%}")
     print()
 
     print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
@@ -191,7 +193,7 @@ def analyze(run_dir: Path) -> None:
         payload["match"]["days"] and "collision_values" in payload["match"]["days"][0]
         for payload in matches
     )
-    has_v6 = any(payload["match"].get("rules_version") == "v6" for payload in matches)
+    has_v6 = any(payload["match"].get("rules_version") in ("v6", "v7") for payload in matches)
     if has_v6:
         hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
         print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"

@@ -20,7 +20,7 @@ from controller import (
     run_parallel_round,
 )
 from llm_client import MissingApiKeyError, make_chat_fn
-from models import MatchLog, StandingsEntry
+from models import MAX_BID, MatchLog, StandingsEntry
 from players import RandomBot, ScriptedPlayer
 from tournament import run_tournament
 
@@ -262,7 +262,7 @@ def run_ai() -> None:
 def run_benchmark(count: int) -> None:
     """规则平衡性验证（不写日志）：count 场纯随机 Bot 对战 + count 场鲸鱼探针对照。
 
-    鲸鱼探针：1 个恒出 6 的 ScriptedPlayer + 5 个 RandomBot。若鲸鱼平均总胜场
+    鲸鱼探针：1 个恒出 MAX_BID 的 ScriptedPlayer + 5 个 RandomBot。若鲸鱼平均总胜场
     显著高于随机对手，说明「出最大数字」仍是无脑占优策略，规则需要再调。
     """
     from collections import Counter
@@ -271,7 +271,7 @@ def run_benchmark(count: int) -> None:
         rng = random.Random(seed)
         players: list = []
         if with_whale:
-            players.append(ScriptedPlayer.constant("Whale", 6))
+            players.append(ScriptedPlayer.constant("Whale", MAX_BID))
         for name in BOT_NAMES[: 5 if with_whale else 6]:
             players.append(RandomBot(name, random.Random(rng.random())))
         return run_tournament(players)
@@ -313,9 +313,9 @@ def run_benchmark(count: int) -> None:
             avg_bid = f"{sum(bids) / len(bids):.2f}" if bids else "—（全流局）"
             print(f"  第 {day_index} 天：出价 {avg_bid}，奖池 {sum(pools) / len(pools):.2f}")
         win_dist = dict(sorted(stats["winning_bids"].items()))
-        cap_wins = stats["winning_bids"][6]
+        cap_wins = stats["winning_bids"][MAX_BID]
         print(f"获胜价分布：{win_dist}")
-        print(f"获胜价=6（极点）占比：{cap_wins}/{decided}（{cap_wins / max(decided, 1):.1%}）")
+        print(f"获胜价={MAX_BID}（极点）占比：{cap_wins}/{decided}（{cap_wins / max(decided, 1):.1%}）")
 
     baseline = [play_tournament(seed=1000 + i, with_whale=False) for i in range(count)]
     print_stats(f"基准：{count} 场纯随机 Bot 对战", aggregate(baseline))

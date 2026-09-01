@@ -107,7 +107,7 @@ class TestBidParsing:
         assert len(chat_fn.calls) == 2
         retry_user_msg = player.messages[-2]["content"]
         assert "上一提交非法" in retry_user_msg
-        assert "超出 0~6 的范围" in retry_user_msg
+        assert "超出 0~7 的范围" in retry_user_msg
 
     def test_bid_over_balance_retried_with_reason(self):
         # 超余额：提醒文案包含具体余额
@@ -148,7 +148,7 @@ class TestBidParsing:
         chat_fn = fake_chat_fn(['{"bid": 3, "super_bid": 9}', bid_reply(3)])
         player = make_player(chat_fn)
         assert player.decide_bid(make_ai_obs()) == (3, None)
-        assert "超级出价 9 超出 0~6 的范围" in player.messages[-2]["content"]
+        assert "超级出价 9 超出 0~7 的范围" in player.messages[-2]["content"]
 
     def test_error_then_success_recovers(self):
         # 第一次调用失败（如网络抖动）立即重试，成功后正常出价

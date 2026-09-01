@@ -1,8 +1,8 @@
 """单局规则引擎的边界测试：出价校验、胜负判定、金币结算、流局奖池、固定六天。
 全部使用 ScriptedPlayer 构造确定性场景（场景构造器见 conftest.py）。
 
-现行规则要点（v6）：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
-超级出价不限次数（每天最多 1 笔），每次提交固定消耗 2 金币，0~6、不能等于
+现行规则要点（v7）：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
+超级出价不限次数（每天最多 1 笔），每次提交固定消耗 2 金币，0~7、不能等于
 当天正常出价、与正常出价合计不得超过余额、不能获胜；命中（其数值上 ≥1 笔
 正常出价）则该数值全部正常出价按撞车处理，狙击者获得系统印发的 3 金币悬赏。
 任何非法提交整单强制为正常出价 0、无超级出价。
@@ -28,26 +28,26 @@ class TestValidateSubmission:
         [
             (3, None, 6, (3, "ok", None)),
             (0, None, 6, (0, "ok", None)),
-            (6, None, 6, (6, "ok", None)),
-            (6, None, 3, (0, "illegal", None)),   # 正常出价超余额
-            (7, None, 100, (0, "illegal", None)),  # 固定上限 6，余额充足也不行
-            (-1, None, 6, (0, "illegal", None)),
-            (2.5, None, 6, (0, "illegal", None)),  # 非整数
-            ("3", None, 6, (0, "illegal", None)),
-            (None, None, 6, (0, "illegal", None)),
-            (True, None, 6, (0, "illegal", None)),  # bool 也视为非法
-            (3, 5, 6, (3, "ok", 5)),      # 合法超级：3 + 2 ≤ 6
-            (0, 6, 2, (0, "ok", 6)),      # 纯狙击：0 + 2 ≤ 2
-            (4, 6, 6, (4, "ok", 6)),      # 4 + 2 = 6：恰好够用
-            (5, 5, 6, (0, "illegal", None)),  # 同值：整单作废
-            (0, 0, 6, (0, "illegal", None)),
-            (3, 7, 6, (0, "illegal", None)),   # 超级超范围：整单作废
-            (3, -1, 6, (0, "illegal", None)),
-            (3, 2.5, 6, (0, "illegal", None)),
-            (3, "5", 6, (0, "illegal", None)),
-            (3, True, 6, (0, "illegal", None)),
+            (7, None, 7, (7, "ok", None)),
+            (7, None, 3, (0, "illegal", None)),   # 正常出价超余额
+            (8, None, 100, (0, "illegal", None)),  # 固定上限 7，余额充足也不行
+            (-1, None, 7, (0, "illegal", None)),
+            (2.5, None, 7, (0, "illegal", None)),  # 非整数
+            ("3", None, 7, (0, "illegal", None)),
+            (None, None, 7, (0, "illegal", None)),
+            (True, None, 7, (0, "illegal", None)),  # bool 也视为非法
+            (3, 5, 7, (3, "ok", 5)),      # 合法超级：3 + 2 ≤ 7
+            (0, 7, 2, (0, "ok", 7)),      # 纯狙击：0 + 2 ≤ 2
+            (5, 7, 7, (5, "ok", 7)),      # 5 + 2 = 7：恰好够用
+            (5, 5, 7, (0, "illegal", None)),  # 同值：整单作废
+            (0, 0, 7, (0, "illegal", None)),
+            (3, 8, 7, (0, "illegal", None)),   # 超级超范围：整单作废
+            (3, -1, 7, (0, "illegal", None)),
+            (3, 2.5, 7, (0, "illegal", None)),
+            (3, "5", 7, (0, "illegal", None)),
+            (3, True, 7, (0, "illegal", None)),
             (4, 5, 5, (0, "illegal", None)),   # 4 + 2 > 5：总耗资超余额
-            (6, 5, 7, (0, "illegal", None)),   # 6 + 2 > 7：满额出价就不能再狙
+            (7, 5, 8, (0, "illegal", None)),   # 7 + 2 > 8：满额出价就不能再狙
         ],
         ids=["ok-3", "ok-0", "ok-6", "over-balance", "over-limit",
              "negative", "float", "str", "none", "bool",
@@ -101,40 +101,40 @@ class TestCoinSettlement:
     超级出价每次提交固定扣 2 金币成本；扣除部分系统没收。"""
 
     def test_winner_pays_unique_losers_refunded(self):
-        # 第 1 天全价位唯一：甲出 5 获胜付 5（余额 1）；其余人唯一未中全额退还（余额仍 6）
-        # 第 2 天工资 +3：甲 4、其余 9 —— 甲出 5 非法（余额 4），乙出 6 合法（余额 9）
-        log = run_scenario({1: [5, 4, 3, 2, 1, 0], 2: [5, 6, 0, 0, 0, 0]})
+        # 第 1 天全价位唯一：甲出 5 获胜付 5（余额 2）；其余人唯一未中全额退还（余额仍 7）
+        # 第 2 天工资 +3：甲 5、其余 10 —— 甲出 6 非法（余额 5），乙出 7 合法（余额 10）
+        log = run_scenario({1: [5, 4, 3, 2, 1, 0], 2: [6, 7, 0, 0, 0, 0]})
         day1, day2 = log.days[0], log.days[1]
         assert day1.winner == "甲" and day1.winning_bid == 5
 
         record_jia = next(r for r in day2.bids if r.player == "甲")
-        assert record_jia.raw_bid == 5
-        assert record_jia.bid == 0 and record_jia.status == "illegal"  # 余额 4 不够出 5
+        assert record_jia.raw_bid == 6
+        assert record_jia.bid == 0 and record_jia.status == "illegal"  # 余额 5 不够出 6
         record_yi = next(r for r in day2.bids if r.player == "乙")
-        assert record_yi.bid == 6 and record_yi.status == "ok"  # 退还+工资后余额 9
-        assert day2.winner == "乙"  # 0 撞车（甲丙丁戊己），唯一 6 获胜
+        assert record_yi.bid == 7 and record_yi.status == "ok"  # 退还+工资后余额 10
+        assert day2.winner == "乙"  # 0 撞车（甲丙丁戊己），唯一 7 获胜
 
     def test_colliders_pay_on_normal_day(self):
-        # 第 1 天 [5,5,4,3,3,3]：丙唯一 4 获胜付 4（余额 2）；甲乙撞车各付 5（余额 1）；
-        # 丁戊己撞车各付 3（余额 3）。第 2 天工资 +3：甲乙 4、丙 5、丁戊己 6
-        log = run_scenario({1: [5, 5, 4, 3, 3, 3], 2: [5, 4, 5, 6, 0, 0]})
+        # 第 1 天 [5,5,4,3,3,3]：丙唯一 4 获胜付 4（余额 3）；甲乙撞车各付 5（余额 2）；
+        # 丁戊己撞车各付 3（余额 4）。第 2 天工资 +3：甲乙 5、丙 6、丁戊己 7
+        log = run_scenario({1: [5, 5, 4, 3, 3, 3], 2: [6, 4, 6, 7, 0, 0]})
         day2 = log.days[1]
         assert log.days[0].winner == "丙"
 
         records = {r.player: r for r in day2.bids}
-        assert records["甲"].status == "illegal"  # 余额 4 出 5 不行
-        assert records["乙"].bid == 4 and records["乙"].status == "ok"   # 余额 4
-        assert records["丙"].bid == 5 and records["丙"].status == "ok"   # 余额 5
-        assert records["丁"].bid == 6 and records["丁"].status == "ok"   # 余额 6
-        assert day2.winner == "丁" and day2.winning_bid == 6  # 0 撞车，6/5/4 中 6 最高唯一
+        assert records["甲"].status == "illegal"  # 余额 5 出 6 不行
+        assert records["乙"].bid == 4 and records["乙"].status == "ok"   # 余额 5
+        assert records["丙"].bid == 6 and records["丙"].status == "ok"   # 余额 6
+        assert records["丁"].bid == 7 and records["丁"].status == "ok"   # 余额 7
+        assert day2.winner == "丁" and day2.winning_bid == 7  # 0 撞车，7/6/4 中 7 最高唯一
 
     def test_void_day_colliders_still_pay(self):
-        # 流局日撞车照扣：第 1 天全员出 6 撞车流局，各付 6（余额 0）；
+        # 流局日撞车照扣：第 1 天全员出 7 撞车流局，各付 7（余额 0）；
         # 第 2 天工资 +3：甲出 4 非法（余额 3），乙出 3 合法且唯一获胜
-        log = run_scenario({1: [6, 6, 6, 6, 6, 6], 2: [4, 3, 0, 0, 0, 0]})
+        log = run_scenario({1: [7, 7, 7, 7, 7, 7], 2: [4, 3, 0, 0, 0, 0]})
         day1, day2 = log.days[0], log.days[1]
         assert day1.is_void and day1.winner is None
-        assert day1.collision_values == [6]
+        assert day1.collision_values == [7]
 
         record_jia = next(r for r in day2.bids if r.player == "甲")
         assert record_jia.raw_bid == 4
@@ -206,20 +206,20 @@ class TestFixedSixDays:
             for obs in captured["甲"]
         ]
         assert seen == [
-            (1, 1, 6, 0, 0),
-            (2, 2, 9, 0, 0),
-            (3, 3, 12, 0, 0),
-            (4, 4, 15, 0, 0),
-            (5, 5, 18, 0, 0),
-            (6, 6, 21, 0, 0),
+            (1, 1, 7, 0, 0),
+            (2, 2, 10, 0, 0),
+            (3, 3, 13, 0, 0),
+            (4, 4, 16, 0, 0),
+            (5, 5, 19, 0, 0),
+            (6, 6, 22, 0, 0),
         ]
 
 
 class TestIllegalBidInMatch:
     def test_illegal_bids_recorded_as_zero(self):
-        # 甲出 7（超上限）、乙出 -1（负数）、丙出 2.5（非整数），均记 0 并撞车；
+        # 甲出 8（超上限）、乙出 -1（负数）、丙出 2.5（非整数），均记 0 并撞车；
         # 丁戊出 5 撞车，己的唯一 3 获胜
-        log = run_one_match(constant_by_name({"甲": 7, "乙": -1, "丙": 2.5, "丁": 5, "戊": 5, "己": 3}))
+        log = run_one_match(constant_by_name({"甲": 8, "乙": -1, "丙": 2.5, "丁": 5, "戊": 5, "己": 3}))
         day1 = log.days[0]
 
         for name in ["甲", "乙", "丙"]:
@@ -231,10 +231,10 @@ class TestIllegalBidInMatch:
         assert day1.collision_values == [0, 5]  # 0 与 5 两个撞车价位
 
     def test_bid_over_balance_after_spending_is_illegal(self):
-        # 甲第 1 天出 6 获胜、余额归零；第 2 天工资 +3 后出 6 超余额，记非法 0
-        log = run_one_match(constant_strategies([6, 1, 1, 1, 1, 1]))
+        # 甲第 1 天出 7 获胜、余额归零；第 2 天工资 +3 后出 7 超余额，记非法 0
+        log = run_one_match(constant_strategies([7, 1, 1, 1, 1, 1]))
         day2 = log.days[1]
         record = next(r for r in day2.bids if r.player == "甲")
-        assert record.raw_bid == 6
+        assert record.raw_bid == 7
         assert record.bid == 0
         assert record.status == "illegal"

@@ -39,14 +39,14 @@ class TestMyLastDayObservation:
         assert not day3["戊"].my_last_collided
 
     def test_illegal_bid_marked_and_zero_collision_on_void_day(self):
-        # 甲第 1 天出 6 获胜扣 6（余额 0）；第 2 天 +3 后出 5 非法记 0，
+        # 甲第 1 天出 7 获胜扣 7（余额 0）；第 2 天 +3 后出 5 非法记 0，
         # 全员出 0 撞车流局——甲的非法出价记 0 且撞车、扣款 0
         captured = {}
-        log = run_scenario({1: [6, 0, 0, 0, 0, 0], 2: [5, 0, 0, 0, 0, 0]}, capture=captured)
+        log = run_scenario({1: [7, 0, 0, 0, 0, 0], 2: [5, 0, 0, 0, 0, 0]}, capture=captured)
         assert log.days[1].is_void
 
         day2_obs, day3_obs = captured["甲"][1], captured["甲"][2]
-        assert (day2_obs.my_last_bid, day2_obs.my_last_deduction) == (6, 6)
+        assert (day2_obs.my_last_bid, day2_obs.my_last_deduction) == (7, 7)
         assert day3_obs.my_last_bid == 0 and day3_obs.my_last_bid_illegal
         assert day3_obs.my_last_deduction == 0 and day3_obs.my_last_collided
 
@@ -61,11 +61,11 @@ class TestAllCoinsPublication:
         assert captured["甲"][0].all_coins is None
 
     def test_all_coins_includes_self_and_same_for_everyone(self):
-        # 第 1 天：甲出 6 唯一获胜付 6（余额 0），其余五人出 1 撞车各付 1（余额 5）；
-        # 第 2 天工资 +3：甲 3、其余 8 —— 每人看到同一张全场余额表（含自己）
+        # 第 1 天：甲出 6 唯一获胜付 6（余额 1），其余五人出 1 撞车各付 1（余额 6）；
+        # 第 2 天工资 +3：甲 4、其余 9 —— 每人看到同一张全场余额表（含自己）
         captured = {}
         run_scenario({1: [6, 1, 1, 1, 1, 1]}, capture=captured)
-        expected = {"甲": 3, "乙": 8, "丙": 8, "丁": 8, "戊": 8, "己": 8}
+        expected = {"甲": 4, "乙": 9, "丙": 9, "丁": 9, "戊": 9, "己": 9}
         assert captured["甲"][1].all_coins == expected
         assert captured["乙"][1].all_coins == expected
 
@@ -75,7 +75,9 @@ class TestMatchLogPublication:
         log = run_one_match(constant_strategies([5, 4, 3, 2, 1, 0]))
         data = log.to_dict()
 
-        assert data["rules_version"] == "v6"  # 版本标记：analyze.py 按它分发统计口径
+        assert data["rules_version"] == "v7"  # 版本标记：analyze.py 按它分发统计口径
+        assert data["initial_coins"] == 7  # v7 起写入：金币重放与极点统计自描述
+        assert data["max_bid"] == 7
         assert data["match_index"] == 1
         assert data["is_playoff"] is False
         assert len(data["days"]) == 6  # 固定 6 天

@@ -50,7 +50,7 @@ class TestRulesText:
         assert "每天拍卖 1 个胜场，每局共 6 个胜场" in text
         assert "并入次日奖池" in text
         assert "每天开始时每人发放 3 枚金币" in text
-        assert "0~6的整数" in text
+        assert "0~7的整数" in text
 
     def test_super_bid_rules_present(self):
         text = prompts.RULES_TEXT

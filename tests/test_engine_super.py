@@ -47,8 +47,8 @@ class TestSuperBid:
         assert day1.winner == "甲" and day1.winning_bid == 5
         assert day1.super_uses == [{"player": "乙", "value": 6, "hit": False}]
         assert day1.collision_values == []
-        # 落空也扣 2 成本：乙第 1 天 6-2=4，第 2 天工资后为 7（而非 9）
-        assert captured["乙"][1].my_coins == 7
+        # 落空也扣 2 成本：乙第 1 天 7-2=5，第 2 天工资后为 8（而非 10）
+        assert captured["乙"][1].my_coins == 8
 
     def test_super_bid_requires_balance_headroom(self):
         # 总耗资约束：正常出价 + 2 成本不得超过余额，否则整单作废
@@ -135,8 +135,8 @@ class TestSuperBid:
         assert day1.super_uses == [{"player": "丙", "value": 6, "hit": True}]
         assert day1.collision_values == [6]
         assert day1.winner == "丙" and day1.winning_bid == 4
-        # 丙：6 - 4（获胜扣款）- 2（成本）+ 3（悬赏）= 3，第 2 天工资后为 6
-        assert captured["丙"][1].my_coins == 6
+        # 丙：7 - 4（获胜扣款）- 2（成本）+ 3（悬赏）= 4，第 2 天工资后为 7
+        assert captured["丙"][1].my_coins == 7
 
     def test_super_observation_fields(self):
         # Observation 携带昨日超级出价结局（数值/命中，v6 无次数状态字段）；

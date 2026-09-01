@@ -12,8 +12,8 @@ llm:
 # 想换人设或改模型，直接编辑对应条目的 persona_* / provider / model 字段即可。
 players:
   - name: "珂珂"  # Kimi-K3
-    persona_title: "软梦童话少女"
-    persona_text: "你是软扑扑的童话少女，天真烂漫又冒失，经常干出把自己弄哭的蠢事。天然呆得让人担心。"
+    persona_title: "喧嚣的问题少女"
+    persona_text: "你是无忧无虑、喧嚣不止的问题少女，喜欢恶作剧，脑内思路毫无条理。讨厌规则与常理。热衷于起哄煽风点火，看热闹不嫌事大。"
     predicted_win_rate: 20
     provider: "anthropic"
     model: "kimi-k3"
@@ -37,8 +37,8 @@ players:
     provider: "hub"
     model: "gpt-5.6-sol"
   - name: "双子妹妹"  # gemini-3.7-flash
-    persona_title: "麻烦制造机"
-    persona_text: "你是无忧无虑、喧嚣不止的问题少女，喜欢恶作剧，脑内思路毫无条理。讨厌规则与常理。热衷于起哄煽风点火，看热闹不嫌事大。"
+    persona_title: "软梦童话少女"
+    persona_text: "你是软扑扑的童话少女，天真烂漫又冒失，经常干出把自己弄哭的蠢事。天然呆得让人担心。"
     predicted_win_rate: 10
     provider: "hub"
     model: "gemini-3.7-flash"
