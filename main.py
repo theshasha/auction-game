@@ -55,7 +55,7 @@ def make_run_dir(mode: str) -> Path:
 
 
 def make_publish(log_dir: Path):
-    """局末公开：完整出价日志 + 截至当前的累计排名与胜场明细，写 json/txt 并打印。"""
+    """局末公开：完整出价日志 + 截至当前的累计排名与胜场明细，写 json/md 并打印。"""
 
     def publish(log: MatchLog, standings: list[StandingsEntry]) -> None:
         payload = {
@@ -71,9 +71,9 @@ def make_publish(log_dir: Path):
             f"{prompts.render_match_log(log)}\n\n"
             f"截至本局的累计排名:\n{prompts.render_standings(standings)}\n"
         )
-        (log_dir / f"match_{log.match_index}.txt").write_text(text, encoding="utf-8")
+        (log_dir / f"match_{log.match_index}.md").write_text(text, encoding="utf-8")
         match_log_path = (log_dir / f"match_{log.match_index}").relative_to(ROOT_DIR)
-        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {match_log_path}.json/.txt")
+        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {match_log_path}.json/.md")
 
     return publish
 
@@ -98,7 +98,7 @@ class AISpeechDirector:
     def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path):
         self.players = players
         self.controller = controller
-        self.speeches_log = log_dir / "speeches.txt"
+        self.speeches_log = log_dir / "speeches.md"
 
     def _record(self, text: str) -> None:
         with self.speeches_log.open("a", encoding="utf-8") as file:

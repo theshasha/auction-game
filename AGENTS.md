@@ -71,7 +71,7 @@
 │                   # 控制器 test_controller），单文件均 ≤300 行——控制 agent 读写与
 │                   # 编辑回显的上下文成本；同构用例用 parametrize 合并
 └── logs/           # 按场次分目录 <时间戳>_<bot|ai>/，latest 软链接指向最近一场（gitignore）
-                    # 每场内含 match_<n>.json/.txt，AI 模式另有 ai_<名字>.jsonl、speeches.txt
+                    # 每场内含 match_<n>.json/.md，AI 模式另有 ai_<名字>.jsonl、speeches.md
                     # ai_<名字>.md 与 jsonl 同步双写（markdown 视图，VSCode 打开可实时分玩家阅读）
 ```
 
@@ -144,7 +144,7 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
   食物/爱好清单类细节（实证会被模型当成口头禅刷屏，淹没性格表达）。
   system 含【赛前预测】段：虚构夺冠率全员公开（心理战素材）。
 13. **日志按场次分目录 + 双写**：jsonl 是结构化源头，md 只是视图可随时重建；
-  局日志与排名用 markdown 表格渲染（txt 与发给 AI 的消息共用同一渲染）；
+  局日志与排名用 markdown 表格渲染（md 与发给 AI 的消息共用同一渲染）；
   error 条目带轮次上下文。旧日志不做移动/删除，清理由用户决定。
 14. **平衡性验证常驻**：`main.py --benchmark N` 跑 N 场纯随机 + N 场鲸鱼探针，
   每次改规则后先跑 benchmark 再进 AI 模式。随机 Bot 每天 30% 概率随机狙击
