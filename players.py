@@ -6,7 +6,7 @@ import random
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
-from models import MAX_BID, Observation
+from models import MAX_BID, SUPER_COST, Observation
 
 
 class Player(ABC):
@@ -19,15 +19,17 @@ class Player(ABC):
     def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
         """根据当前可见信息给出今日出价，返回 (正常出价, 超级出价或 None)。
 
-        正常出价会被引擎校验，非法一律记 0；超级出价每人每局 1 次机会
-        （命中即恢复，无上限），0~上限的整数、不受余额限制、不能等于当天
-        正常出价、只狙击不能获胜、任何结局都不扣金币。
+        v6 整单校验：任何非法提交（正常出价超余额/超范围/非整数、超级出价
+        与正常出价同值、正常出价 + 超级成本 SUPER_COST 合计超余额等）一律
+        整单强制为正常出价 0、无超级出价。超级出价不限次数（每天最多 1 笔）、
+        每次提交固定消耗 SUPER_COST 金币、只狙击不能获胜、不参与撞车笔数。
         """
 
 
 class RandomBot(Player):
     """在 0 到 min(出价上限, 余额) 之间均匀随机出价；
-    超级出价每天以固定概率随机使用（值在 0~上限间均匀随机，不查余额）。"""
+    超级出价每天以固定概率随机使用（值在 0~上限间均匀随机；
+    v6 余额约束：正常出价 + SUPER_COST ≤ 余额才使用，抽到同值则放弃）。"""
 
     def __init__(
         self,
@@ -42,8 +44,10 @@ class RandomBot(Player):
     def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
         bid = self.rng.randint(0, min(obs.my_coins, MAX_BID))
         super_bid = None
-        if obs.my_super_available and self.rng.random() < self.super_chance:
-            super_bid = self.rng.randint(0, MAX_BID)
+        if self.rng.random() < self.super_chance and bid + SUPER_COST <= obs.my_coins:
+            candidate = self.rng.randint(0, MAX_BID)
+            if candidate != bid:  # 同值在 v6 属非法提交（整单作废），直接放弃本次
+                super_bid = candidate
         return bid, super_bid
 
 
@@ -52,7 +56,7 @@ class ScriptedPlayer(Player):
 
     strategy: 签名为 (Observation) -> int 的函数，决定正常出价。
     super_strategy: 可选，签名为 (Observation) -> Optional[int] 的函数，
-    决定超级出价（返回 None 或不可用日自动不使用）。
+    决定超级出价（返回 None 表示不使用）。
     便捷构造：ScriptedPlayer.constant("甲", 3) 每天固定出 3。
     """
 
@@ -68,7 +72,7 @@ class ScriptedPlayer(Player):
 
     def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
         super_bid = None
-        if self.super_strategy is not None and obs.my_super_available:
+        if self.super_strategy is not None:
             super_bid = self.super_strategy(obs)
         return self.strategy(obs), super_bid
 

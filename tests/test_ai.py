@@ -128,14 +128,21 @@ class TestBidParsing:
         assert "连续两次非法" in str(exc_info.value)
         assert len(chat_fn.calls) == 2
 
-    def test_super_bid_reused_after_spent_is_invalid(self):
-        # 超级出价本局机会已消耗且未命中恢复（obs.my_super_available=False）仍提交
-        # super_bid：提醒重试，第二次去掉 super_bid 即通过
+    def test_super_bid_total_cost_over_balance_is_invalid(self):
+        # 正常出价 + 超级成本 2 金币合计超余额（v6 整单口径）：提醒重试，
+        # 第二次去掉 super_bid 即通过
         chat_fn = fake_chat_fn(['{"bid": 3, "super_bid": 6}', bid_reply(3)])
         player = make_player(chat_fn)
-        assert player.decide_bid(make_ai_obs(super_available=False)) == (3, None)
+        assert player.decide_bid(make_ai_obs(coins=4)) == (3, None)
         retry_user_msg = player.messages[-2]["content"]
-        assert "超级出价本局机会已消耗且未命中恢复" in retry_user_msg
+        assert "合计超过当前余额 4" in retry_user_msg
+
+    def test_super_bid_equal_to_normal_is_invalid(self):
+        # 同值属非法提交（v6：整单作废）：提醒重试，第二次去掉 super_bid 即通过
+        chat_fn = fake_chat_fn(['{"bid": 3, "super_bid": 3}', bid_reply(3)])
+        player = make_player(chat_fn)
+        assert player.decide_bid(make_ai_obs()) == (3, None)
+        assert "不能等于你的正常出价" in player.messages[-2]["content"]
 
     def test_super_bid_out_of_range_is_invalid(self):
         chat_fn = fake_chat_fn(['{"bid": 3, "super_bid": 9}', bid_reply(3)])

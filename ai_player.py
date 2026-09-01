@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import prompts
-from models import INITIAL_COINS, MAX_BID, Observation
+from models import INITIAL_COINS, MAX_BID, SUPER_COST, Observation
 from players import Player
 
 JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
@@ -39,7 +39,7 @@ class ParseFailedError(CallFailedError):
 
 class InvalidBidError(CallFailedError):
     """解析成功但数值非法（超余额/超范围/非整数/超级出价与正常出价同值/
-    超级出价机会已消耗），
+    正常出价与超级成本合计超余额——v6 整单口径），
     提醒重试 1 次后仍非法：升级为轮级失败挂起等人工，不再静默记 0。
     与 ParseFailedError 并列区分日志语义（格式问题 vs 规则违反）。"""
 
@@ -232,13 +232,12 @@ class AIPlayer(Player):
         return PARSE_FAILED
 
     @staticmethod
-    def validate_submission(
-        bid: object, super_bid: object, coins: int, super_available: bool
-    ) -> Optional[str]:
+    def validate_submission(bid: object, super_bid: object, coins: int) -> Optional[str]:
         """校验一次出价提交（正常出价 + 可选超级出价），返回违规原因（None = 合法）。
 
-        校验条件与引擎 validate_bid / validate_super_bid 一致，另加次数检查；
-        在 AIPlayer 内拦截是为了能给模型一次带原因的提醒重试，而不是静默记 0。
+        校验条件与引擎 validate_submission 一致（v6 整单口径：任一非法则整单
+        作废为正常出价 0）；在 AIPlayer 内拦截是为了能给模型一次带原因的
+        提醒重试，而不是静默记 0。
         """
         if type(bid) is not int:  # bool 是 int 子类，同样视为非法
             return f"bid 不是整数（{bid!r}）"
@@ -253,13 +252,16 @@ class AIPlayer(Player):
         if super_bid < 0 or super_bid > MAX_BID:
             return f"超级出价 {super_bid} 超出 0~{MAX_BID} 的范围"
         if super_bid == bid:
-            return f"超级出价 {super_bid} 不能等于你的正常出价"
-        if not super_available:
-            return "超级出价本局机会已消耗且未命中恢复，不能再提交"
+            return f"超级出价 {super_bid} 不能等于你的正常出价（同值属非法提交）"
+        if bid + SUPER_COST > coins:
+            return (
+                f"正常出价 {bid} 加超级出价成本 {SUPER_COST} 金币，"
+                f"合计超过当前余额 {coins}"
+            )
         return None
 
     def _interpret_bid_response(
-        self, content: str, coins: int, super_available: bool
+        self, content: str, coins: int
     ) -> tuple[Optional[tuple[int, Optional[int]]], Optional[str]]:
         """把一次回复解释为 (提交, None) 或 (None, 失败原因)。
 
@@ -270,7 +272,7 @@ class AIPlayer(Player):
         if data is PARSE_FAILED:
             return None, "parse"
         super_bid = data.get("super_bid")
-        reason = self.validate_submission(data["bid"], super_bid, coins, super_available)
+        reason = self.validate_submission(data["bid"], super_bid, coins)
         if reason is not None:
             return None, reason
         return (data["bid"], super_bid), None
@@ -281,7 +283,6 @@ class AIPlayer(Player):
         phase: str,
         context: str,
         coins: int,
-        super_available: bool,
     ) -> tuple[tuple[int, Optional[int]], str]:
         """出价/规划共用的请求-校验闭环：一次请求 + 一次重试，返回 (提交, 正文)。
 
@@ -290,7 +291,7 @@ class AIPlayer(Player):
         解析失败抛 ParseFailedError，数值非法抛 InvalidBidError。
         """
         content = self._guarded_call(user_text, phase, context)
-        submission, failure = self._interpret_bid_response(content, coins, super_available)
+        submission, failure = self._interpret_bid_response(content, coins)
         if failure is not None:
             retry_text = (
                 prompts.retry_bid_request()
@@ -298,9 +299,7 @@ class AIPlayer(Player):
                 else prompts.invalid_bid_retry_request(failure)
             )
             retry_content = self._guarded_call(retry_text, f"{phase}_retry", context)
-            submission, failure = self._interpret_bid_response(
-                retry_content, coins, super_available
-            )
+            submission, failure = self._interpret_bid_response(retry_content, coins)
             if failure is not None:
                 self._write_log({"phase": phase, "parse_failed": True})
                 if failure == "parse":
@@ -327,7 +326,7 @@ class AIPlayer(Player):
 
         context = f"第{len(obs.past_match_logs) + 1}局第{obs.day}天"
         submission, _ = self._request_valid_bid(
-            prompts.bid_request(obs), "bid", context, obs.my_coins, obs.my_super_available
+            prompts.bid_request(obs), "bid", context, obs.my_coins
         )
         return submission
 
@@ -384,11 +383,11 @@ class AIPlayer(Player):
         （decide_bid 第 1 天直接消费，缓存只保留到被消费，开局重新规划时
         先清后写，避免暂停重跑残留旧值）；解析失败与数值非法同出价规则：
         提醒重试 1 次，仍失败抛 ParseFailedError / InvalidBidError 升级轮级失败。
-        第 1 天余额恒为 INITIAL_COINS、超级出价恒可用，校验用常量。
+        第 1 天余额恒为 INITIAL_COINS，校验用常量。
         """
         self._pending_day1_bid = None
         submission, content = self._request_valid_bid(
-            user_text, phase, context, INITIAL_COINS, super_available=True
+            user_text, phase, context, INITIAL_COINS
         )
         self._pending_day1_bid = submission
         return content

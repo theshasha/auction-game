@@ -2,8 +2,8 @@
 
 分三节：
 1. 通用数据对象工厂：NAMES / make_day / make_log / make_standings / history / make_obs
-   （v5 结构：DayResult 用 super_uses + collision_values；Observation 含 my_last_sniped
-   与 my_last_super_hit）。
+   （v6 结构：DayResult 用 super_uses + collision_values，public_view 含 bids_detail；
+   Observation 含 my_last_sniped / my_last_super_hit / all_coins）。
 2. 引擎场景构造器：run_one_match / constant_strategies / constant_by_name /
    bids_by_day / super_by_day / run_scenario——消灭「按天查表策略」在各用例里
    逐字重写的样板。策略只依赖 obs.day 与 obs.my_name，可全员共用同一个函数。
@@ -25,7 +25,7 @@ def make_day(day, bids, pool, winner, winning_bid, collision_values, wins_taken=
              is_void=False, super_bids=None):
     """构造一天结果。bids 为六人正常出价；super_bids 为 {玩家: 数值} 或
     {玩家: (数值, 是否命中)}，每个使用者在出价表里追加一笔 is_super=True
-    的记录，并在 super_uses 里登记 {"player", "value", "hit"}（v5 起每日全透明公布）。
+    的记录，并在 super_uses 里登记 {"player", "value", "hit"}。
     collision_values 为当天撞车价位的具体数值（升序）。"""
     records = [BidRecord(player=name, raw_bid=bid, bid=bid) for name, bid in zip(NAMES, bids)]
     super_uses = []
@@ -67,9 +67,13 @@ def make_standings(wins_history: dict[str, list[int]]):
 
 
 def history(**overrides):
-    """一日公布（DayResult.public_view 形状）：默认「乙 以 5 获胜、无撞车、无人用超级」，
-    用 overrides 覆盖字段。调用方自行包列表作 today_history。"""
+    """一日公布（DayResult.public_view 形状，v6）：默认「乙 以 5 获胜、无撞车、
+    无人用超级」，用 overrides 覆盖字段。调用方自行包列表作 today_history。"""
     base = {"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
+            "bids_detail": [
+                {"player": name, "bid": bid, "super_bid": None}
+                for name, bid in zip(NAMES, [6, 5, 4, 3, 2, 1])
+            ],
             "super_uses": [], "collision_values": []}
     base.update(overrides)
     return base
@@ -78,11 +82,10 @@ def history(**overrides):
 def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coins=7,
              my_last_bid=None, my_last_deduction=None,
              my_last_collided=False, my_last_sniped=False, my_last_bid_illegal=False,
-             my_super_available=True, my_super_used_day=None,
              my_last_super_bid=None, my_last_super_hit=False,
-             others_coins_total=None, others_super_remaining=None,
+             all_coins=None,
              past_match_logs=None):
-    """全字段 Observation 工厂（v5）。past_match_logs 默认空（即当前为第 1 局）。"""
+    """全字段 Observation 工厂（v6）。past_match_logs 默认空（即当前为第 1 局）。"""
     return Observation(
         my_name=my_name,
         my_coins=coins,
@@ -93,8 +96,6 @@ def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coi
         today_history=today_history or [],
         standings=[],
         past_match_logs=past_match_logs or [],
-        my_super_available=my_super_available,
-        my_super_used_day=my_super_used_day,
         my_last_bid=my_last_bid,
         my_last_deduction=my_last_deduction,
         my_last_collided=my_last_collided,
@@ -102,8 +103,7 @@ def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coi
         my_last_bid_illegal=my_last_bid_illegal,
         my_last_super_bid=my_last_super_bid,
         my_last_super_hit=my_last_super_hit,
-        others_coins_total=others_coins_total,
-        others_super_remaining=others_super_remaining,
+        all_coins=all_coins,
     )
 
 
@@ -197,6 +197,6 @@ def legacy_speech_reply(speech):
     return f'发言策略：先放个烟雾弹。\n{{"speech": "{speech}"}}'
 
 
-def make_ai_obs(day=1, coins=6, super_available=True):
+def make_ai_obs(day=1, coins=6):
     """AI 玩家测试的极简 Observation（Alpha 视角；解析测试只关心出价合法性）。"""
-    return make_obs(my_name="Alpha", day=day, coins=coins, my_super_available=super_available)
+    return make_obs(my_name="Alpha", day=day, coins=coins)

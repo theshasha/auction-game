@@ -149,9 +149,11 @@ class TestPlanBidMerge:
     def test_bid_format_hint_covers_super_bid(self):
         text = prompts.bid_format_hint()
         assert '"super_bid"' in text
-        # 规则细节（每局 1 次、不受余额限制、不能获胜等）不在每日消息复述，
+        # 提交合法性约束（同值、合计余额——v6 违反即整单作废）放模板防无谓非法提交；
+        # 策略规则细节（命中判定、悬赏、不能获胜等）不在每日消息复述，
         # 由 system 的 RULES.md 与局末重申兜底
-        assert "不受余额限制" not in text
+        assert "不得与正常出价同值" in text
+        assert "2 金币成本不得超过你的余额" in text
         assert "不使用超级出价就不要包含 super_bid 字段" in text
         assert "```json" not in text
 

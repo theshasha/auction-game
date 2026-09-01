@@ -21,6 +21,7 @@ RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(_\d+)?$")  # 时间戳场次目�
 INITIAL_COINS = 6  # 与 models.py 保持一致：每局初始金币
 DAILY_SALARY = 3   # 与 models.py 保持一致：第 2 天起每天开始时的工资
 SUPER_BOUNTY = 3   # 与 models.py 保持一致：超级出价命中的悬赏金币（v5 起）
+SUPER_COST = 2     # 与 models.py 保持一致：超级出价每次提交的固定消耗（v6 起）
 
 
 def find_latest_ai_run() -> Path:
@@ -42,11 +43,13 @@ def load_match_logs(run_dir: Path) -> list[dict]:
 
 def recompute_remaining_coins(match: dict) -> dict[str, int]:
     """按规则从出价日志重放金币：第 2 天起每天 +3 工资。
-    新格式日志（v5，含 collision_values 字段）：撞车判定只数正常出价笔数
-    （互撞 ≥2 笔或被超级出价命中），命中悬赏 +3 由系统印发。
+    v6 日志（rules_version="v6"）：超级出价每次提交扣 SUPER_COST，命中 +SUPER_BOUNTY。
+    v5 日志（含 collision_values 字段、无 rules_version）：超级出价不扣款，
+    命中悬赏 +3 由系统印发。
     旧格式日志：正常与超级出价混在一起按笔数计撞车；凭正常出价获胜者
     （旧规则含冲顶税转判获得者）与撞车者扣除出价，超级出价永不扣款。"""
     days = match["days"]
+    is_v6 = match.get("rules_version") == "v6"
     is_new_format = bool(days) and "collision_values" in days[0]
     coins = {bid["player"]: INITIAL_COINS for bid in days[0]["bids"] if not bid.get("is_super")}
     for day in days:
@@ -62,6 +65,8 @@ def recompute_remaining_coins(match: dict) -> dict[str, int]:
                 if won or bid["bid"] in burned_values:
                     coins[bid["player"]] -= bid["bid"]
             for use in day.get("super_uses", []):
+                if is_v6:
+                    coins[use["player"]] -= SUPER_COST
                 if use["hit"]:
                     coins[use["player"]] += SUPER_BOUNTY
             continue
@@ -95,16 +100,18 @@ def analyze(run_dir: Path) -> None:
     illegal_bids = 0
     zero_bids = 0
     zero_bid_wins = 0
-    collision_burn = 0   # 因撞车被没收的金币总数（只算正常出价；超级出价不扣款）
+    collision_burn = 0   # 因撞车被没收的金币总数（只算正常出价；超级出价成本另计）
     super_uses = 0          # 超级出价使用总次数
     super_wins = 0          # 凭超级出价获胜的天数（旧规则日志才有意义，v4 起恒 0）
     super_collisions = 0    # 旧格式（v4 及以前）：超级出价撞车的次数（狙杀/对撞）
-    super_hits = 0          # 新格式（v5）：超级出价命中次数（命中即 +3 悬赏且机会恢复）
-    super_bounty_minted = 0  # 新格式（v5）：命中悬赏印发的金币总数
+    super_hits = 0          # 新格式（v5/v6）：超级出价命中次数（命中即 +3 悬赏）
+    super_bounty_minted = 0  # 新格式（v5/v6）：命中悬赏印发的金币总数
+    super_cost_spent = 0    # v6：超级出价固定成本消耗的金币总数（2 × 使用次数）
     cap_wins = 0            # 获胜价=6 的天数（新规则无冲顶税，仅作分布参考）
 
     for payload in matches:
         match = payload["match"]
+        is_v6 = match.get("rules_version") == "v6"
         is_new_format = bool(match["days"]) and "collision_values" in match["days"][0]
         wins = match["wins"]
         for name, win_count in wins.items():
@@ -123,6 +130,8 @@ def analyze(run_dir: Path) -> None:
                     zero_bids += 1
                 if bid.get("is_super"):
                     super_uses += 1
+                    if is_v6:
+                        super_cost_spent += SUPER_COST
                     if not is_new_format and price_counts[bid["bid"]] >= 2:
                         super_collisions += 1
                 elif is_new_format:
@@ -182,7 +191,12 @@ def analyze(run_dir: Path) -> None:
         payload["match"]["days"] and "collision_values" in payload["match"]["days"][0]
         for payload in matches
     )
-    if has_new_format:
+    has_v6 = any(payload["match"].get("rules_version") == "v6" for payload in matches)
+    if has_v6:
+        hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
+        print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
+              f"成本消耗 {super_cost_spent} 金币，悬赏印发 {super_bounty_minted} 金币")
+    elif has_new_format:
         hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
         print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
               f"悬赏印发 {super_bounty_minted} 金币")

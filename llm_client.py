@@ -41,7 +41,8 @@ HUB_ANTHROPIC_BASE_URL = "https://hub.oaifree.com/anthropic"
 #   minimax    | MiniMax-M3           out=512000（已下场，条目保留）
 #   zai        | glm-5.3              out=131072
 MODEL_OUTPUT_LIMITS = {
-    "moonshotai/Kimi-K3": 131072,
+    "moonshotai/Kimi-K3": 131072,  # modal 渠道的模型 ID（带厂商前缀）
+    "kimi-k3": 131072,             # hub 渠道的模型 ID
     "deepseek-v4-pro": 384000,
     "deepseek-v4-flash": 384000,
     "gemini-3.1-pro-preview": 65536,

@@ -51,34 +51,23 @@ class TestMyLastDayObservation:
         assert day3_obs.my_last_deduction == 0 and day3_obs.my_last_collided
 
 
-class TestOthersInfoPublication:
-    """其他人总金币与剩余超级出价总数：第 2 天起每天开始时公布（含当日工资），
-    第 1 天不公布（恒定 30 与 5 无信息量）。每人观察到的都是全场减自己。"""
+class TestAllCoinsPublication:
+    """全场每人金币余额：第 2 天起每天开始时公布（含当日工资，含自己），
+    第 1 天不公布（恒定每人 6 无信息量）。同一天内全场看到的快照完全相同。"""
 
     def test_day1_not_published(self):
         captured = {}
         run_scenario({}, capture=captured)  # 全员每天出 0
-        assert captured["甲"][0].others_coins_total is None
-        assert captured["甲"][0].others_super_remaining is None
+        assert captured["甲"][0].all_coins is None
 
-    def test_others_coins_total_excludes_self(self):
+    def test_all_coins_includes_self_and_same_for_everyone(self):
         # 第 1 天：甲出 6 唯一获胜付 6（余额 0），其余五人出 1 撞车各付 1（余额 5）；
-        # 第 2 天工资 +3：甲 3、其余 8 → 甲看到其他人总金币 5×8=40，乙看到 3+4×8=35
+        # 第 2 天工资 +3：甲 3、其余 8 —— 每人看到同一张全场余额表（含自己）
         captured = {}
         run_scenario({1: [6, 1, 1, 1, 1, 1]}, capture=captured)
-        assert captured["甲"][1].others_coins_total == 40
-        assert captured["乙"][1].others_coins_total == 35
-
-    def test_others_super_remaining_excludes_self(self):
-        # 乙第 1 天用掉超级出价：第 2 天其他人看到剩余 4，乙自己看到剩余 5
-        captured = {}
-        run_scenario(
-            {},
-            super_strategies={"乙": super_by_day({1: 6})},
-            capture=captured,
-        )
-        assert captured["甲"][1].others_super_remaining == 4
-        assert captured["乙"][1].others_super_remaining == 5
+        expected = {"甲": 3, "乙": 8, "丙": 8, "丁": 8, "戊": 8, "己": 8}
+        assert captured["甲"][1].all_coins == expected
+        assert captured["乙"][1].all_coins == expected
 
 
 class TestMatchLogPublication:
@@ -86,6 +75,7 @@ class TestMatchLogPublication:
         log = run_one_match(constant_strategies([5, 4, 3, 2, 1, 0]))
         data = log.to_dict()
 
+        assert data["rules_version"] == "v6"  # 版本标记：analyze.py 按它分发统计口径
         assert data["match_index"] == 1
         assert data["is_playoff"] is False
         assert len(data["days"]) == 6  # 固定 6 天
@@ -103,7 +93,7 @@ class TestMatchLogPublication:
         assert sum(data["wins"].values()) == 6  # 无流局：6 个胜场全部拍出
 
     def test_super_bid_visible_in_match_end_log(self):
-        # 局末完整日志含超级出价的数值与命中结果（对局内也每日公布，v5 全透明）
+        # 局末完整日志含超级出价的数值与命中结果（对局内次日也公开出价明细）
         log = run_one_match(
             constant_strategies([5, 4, 3, 2, 1, 0]),
             super_strategies={"乙": super_by_day({1: 6})},

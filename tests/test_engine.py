@@ -1,11 +1,12 @@
 """单局规则引擎的边界测试：出价校验、胜负判定、金币结算、流局奖池、固定六天。
 全部使用 ScriptedPlayer 构造确定性场景（场景构造器见 conftest.py）。
 
-现行规则要点（v5）：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
-超级出价每人每局 1 次机会（命中即恢复、无上限），0~6 不查余额、不能等于
-当天正常出价、不能获胜、永不扣款；命中（其数值上恰好 1 笔正常出价）则该
-正常出价按撞车处理，狙击者获得系统印发的 3 金币悬赏。
-第 2 天起每天开始时公布其他人总金币与剩余超级出价总数。
+现行规则要点（v6）：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
+超级出价不限次数（每天最多 1 笔），每次提交固定消耗 2 金币，0~6、不能等于
+当天正常出价、与正常出价合计不得超过余额、不能获胜；命中（其数值上 ≥1 笔
+正常出价）则该数值全部正常出价按撞车处理，狙击者获得系统印发的 3 金币悬赏。
+任何非法提交整单强制为正常出价 0、无超级出价。
+第 2 天起每天开始时公布昨日完整出价明细与全场每人金币余额。
 """
 
 import pytest
@@ -16,52 +17,47 @@ from conftest import (
     run_one_match,
     run_scenario,
 )
-from engine import validate_bid, validate_super_bid
+from engine import validate_submission
 
 
-class TestValidateBid:
+class TestValidateSubmission:
+    """v6 整单校验：任何非法提交一律整单作废为（正常出价 0, 无超级出价）。"""
+
     @pytest.mark.parametrize(
-        "bid, balance, expected",
+        "bid, super_bid, balance, expected",
         [
-            (3, 6, (3, "ok")),
-            (0, 6, (0, "ok")),
-            (6, 6, (6, "ok")),
-            (6, 3, (0, "illegal")),    # 超余额
-            (7, 100, (0, "illegal")),  # 固定上限 6，余额充足也不行
-            (-1, 6, (0, "illegal")),
-            (2.5, 6, (0, "illegal")),  # 非整数
-            ("3", 6, (0, "illegal")),
-            (None, 6, (0, "illegal")),
-            (True, 6, (0, "illegal")),  # bool 也视为非法
+            (3, None, 6, (3, "ok", None)),
+            (0, None, 6, (0, "ok", None)),
+            (6, None, 6, (6, "ok", None)),
+            (6, None, 3, (0, "illegal", None)),   # 正常出价超余额
+            (7, None, 100, (0, "illegal", None)),  # 固定上限 6，余额充足也不行
+            (-1, None, 6, (0, "illegal", None)),
+            (2.5, None, 6, (0, "illegal", None)),  # 非整数
+            ("3", None, 6, (0, "illegal", None)),
+            (None, None, 6, (0, "illegal", None)),
+            (True, None, 6, (0, "illegal", None)),  # bool 也视为非法
+            (3, 5, 6, (3, "ok", 5)),      # 合法超级：3 + 2 ≤ 6
+            (0, 6, 2, (0, "ok", 6)),      # 纯狙击：0 + 2 ≤ 2
+            (4, 6, 6, (4, "ok", 6)),      # 4 + 2 = 6：恰好够用
+            (5, 5, 6, (0, "illegal", None)),  # 同值：整单作废
+            (0, 0, 6, (0, "illegal", None)),
+            (3, 7, 6, (0, "illegal", None)),   # 超级超范围：整单作废
+            (3, -1, 6, (0, "illegal", None)),
+            (3, 2.5, 6, (0, "illegal", None)),
+            (3, "5", 6, (0, "illegal", None)),
+            (3, True, 6, (0, "illegal", None)),
+            (4, 5, 5, (0, "illegal", None)),   # 4 + 2 > 5：总耗资超余额
+            (6, 5, 7, (0, "illegal", None)),   # 6 + 2 > 7：满额出价就不能再狙
         ],
         ids=["ok-3", "ok-0", "ok-6", "over-balance", "over-limit",
-             "negative", "float", "str", "none", "bool"],
+             "negative", "float", "str", "none", "bool",
+             "super-ok", "super-pure-snipe", "super-exact-balance",
+             "super-same-value", "super-same-zero", "super-over-limit",
+             "super-negative", "super-float", "super-str", "super-bool",
+             "total-over-balance", "full-bid-plus-super"],
     )
-    def test_validate_bid(self, bid, balance, expected):
-        assert validate_bid(bid, balance) == expected
-
-
-class TestValidateSuperBid:
-    """超级出价：0~6 的整数，不查余额，但不能等于当天正常出价；非法视为未使用（None）。"""
-
-    @pytest.mark.parametrize(
-        "super_bid, normal_bid, expected",
-        [
-            (0, 3, 0),
-            (6, 3, 6),
-            (5, 5, None),   # 等于当天正常出价：非法
-            (0, 0, None),
-            (7, 3, None),   # 超范围
-            (-1, 3, None),
-            (2.5, 3, None),
-            ("3", 3, None),
-            (True, 3, None),  # bool 同样非法
-        ],
-        ids=["ok-0", "ok-6", "equal-5", "equal-0", "over-limit",
-             "negative", "float", "str", "bool"],
-    )
-    def test_validate_super_bid(self, super_bid, normal_bid, expected):
-        assert validate_super_bid(super_bid, normal_bid) == expected
+    def test_validate_submission(self, bid, super_bid, balance, expected):
+        assert validate_submission(bid, super_bid, balance) == expected
 
 
 class TestWinningRules:
@@ -102,7 +98,7 @@ class TestWinningRules:
 
 class TestCoinSettlement:
     """金币结算：获胜的正常出价与撞车的正常出价扣除，唯一未中全额退还；
-    超级出价任何结局都不扣款；扣除部分系统没收。"""
+    超级出价每次提交固定扣 2 金币成本；扣除部分系统没收。"""
 
     def test_winner_pays_unique_losers_refunded(self):
         # 第 1 天全价位唯一：甲出 5 获胜付 5（余额 1）；其余人唯一未中全额退还（余额仍 6）
