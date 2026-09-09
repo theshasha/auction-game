@@ -1,0 +1,227 @@
+schema: comet.native.v4
+name: analyze-per-player-stats
+language: zh-CN
+phase: archive
+status: done
+state_version: 8
+brief: brief.md
+shape_confirmation_hash: bbae9facb1a8b5215ed91f6c5b3ea1627c332dedb00388f6668f081626a78245
+spec_changes:
+  - capability: analyze
+    operation: create
+    source: specs/analyze/spec.md
+workspace:
+  isolation: current
+  change_branch: master
+  target_branch: master
+  finish: null
+loop:
+  stage: done
+  goal_cycle: 1
+  iteration: 1
+  attempt: 1
+  retry_epoch: 0
+  failed_iteration_count: 0
+  no_progress_count: 0
+  execution_failure_count: 0
+  previous_unresolved_ids: []
+  next_action: null
+acceptance:
+  - id: A1
+    source: brief.md
+    text: analyze.py 输出玩家维度统计段，覆盖该场全部 6 名玩家，每人包含：总胜场、局冠军数（并列按 1/n
+      计）、超级出价使用/命中/命中率、撞车放血、平均正常出价、每局局末余额、非法出价笔数、出 0 次数
+    result: passed
+    reason:
+      text: 玩家明细八项指标全覆盖 6 名玩家；用独立脚本（不复用 analyze.py 代码）从 match_*.json 重算 v7 场次全部 6
+        人的总胜场、局冠军（含 1/n 并列）、超级用/中、放血、均出、逐局余额、违规、出 0，与输出逐值一致
+      truncated: false
+  - id: A2
+    source: brief.md
+    text: 玩家维度统计段包含每局胜场矩阵（每名玩家 × 每局的胜场数明细）
+    result: passed
+    reason:
+      text: 每局胜场矩阵每人一行、每局一列；v7 场 5 列、含加赛场 6 列（加1）；独立重算含加赛场次的玩家矩阵与输出一致
+      truncated: false
+  - id: A3
+    source: brief.md
+    text: 玩家维度段对 v7、v5/v6 新格式与旧格式日志均可运行，缺失数据（如旧格式无 super_uses 命中率）按 analyze.py
+      现有版本自适应风格降级，不报错
+    result: passed
+    reason:
+      text: v7 与 v5 新格式场次正常输出命中率（exit
+        0）；旧格式场次显示降级标记「旧格式命中率不可得：—」且不报错，旧口径放血/余额与独立重算一致；合成旧格式单元测试断言 super_hits 为
+        None
+      truncated: false
+  - id: A4
+    source: brief.md
+    text: 全量零网络；`python3 -m pytest tests/ -q` 全绿
+    result: passed
+    reason:
+      text: python3 -m pytest tests/ -q 实跑 211 passed（exit
+        0）；新增测试全部合成数据零网络；统计段插入位置与既有聚合输出不变性均有测试断言
+      truncated: false
+builder_handoff:
+  candidate_id: ea2a267b-0c47-466a-bba6-18474becfdac
+  identity_provider: skill-coordinated
+  builder_execution_ref: skill-coordinated:builder:31d77ec0-6ed2-4dd6-9154-8c9f6c6646cc
+  iteration: 1
+  summary:
+    text: analyze.py 新增玩家维度统计段：collect_player_stats/print_player_stats
+      两个新函数，在聚合经济块之后、「单局 ≥3 胜场」之前输出每局胜场矩阵（含加赛「加N」标签）与玩家明细行（总胜场、局冠军并列
+      1/n、超级出价使用/命中/命中率、撞车放血、平均正常出价、每局局末余额、违规笔数、出 0
+      次数，按总胜场降序）。口径与聚合段一致（放血只计正常出价、均值刨除流局日、余额复用
+      recompute_remaining_coins）；旧格式降级：超级使用次数从 bids 的 is_super
+      统计、命中率显示降级标记。既有聚合输出零改动（diff 纯新增）。新增 tests/test_analyze.py 五个零网络测试（复用
+      conftest 工厂，期望值全部手工重算）。复核提出的加赛标签硬编码问题已修复（新增 REGULAR_MATCHES=5 常量，与
+      tournament.py 保持一致，遵循本文件既有常量镜像惯例）。
+    truncated: false
+  addressed_acceptance_ids:
+    - A1
+    - A2
+    - A3
+    - A4
+  checks:
+    - name:
+        text: python3 -m pytest tests/ -q
+        truncated: false
+      result: passed
+      note:
+        text: 211 passed（含新增 5 项 analyze 测试），全量零网络
+        truncated: false
+    - name:
+        text: python3 analyze.py（最新 v7 场次）
+        truncated: false
+      result: passed
+      note:
+        text: 玩家维度段输出完整；玩家段合计（超 93 用 58 中、放血 480、出 0 共 21、违规 0）与聚合段逐一吻合；局冠军合计=5=局数
+        truncated: false
+    - name:
+        text: python3 analyze.py logs/20260829_151836_ai（旧格式）
+        truncated: false
+      result: passed
+      note:
+        text: 命中率降级显示「旧格式命中率不可得：—」，进程不报错
+        truncated: false
+    - name:
+        text: python3 analyze.py logs/20260830_191338_bot（含加赛局）
+        truncated: false
+      result: passed
+      note:
+        text: 矩阵列正确显示「第 1/2/3/4/5/加1 局」
+        truncated: false
+  checks_truncated: false
+  known_limits:
+    - text: 混合新旧格式的场次中任一旧格式局会把全场命中率降级为「—」（全场级开关，有意取舍，spec 已记录）
+      truncated: false
+    - text: 玩家明细行的平均正常出价只计正常出价，与聚合段「平均出价」（含超级出价数值）口径不同——spec 已明确为「平均正常出价」
+      truncated: false
+  known_limits_truncated: false
+  review:
+    status: passed
+    summary:
+      text: 独立只读复核：逐项对照 spec 与 git diff（纯新增 121 行、既有聚合输出零改动），实跑
+        v7/旧格式/含加赛三种真实日志并与聚合段交叉对账一致；测试期望值经独立手算复核无串通假阳性。两条非阻塞建议：加赛标签硬编码（已修复）、混合格式命中率全局降级（有意取舍保留）。
+      truncated: false
+    reviewer_execution_ref: cursor-task:readonly-review-analyze-per-player-stats-iter1
+  submitted_at: 2026-09-09T14:48:51.212Z
+blockers: []
+verification:
+  candidate_id: ea2a267b-0c47-466a-bba6-18474becfdac
+  identity_provider: skill-coordinated
+  verifier_execution_ref: skill-coordinated:verifier:dd42ecb0-6dfd-427e-80a5-d8ac98f0c206
+  iteration: 1
+  attempt: 1
+  assurance: skill-coordinated
+  verdict: pass
+  checks:
+    - id: pytest
+      name:
+        text: pytest 全量零网络测试
+        truncated: false
+      argv_display:
+        - text: -m
+          truncated: false
+        - text: pytest
+          truncated: false
+        - text: tests/
+          truncated: false
+        - text: -q
+          truncated: false
+      argv_truncated: false
+      cwd_ref: .
+      status: passed
+      exit_code: 0
+      duration_ms: 3792
+    - id: analyze-v7
+      name:
+        text: analyze 最新 v7 场次
+        truncated: false
+      argv_display:
+        - text: analyze.py
+          truncated: false
+      argv_truncated: false
+      cwd_ref: .
+      status: passed
+      exit_code: 0
+      duration_ms: 42
+    - id: analyze-old-format
+      name:
+        text: analyze 旧格式场次降级
+        truncated: false
+      argv_display:
+        - text: analyze.py
+          truncated: false
+        - text: logs/20260829_151836_ai
+          truncated: false
+      argv_truncated: false
+      cwd_ref: .
+      status: passed
+      exit_code: 0
+      duration_ms: 42
+    - id: analyze-playoff
+      name:
+        text: analyze 含加赛场次
+        truncated: false
+      argv_display:
+        - text: analyze.py
+          truncated: false
+        - text: logs/20260830_191338_bot
+          truncated: false
+      argv_truncated: false
+      cwd_ref: .
+      status: passed
+      exit_code: 0
+      duration_ms: 40
+  summary:
+    text: 实现与 brief/spec 完全对齐：八项明细指标、胜场矩阵、三格式降级、排序与插入位置均正确，经独立重算在 v7 全部 6 人、旧格式 2
+      人、含加赛 v5 场 1 人三个维度抽查数值零误差；全量测试 211 全绿，无网络依赖。
+    truncated: false
+  risks: []
+  risks_truncated: false
+  completed_at: 2026-09-09T14:59:00.533Z
+history:
+  - goal_cycle: 1
+    iteration: 1
+    attempt: 1
+    outcome: pass
+    unresolved_ids: []
+    summary:
+      text: 实现与 brief/spec 完全对齐：八项明细指标、胜场矩阵、三格式降级、排序与插入位置均正确，经独立重算在 v7 全部 6 人、旧格式 2
+        人、含加赛 v5 场 1 人三个维度抽查数值零误差；全量测试 211 全绿，无网络依赖。
+      truncated: false
+    completed_at: 2026-09-09T14:59:00.533Z
+history_overflow:
+  dropped_entries: 0
+  first_dropped_at: null
+  last_dropped_at: null
+  outcome_counts:
+    pass: 0
+    fail: 0
+    blocked: 0
+    execution-error: 0
+    recovery: 0
+verification_result: pass
+verification_report: verification.md
+archived: true
+created_at: 2026-09-09T14:13:56.769Z
