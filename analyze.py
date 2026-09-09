@@ -23,6 +23,7 @@ FALLBACK_MAX_BID = 6        # 同上：v7 起日志自带 max_bid，旧日志上
 DAILY_SALARY = 3   # 与 models.py 保持一致：第 2 天起每天开始时的工资
 SUPER_BOUNTY = 3   # 与 models.py 保持一致：超级出价命中的悬赏金币（v5 起）
 SUPER_COST = 2     # 与 models.py 保持一致：超级出价每次提交的固定消耗（v6 起）
+REGULAR_MATCHES = 5  # 与 tournament.py 保持一致：正赛局数（加赛局号从 REGULAR_MATCHES+1 起）
 
 
 def find_latest_ai_run() -> Path:
@@ -83,6 +84,124 @@ def recompute_remaining_coins(match: dict) -> dict[str, int]:
             if won_with_normal or bid["player"] == transfer_recipient or is_collider:
                 coins[bid["player"]] -= bid["bid"]
     return coins
+
+
+def collect_player_stats(matches: list[dict]) -> dict:
+    """按玩家聚合整场统计：每局胜场矩阵 + 玩家明细行（口径与聚合段一致）。
+
+    返回 {"match_labels", "win_matrix", "rows"}；rows 按总胜场降序（同胜场按名字）。
+    旧格式日志（无 super_uses / collision_values）降级：超级出价使用次数从 bids 的
+    is_super 统计，命中率不可得（super_hits=None，展示层显示降级标记）。
+    """
+    player_names = [
+        bid["player"] for bid in matches[0]["match"]["days"][0]["bids"] if not bid.get("is_super")
+    ]
+    match_labels: list[str] = []
+    win_matrix: dict[str, list[int]] = {name: [] for name in player_names}
+    match_champions = {name: 0.0 for name in player_names}  # 第一名并列按 1/n 计
+    super_uses_count = {name: 0 for name in player_names}
+    super_hits = {name: 0 for name in player_names}
+    super_hit_known = True   # 任一旧格式局即无法得到全场命中数
+    collision_burn = {name: 0 for name in player_names}
+    normal_bids: dict[str, list[int]] = {name: [] for name in player_names}
+    end_coins: dict[str, list[int]] = {name: [] for name in player_names}
+    illegal_counts = {name: 0 for name in player_names}
+    zero_bid_counts = {name: 0 for name in player_names}
+
+    for payload in matches:
+        match = payload["match"]
+        days = match["days"]
+        is_new_format = bool(days) and "collision_values" in days[0]
+        if match["is_playoff"]:
+            match_labels.append(f"加{match['match_index'] - REGULAR_MATCHES}")
+        else:
+            match_labels.append(str(match["match_index"]))
+        wins = match["wins"]
+        for name in player_names:
+            win_matrix[name].append(wins.get(name, 0))
+        if wins:
+            top_wins = max(wins.values())
+            champions = [name for name, count in wins.items() if count == top_wins]
+            for name in champions:
+                match_champions[name] += 1 / len(champions)
+        for day in days:
+            if is_new_format:
+                burned_values = set(day["collision_values"])
+            else:
+                # 旧格式：正常与超级出价混在一起按笔数计撞车（与聚合段旧口径一致）
+                price_counts = Counter(bid["bid"] for bid in day["bids"])
+            for bid in day["bids"]:
+                name = bid["player"]
+                if bid["status"] == "illegal":
+                    illegal_counts[name] += 1
+                if bid.get("is_super"):
+                    if not is_new_format:
+                        super_uses_count[name] += 1
+                    continue
+                if bid["bid"] == 0:
+                    zero_bid_counts[name] += 1
+                burned = (
+                    bid["bid"] in burned_values
+                    if is_new_format
+                    else price_counts[bid["bid"]] >= 2
+                )
+                if burned:
+                    collision_burn[name] += bid["bid"]
+                if not day["is_void"]:
+                    normal_bids[name].append(bid["bid"])
+            if is_new_format:
+                for use in day.get("super_uses", []):
+                    super_uses_count[use["player"]] += 1
+                    if use["hit"]:
+                        super_hits[use["player"]] += 1
+        if not is_new_format:
+            super_hit_known = False
+        remaining = recompute_remaining_coins(match)
+        for name in player_names:
+            end_coins[name].append(remaining.get(name, 0))
+
+    rows = []
+    for name in player_names:
+        bids = normal_bids[name]
+        rows.append({
+            "name": name,
+            "total_wins": sum(win_matrix[name]),
+            "match_champions": match_champions[name],
+            "super_uses": super_uses_count[name],
+            "super_hits": super_hits[name] if super_hit_known else None,
+            "collision_burn": collision_burn[name],
+            "avg_bid": sum(bids) / len(bids) if bids else None,
+            "end_coins": end_coins[name],
+            "illegal": illegal_counts[name],
+            "zero_bids": zero_bid_counts[name],
+        })
+    rows.sort(key=lambda row: (-row["total_wins"], row["name"]))
+    return {"match_labels": match_labels, "win_matrix": win_matrix, "rows": rows}
+
+
+def print_player_stats(stats: dict) -> None:
+    """打印玩家维度统计段：每局胜场矩阵 + 玩家明细行。"""
+    match_labels = stats["match_labels"]
+    win_matrix = stats["win_matrix"]
+    print(f"玩家维度统计（按总胜场降序；矩阵列 = 第 {'/'.join(match_labels)} 局）：")
+    for row in stats["rows"]:
+        cells = " ".join(str(count) for count in win_matrix[row["name"]])
+        print(f"  {row['name']}：{cells}")
+    print("  明细（胜场 / 局冠军 / 超级出价 / 撞车放血 / 平均正常出价 / 局末余额 / 违规 / 出0）：")
+    for row in stats["rows"]:
+        if row["super_hits"] is None:
+            super_text = f"{row['super_uses']}用（旧格式命中率不可得：—）"
+        elif row["super_uses"]:
+            super_text = f"{row['super_uses']}用{row['super_hits']}中（{row['super_hits'] / row['super_uses']:.0%}）"
+        else:
+            super_text = "0用"
+        avg_bid_text = f"{row['avg_bid']:.2f}" if row["avg_bid"] is not None else "—"
+        end_coins_text = "/".join(str(coins) for coins in row["end_coins"])
+        print(
+            f"  {row['name']}：胜{row['total_wins']} 局冠{row['match_champions']:g} "
+            f"超{super_text} 放血{row['collision_burn']} 均出{avg_bid_text} "
+            f"局末余额{end_coins_text} 违规{row['illegal']}笔 出0共{row['zero_bids']}笔"
+        )
 
 
 def analyze(run_dir: Path) -> None:
@@ -205,6 +324,9 @@ def analyze(run_dir: Path) -> None:
     else:
         print(f"超级出价：使用 {super_uses} 次，凭超级出价获胜 {super_wins} 天，"
               f"超级出价撞车 {super_collisions} 次")
+    print()
+
+    print_player_stats(collect_player_stats(matches))
     print()
 
     print(f"单局 ≥3 胜场的玩家-局次数：{len(multi_win_matches)}"
