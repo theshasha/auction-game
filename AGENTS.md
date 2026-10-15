@@ -59,8 +59,6 @@ AI 模式交互命令：回车=推进一轮 / c=连续 / s=单步 / p=暂停（�
 - **规则改动**：只改 RULES.md；改完先跑 `main.py --benchmark N` 再进 AI 模式；
   新增端点前先跑 check_llm.py。
 
-## 设计决策与踩坑
+## 统计文档
 
-14 项设计决策与 6 项踩坑的完整原文（含实证教训）已迁入 comet memory
-（project 作用域，类别「设计决策」「踩坑」），跨会话按任务自动检索注入；
-手动查看：`comet memory list --category 设计决策` / `--category 踩坑`。
+修改玩家统计或核对历史日志口径时，阅读 `docs/analyze.md`；历史验证记录位于 `docs/history/2026-09-09-analyze-verification.md`。

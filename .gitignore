@@ -3,8 +3,4 @@ __pycache__/
 .pytest_cache/
 .env
 .cursor/
-# >>> Comet managed project state >>>
-!/.comet/
-/.comet/*
-!/.comet/config.yaml
-# <<< Comet managed project state <<<
+/毕业设计交接.md
