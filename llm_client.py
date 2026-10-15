@@ -4,7 +4,7 @@ provider 与调用方式：
 - gemini：Google 官方 OpenAI 兼容端点，chat completions（当前无玩家使用，代码保留）
 - modal：Modal 托管的 Kimi-K3，OpenAI chat completions（K3 强制推理，不传 thinking 控制参数）
 - hub：oaifree 中转，按玩家 protocol 字段二选一：responses API（默认）或 chat completions
-- anthropic：oaifree 中转，Anthropic SDK（当前无玩家使用，代码保留）
+- anthropic：oaifree 中转，Anthropic SDK
 
 chat_fn 统一签名为 (messages: list[dict]) -> str，只返回正文 content。
 

@@ -26,7 +26,9 @@ Bot 默认 6 人；局数、经济与奖池由 `game.yaml` 决定，第一名并
 
 ## 运行
 
-在项目根目录执行：
+在项目根目录安装依赖（建议使用虚拟环境），再执行以下命令：
+
+    python -m pip install -r requirements.txt
 
 ### 测试与随机玩家
 

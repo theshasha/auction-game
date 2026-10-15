@@ -23,7 +23,7 @@ class TestRenderMatchLog:
 
     def test_super_hit_and_miss_shown_in_cells(self):
         # 使用超级出价的玩家在出价列写作「正常价+超N」，命中再加注「中」
-        # （场景即 RULES.md 结算示例一：乙超 6 命中甲的唯一 6，丙 5 捡漏获胜）
+        # （首日场景：乙超 6 命中甲的唯一 6，丙 5 捡漏获胜）
         log = make_log(days=[
             make_day(1, [6, 4, 5, 3, 3, 2], 1, "丙", 5, [3, 6], 1, super_bids={"乙": (6, True)}),
             make_day(2, [3, 4, 5, 3, 2, 1], 1, "丙", 5, [3], 1, super_bids={"甲": 6}),

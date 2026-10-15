@@ -17,7 +17,7 @@ class BidRecord:
 
     player: str
     raw_bid: Any          # 玩家提交的原始值，用于审计非法出价
-    bid: int              # 校验后的有效出价（v6 整单口径：任何非法提交整单强制为正常出价 0）
+    bid: int              # 校验后的有效出价（整单口径：任何非法提交整单强制为正常出价 0）
     status: str = "ok"    # "ok" | "illegal"（超级出价只可能为 "ok"，非法则在收集层拦截重试）
     is_super: bool = False
 

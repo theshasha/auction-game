@@ -19,7 +19,7 @@ from players import Player
 def validate_submission(
     raw_bid: object, raw_super_bid: object, coins: int, game: GameSettings
 ) -> tuple[int, str, Optional[int]]:
-    """v6 整单校验：任何非法提交一律强制为（正常出价 0, 无超级出价），
+    """整单校验：任何非法提交一律强制为（正常出价 0, 无超级出价），
     返回 (有效正常出价, 状态, 有效超级出价或 None)。
 
     非法情形：正常出价非整数/超 0~上限/超余额/未提交；超级出价非整数/
@@ -186,7 +186,7 @@ def run_match(
         super_uses: list[dict] = []
         for (player, _), submission in zip(observations, submissions):
             raw_bid, raw_super_bid = normalize_bid_submission(submission)
-            # v6 整单校验：任何非法（含同值、总耗资超余额）整单强制为正常出价 0
+            # 整单校验：任何非法（含同值、总耗资超余额）整单强制为正常出价 0
             bid, status, super_value = validate_submission(
                 raw_bid, raw_super_bid, coins[player.name], game
             )

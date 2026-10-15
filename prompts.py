@@ -44,7 +44,7 @@ def bid_format_hint(game: GameSettings) -> str:
     复述——规则有 system 的实时渲染规则与局末重申兜底，每日复述实证是诱导弱
     模型跳读的冗余（20260829_230755 场次：超级规则一天出现 3 遍约 155 字符，
     误解仍集中在不读上下文的模型身上，复述并未起到防误解作用）。
-    例外是提交合法性约束（同值、合计余额——v6 违反即整单作废）：
+    例外是提交合法性约束（同值、合计余额——违反即整单作废）：
     这不是策略规则，放在模板里防止无谓的非法提交。
     """
     return (
@@ -95,7 +95,7 @@ def build_system_prompt(
 
     人设只约束公开发言的口吻（开局/局末/终局感言），出价推理与策略规划
     明确要求保持冷静认真——实证三无/天然呆类人设若带入推理会拉低决策质量。
-    predictions 是虚构数字（config 静态配置），与真实表现无关。
+    predictions 是虚构数字（players.yaml 静态配置），与真实表现无关。
     """
     others = "、".join(n for n in all_names if n != name)
     prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
@@ -217,7 +217,7 @@ def bid_request(obs: Observation) -> str:
             f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
             f"赢得 {yesterday['pool']} 个胜场。"
         )
-    # 规则四.1（v6）：昨日完整出价明细（含各人超级出价数值）+ 全场每人当前余额
+    # 规则四.1：昨日完整出价明细（含各人超级出价数值）+ 全场每人当前余额
     super_hit_by_player = {use["player"]: use["hit"] for use in yesterday["super_uses"]}
     announcement += (
         "昨日出价明细："
@@ -253,7 +253,7 @@ def invalid_bid_retry_request(reason: str, game: GameSettings) -> str:
 
 
 def render_match_log(log: MatchLog) -> str:
-    """整局出价日志渲染为 markdown 表格：玩家列顺序取首日正常出价顺序（即 config 顺序）。
+    """整局出价日志渲染为 markdown 表格：玩家列顺序取首日正常出价顺序（即玩家名单顺序）。
 
     出价单元格含超级出价时写作「5+超6」，命中再加注「中」（如「4+超6中」）；
     超级出价不能获胜，结果列的获胜者必定凭正常出价。

@@ -2,7 +2,7 @@
 
 分三节：
 1. 通用数据对象工厂：NAMES / make_day / make_log / make_standings / history / make_obs
-   （v6 结构：DayResult 用 super_uses + collision_values，public_view 含 bids_detail；
+   （DayResult 用 super_uses + collision_values，public_view 含 bids_detail；
    Observation 含 my_last_sniped / my_last_super_hit / all_coins）。
 2. 引擎场景构造器：run_one_match / constant_strategies / constant_by_name /
    bids_by_day / super_by_day / run_scenario——消灭「按天查表策略」在各用例里
@@ -72,7 +72,7 @@ def make_standings(wins_history: dict[str, list[int]]):
 
 
 def history(**overrides):
-    """一日公布（DayResult.public_view 形状，v6）：默认「乙 以 5 获胜、无撞车、
+    """一日公布（DayResult.public_view 形状）：默认「乙 以 5 获胜、无撞车、
     无人用超级」，用 overrides 覆盖字段。调用方自行包列表作 today_history。"""
     base = {"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
             "bids_detail": [
@@ -90,7 +90,7 @@ def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coi
              my_last_super_bid=None, my_last_super_hit=False,
              all_coins=None,
              past_match_logs=None, game=TEST_GAME):
-    """全字段 Observation 工厂（v6）。past_match_logs 默认空（即当前为第 1 局）。"""
+    """全字段 Observation 工厂。past_match_logs 默认空（即当前为第 1 局）。"""
     return Observation(
         my_name=my_name,
         my_coins=coins,

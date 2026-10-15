@@ -11,7 +11,7 @@ from conftest import run_scenario, super_by_day
 
 class TestSuperBid:
     def test_snipe_unique_normal_bounty_and_reuse(self):
-        # RULES.md 结算示例一（v6 口径）：甲出 6；乙正常出 4 + 超级出价 6；丙 5；
+        # 狙击唯一正常出价：甲出 6；乙正常出 4 + 超级出价 6；丙 5；
         # 丁戊 3；己 2。乙的超级 6 命中甲的唯一 6（甲按撞车扣 6），3 互撞
         # （丁戊各扣 3），丙未撞车最高 5 获胜扣 5；乙 -2 成本 +3 悬赏，正常出价 4 退还
         captured = {}
@@ -83,7 +83,7 @@ class TestSuperBid:
         assert captured["甲"][2].my_coins == 5  # 7-6+3-2+3，纯狙击仍扣成本
 
     def test_super_bid_equal_to_normal_voids_whole_submission(self):
-        # 同值属非法提交：整单作废为正常出价 0、无超级出价（v5 只丢超级，v6 整单）。
+        # 同值属非法提交：整单作废为正常出价 0、无超级出价。
         # 甲正常出 5 + 超级出 5 → 甲记非法 0；0 撞车（甲己），乙的唯一 4 获胜
         log = run_scenario(
             {1: [5, 4, 3, 2, 1, 0]},
@@ -135,7 +135,7 @@ class TestSuperBid:
         assert captured["乙"][1].my_coins == 11
 
     def test_snipe_value_with_multiple_normal_bids_still_hits(self):
-        # v6 关键变化：被狙数值上有 ≥2 笔正常出价（本来就会互撞）也算命中发赏，
+        # 被狙数值上有 ≥2 笔正常出价（本来就会互撞）也算命中发赏，
         # 该数值所有正常出价全部撞车。丙狙 6（甲乙各一笔 6），命中拿悬赏；
         # 6 全灭后未撞车最高的是丙自己的 4——丙捡漏获胜（付 4，净 +1 悬赏差）
         captured = {}
@@ -152,8 +152,8 @@ class TestSuperBid:
         assert captured["丙"][1].my_coins == 7
 
     def test_super_observation_fields(self):
-        # Observation 携带昨日超级出价结局（数值/命中，v6 无次数状态字段）；
-        # 被狙者标记「被狙」；公开视图含出价明细（v6：次日即公开正常出价与超级数值）
+        # Observation 携带昨日超级出价结局（数值/命中，无次数状态字段）；
+        # 被狙者标记「被狙」；公开视图含出价明细（次日即公开正常出价与超级数值）
         captured = {}
         run_scenario(
             {1: [6, 4, 5, 3, 3, 2]},

@@ -111,7 +111,7 @@ class TestMatchLogPublication:
         assert first_day["winner"] == "甲"
         assert first_day["winning_bid"] == 5
         assert first_day["pool"] == 1
-        assert "winning_is_super" not in first_day  # 规则 v4 起超级出价不能获胜，字段移除
+        assert "winning_is_super" not in first_day  # 超级出价不能获胜，无需该字段
         assert first_day["super_uses"] == []
         assert first_day["collision_values"] == []
         assert first_day["is_void"] is False

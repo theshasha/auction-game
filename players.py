@@ -21,7 +21,7 @@ class Player(ABC):
     def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
         """根据当前可见信息给出今日出价，返回 (正常出价, 超级出价或 None)。
 
-        v6 整单校验：任何非法提交（正常出价超余额/超范围/非整数、超级出价
+        整单校验：任何非法提交（正常出价超余额/超范围/非整数、超级出价
         与正常出价同值、正常出价 + 超级成本合计超余额等）一律
         整单强制为正常出价 0、无超级出价。超级出价不限次数（每天最多 1 笔）、
         每次提交消耗本场配置的固定成本、只狙击不能获胜、不参与撞车笔数。
@@ -48,7 +48,7 @@ class RandomBot(Player):
         super_bid = None
         if self.rng.random() < self.super_chance and bid + obs.game.super_cost <= obs.my_coins:
             candidate = self.rng.randint(0, obs.game.max_bid)
-            if candidate != bid:  # 同值在 v6 属非法提交（整单作废），直接放弃本次
+            if candidate != bid:  # 同值属非法提交（整单作废），直接放弃本次
                 super_bid = candidate
         return bid, super_bid
 

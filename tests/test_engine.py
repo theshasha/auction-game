@@ -27,7 +27,7 @@ from players import RandomBot, ScriptedPlayer
 
 
 class TestValidateSubmission:
-    """v6 整单校验：任何非法提交一律整单作废为（正常出价 0, 无超级出价）。"""
+    """整单校验：任何非法提交一律整单作废为（正常出价 0, 无超级出价）。"""
 
     @pytest.mark.parametrize(
         "bid, super_bid, balance, expected",

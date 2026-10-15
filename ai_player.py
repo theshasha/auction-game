@@ -40,7 +40,7 @@ class ParseFailedError(CallFailedError):
 
 class InvalidBidError(CallFailedError):
     """解析成功但数值非法（超余额/超范围/非整数/超级出价与正常出价同值/
-    正常出价与超级成本合计超余额——v6 整单口径），
+    正常出价与超级成本合计超余额——整单口径），
     提醒重试 1 次后仍非法：升级为轮级失败挂起等人工，不再静默记 0。
     与 ParseFailedError 并列区分日志语义（格式问题 vs 规则违反）。"""
 
@@ -243,7 +243,7 @@ class AIPlayer(Player):
     ) -> Optional[str]:
         """校验一次出价提交（正常出价 + 可选超级出价），返回违规原因（None = 合法）。
 
-        校验条件与引擎 validate_submission 一致（v6 整单口径：任一非法则整单
+        校验条件与引擎 validate_submission 一致（整单口径：任一非法则整单
         作废为正常出价 0）；在 AIPlayer 内拦截是为了能给模型一次带原因的
         提醒重试，而不是静默记 0。
         """

@@ -2,8 +2,7 @@
 # persona_title/persona_text 是绑定的人设（二次元少女主题，只约束公开发言的口吻与性格，不含任何策略指令），
 # predicted_win_rate 是虚构的赛前预测夺冠率（与真实表现无关、不随对局更新，全员公开写进 system 提示词）。
 # provider 可选：modal / hub（oaifree 中转）/ anthropic / gemini
-# （modal/gemini 当前无玩家使用，代码保留；kimi-k3 的 responses 与 anthropic 两协议
-#  均验证可用，当前挂 anthropic；模型自报身份受蒸馏影响不可靠，见 AGENTS.md 坑 6）
+# modal/gemini 当前无玩家使用，代码保留。
 # hub 玩家可加 protocol 字段：responses（默认，OpenAI responses API）/ chat（/v1/chat/completions）
 # 想换人设或改模型，直接编辑对应条目的 persona_* / provider / model 字段即可。
 players:

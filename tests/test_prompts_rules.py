@@ -30,7 +30,7 @@ class TestRulesReminder:
         assert "两笔及以上正常出价即撞车" in reminder
         assert "未撞车的正常出价中最高的一笔获胜" in reminder
         assert "全额退还" in reminder
-        # 超级出价要点（v6 收费狙击制）：不限次数、每次固定扣 2 金币、只狙击不能获胜、
+        # 超级出价要点（收费狙击制）：不限次数、每次固定扣 2 金币、只狙击不能获胜、
         # 命中（≥1 笔正常出价）+3 悬赏、出价明细与全场余额每日公布
         assert "超级出价不限次数（每天最多 1 笔）" in reminder
         assert "固定扣除 2 金币" in reminder
@@ -61,7 +61,7 @@ class TestRulesText:
 
     def test_super_bid_rules_present(self):
         text = render_rules(TEST_GAME, NAMES)
-        # 规则 v6：超级出价是收费狙击工具——不限次数（每天最多 1 笔）、
+        # 超级出价是收费狙击工具——不限次数（每天最多 1 笔）、
         # 固定消耗 2 金币、与正常出价合计不超余额、不能等于当天正常出价、
         # 不能获胜；命中（≥1 笔正常出价）发 3 金币悬赏，多人命中同值各得 3
         assert "可额外选择提交最多 1 笔超级出价" in text
@@ -83,7 +83,7 @@ class TestRulesText:
         assert "宣告流局" in text
 
     def test_publication_includes_yesterday_log_and_all_coins(self):
-        # 规则四.1（v6）：第 2 天起公布昨日完整出价明细与全场每人当前余额
+        # 规则四.1：第 2 天起公布昨日完整出价明细与全场每人当前余额
         text = render_rules(TEST_GAME, NAMES)
         assert "昨日出价日志" in text
         assert "具体出价明细" in text

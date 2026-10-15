@@ -16,7 +16,7 @@ def make_prompt_obs(**kwargs):
 
 
 class TestBidRequest:
-    """每日出价消息：首句「当前是」、昨日公布带获胜价与昨日出价明细（v6 全透明：
+    """每日出价消息：首句「当前是」、昨日公布带获胜价与昨日出价明细（全透明：
     全场正常出价数值 + 各人超级出价数值）、状态行带奖池/工资标注。"""
 
     def test_first_day_single_line(self):
@@ -54,7 +54,7 @@ class TestBidRequest:
         assert text.index("昨日公布") < text.index("你的金币余额")
 
     def test_bids_detail_announcement_with_super_values_and_hits(self):
-        # 昨日出价明细（v6 全透明）：全场正常出价数值 + 各人超级出价数值与命中标注
+        # 昨日出价明细（全透明）：全场正常出价数值 + 各人超级出价数值与命中标注
         text = prompts.bid_request(make_prompt_obs(
             day=2,
             today_history=[history(
@@ -114,16 +114,16 @@ class TestMyLastDayLine:
             (dict(my_last_bid=1, my_last_deduction=1, my_last_collided=True),
              dict(winner="流局", winning_bid=None, wins_taken=0),
              "昨日你的结果：正常出价 1，当天流局（正常出价全部撞车），扣除 1。"),
-            # v6 整单口径：非法提交整单记为正常出价 0
+            # 整单口径：非法提交整单记为正常出价 0
             (dict(my_last_bid=0, my_last_deduction=0, my_last_bid_illegal=True),
              {},
              "昨日你的结果：提交非法，按规则整单记为正常出价 0，未撞车但也不是最高，全额退还。"),
-            # 超级出价落空（v6）：无效果，但照扣 2 金币成本；正常出价分段照常
+            # 超级出价落空：无效果，但照扣 2 金币成本；正常出价分段照常
             (dict(my_last_bid=4, my_last_deduction=0, my_last_super_bid=6),
              dict(super_uses=[{"player": "甲", "value": 6, "hit": False}]),
              "昨日你的结果：正常出价 4，未撞车但也不是最高，全额退还，"
              "超级出价 6 落空，扣除 2 金币成本。"),
-            # 超级出价命中（v6）：扣 2 成本，获 3 金币悬赏
+            # 超级出价命中：扣 2 成本，获 3 金币悬赏
             (dict(my_last_bid=4, my_last_deduction=0, my_last_super_bid=6,
                   my_last_super_hit=True),
              dict(super_uses=[{"player": "甲", "value": 6, "hit": True}]),
