@@ -3,11 +3,58 @@
 共享夹具见 conftest.py。"""
 
 import json
+from dataclasses import replace
 
 import pytest
 
-from ai_player import CallFailedError, InvalidBidError, ParseFailedError
-from conftest import bid_reply, fake_chat_fn, make_ai_obs, make_player, speech_reply
+from ai_player import AIPlayer, CallFailedError, InvalidBidError, ParseFailedError
+from conftest import ALL_NAMES, TEST_GAME, TEST_PREDICTIONS, bid_reply, fake_chat_fn, make_ai_obs, make_player, speech_reply
+import prompts
+
+
+class TestCustomGame:
+    @staticmethod
+    def make_player(chat_fn):
+        game = replace(
+            TEST_GAME, initial_coins=4, daily_salary=5, daily_pool=(2, 1, 3),
+            max_bid=9, super_cost=3, super_bounty=6, regular_matches=2, max_playoffs=1,
+        )
+        return AIPlayer(
+            "Alpha", "测试人设", "正文", TEST_PREDICTIONS, ALL_NAMES, chat_fn, game=game
+        )
+
+    def test_plan_uses_initial_balance_and_custom_cost(self):
+        chat_fn = fake_chat_fn([bid_reply(5), '{"bid": 1, "super_bid": 9}'])
+        player = self.make_player(chat_fn)
+        player.plan_strategy(prompts.opening_plan_request({}, player.game), "opening_plan")
+        assert "超过当前余额 4" in player.messages[-2]["content"]
+        assert "0到9的整数" in player.messages[-2]["content"]
+        assert "加 3 金币成本" in player.messages[-2]["content"]
+        assert "你的金币 4，本局已获胜场 0，今日奖池 2 个胜场，出价上限 9" in player.messages[1]["content"]
+        obs = replace(make_ai_obs(day=1, coins=4), game=player.game, today_pool=2)
+        assert player.decide_bid(obs) == (1, 9)
+        assert len(chat_fn.calls) == 2
+
+    @pytest.mark.parametrize("first_reply", ["缺少 JSON", '{"bid": 8, "super_bid": 9}'])
+    def test_daily_retry_formats_use_same_game(self, first_reply):
+        chat_fn = fake_chat_fn([first_reply, '{"bid": 7, "super_bid": 9}'])
+        player = self.make_player(chat_fn)
+        obs = replace(make_ai_obs(day=2, coins=10), game=player.game)
+        assert player.decide_bid(obs) == (7, 9)
+        for user_text in (player.messages[1]["content"], player.messages[-2]["content"]):
+            assert "0到9的整数" in user_text
+            assert "正常出价加 3 金币成本" in user_text
+        if first_reply.startswith("{"):
+            assert "合计超过当前余额 10" in player.messages[-2]["content"]
+        assert len(chat_fn.calls) == 2
+
+    def test_failed_replan_clears_previous_day1_bid(self):
+        chat_fn = fake_chat_fn([bid_reply(2), bid_reply(5), bid_reply(6)])
+        player = self.make_player(chat_fn)
+        player.plan_strategy("首局规划", "opening_plan")
+        with pytest.raises(InvalidBidError):
+            player.plan_strategy("下一局重新规划", "next_plan")
+        assert player._pending_day1_bid is None
 
 
 class TestBidParsing:

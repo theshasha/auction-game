@@ -6,7 +6,7 @@ import random
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
-from models import MAX_BID, SUPER_COST, Observation
+from models import Observation
 
 
 class Player(ABC):
@@ -20,16 +20,16 @@ class Player(ABC):
         """根据当前可见信息给出今日出价，返回 (正常出价, 超级出价或 None)。
 
         v6 整单校验：任何非法提交（正常出价超余额/超范围/非整数、超级出价
-        与正常出价同值、正常出价 + 超级成本 SUPER_COST 合计超余额等）一律
+        与正常出价同值、正常出价 + 超级成本合计超余额等）一律
         整单强制为正常出价 0、无超级出价。超级出价不限次数（每天最多 1 笔）、
-        每次提交固定消耗 SUPER_COST 金币、只狙击不能获胜、不参与撞车笔数。
+        每次提交消耗本场配置的固定成本、只狙击不能获胜、不参与撞车笔数。
         """
 
 
 class RandomBot(Player):
     """在 0 到 min(出价上限, 余额) 之间均匀随机出价；
     超级出价每天以固定概率随机使用（值在 0~上限间均匀随机；
-    v6 余额约束：正常出价 + SUPER_COST ≤ 余额才使用，抽到同值则放弃）。"""
+    余额约束：正常出价 + 超级成本 ≤ 余额才使用，抽到同值则放弃）。"""
 
     def __init__(
         self,
@@ -42,10 +42,10 @@ class RandomBot(Player):
         self.super_chance = super_chance
 
     def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
-        bid = self.rng.randint(0, min(obs.my_coins, MAX_BID))
+        bid = self.rng.randint(0, min(obs.my_coins, obs.game.max_bid))
         super_bid = None
-        if self.rng.random() < self.super_chance and bid + SUPER_COST <= obs.my_coins:
-            candidate = self.rng.randint(0, MAX_BID)
+        if self.rng.random() < self.super_chance and bid + obs.game.super_cost <= obs.my_coins:
+            candidate = self.rng.randint(0, obs.game.max_bid)
             if candidate != bid:  # 同值在 v6 属非法提交（整单作废），直接放弃本次
                 super_bid = candidate
         return bid, super_bid

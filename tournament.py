@@ -1,4 +1,4 @@
-"""整场流程：5 局正赛 + 第一名并列时的加赛循环 + 最终排名结算。
+"""整场流程：按本场参数运行正赛、第一名并列时的加赛循环与最终排名结算。
 
 发言编排通过可选的 director 钩子注入，规则逻辑本身不依赖任何 AI 代码。
 """
@@ -9,11 +9,9 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
 from engine import compute_standings, run_match
+from game_rules import GameSettings
 from models import MatchLog, StandingsEntry
 from players import Player
-
-REGULAR_MATCHES = 5
-MAX_PLAYOFFS = 20  # 安全上限，防止极端情况下加赛死循环
 
 
 class SpeechDirector(Protocol):
@@ -29,7 +27,7 @@ class TournamentResult:
     match_logs: list[MatchLog] = field(default_factory=list)
     final_standings: list[StandingsEntry] = field(default_factory=list)
     playoff_count: int = 0
-    playoff_cap_hit: bool = False  # 触发加赛上限仍为并列的异常情况
+    playoff_cap_hit: bool = False  # 达到加赛上限仍并列，保留并列冠军
 
 
 def first_place_tied(standings: list[StandingsEntry]) -> bool:
@@ -42,6 +40,7 @@ def first_place_tied(standings: list[StandingsEntry]) -> bool:
 
 def run_tournament(
     players: list[Player],
+    game: GameSettings,
     on_match_end: Optional[Callable[[MatchLog, list[StandingsEntry]], None]] = None,
     director: Optional[SpeechDirector] = None,
     bid_collector=None,
@@ -53,6 +52,13 @@ def run_tournament(
     director: 发言编排（开局发言、局末发言+下局规划、终局感言+观众总结）。
     bid_collector: AI 模式的并行出价收集器，透传给 engine.run_match。
     """
+    names = [player.name for player in players]
+    if len(names) < 2:
+        raise ValueError("比赛至少需要两名玩家")
+    if any(not isinstance(name, str) or not name.strip() for name in names):
+        raise ValueError("玩家名字不能为空")
+    if len(set(names)) != len(names):
+        raise ValueError("玩家名字必须唯一")
     result = TournamentResult()
     wins_history = {player.name: [] for player in players}
     match_index = 0
@@ -69,6 +75,7 @@ def run_tournament(
             is_playoff=is_playoff,
             wins_history=wins_history,
             past_logs=result.match_logs,
+            game=game,
             bid_collector=bid_collector,
         )
         for name, wins in log.wins.items():
@@ -78,21 +85,21 @@ def run_tournament(
         if on_match_end:
             on_match_end(log, standings)
         if director:
-            # 第 5 局或加赛后仍并列才有下一局；加赛局还要预留上限余量
+            # 正赛末局或加赛后仍并列才有下一局；加赛局还要预留上限余量
             # （正赛局结束后 playoff_count 未自增，只有加赛局需 +1）
-            will_continue = match_index < REGULAR_MATCHES or (
+            will_continue = match_index < game.regular_matches or (
                 first_place_tied(standings)
-                and result.playoff_count + (1 if is_playoff else 0) < MAX_PLAYOFFS
+                and result.playoff_count + (1 if is_playoff else 0) < game.max_playoffs
             )
             # 最后一局跳过局末发言：该局的完整出价日志并入终局感言（on_final）
             if will_continue:
                 director.on_match_end(log, standings, will_continue)
 
-    for _ in range(REGULAR_MATCHES):
+    for _ in range(game.regular_matches):
         play_one_match(is_playoff=False)
 
     while first_place_tied(compute_standings(wins_history)):
-        if result.playoff_count >= MAX_PLAYOFFS:
+        if result.playoff_count >= game.max_playoffs:
             result.playoff_cap_hit = True
             break
         play_one_match(is_playoff=True)

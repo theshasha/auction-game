@@ -1,7 +1,7 @@
-"""单局规则引擎的边界测试：出价校验、胜负判定、金币结算、流局奖池、固定六天。
-全部使用 ScriptedPlayer 构造确定性场景（场景构造器见 conftest.py）。
+"""单局规则引擎的边界测试：出价校验、胜负判定、金币结算、流局奖池与参数贯通。
+主要使用 ScriptedPlayer 构造确定性场景（场景构造器见 conftest.py）。
 
-现行规则要点（v7）：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
+测试基准参数：每局固定 6 天，每天奖池固定 1 个（流局并入次日）；
 超级出价不限次数（每天最多 1 笔），每次提交固定消耗 2 金币，0~7、不能等于
 当天正常出价、与正常出价合计不得超过余额、不能获胜；命中（其数值上 ≥1 笔
 正常出价）则该数值全部正常出价按撞车处理，狙击者获得系统印发的 3 金币悬赏。
@@ -9,15 +9,21 @@
 第 2 天起每天开始时公布昨日完整出价明细与全场每人金币余额。
 """
 
+import random
+
 import pytest
 
 from conftest import (
+    TEST_GAME,
     constant_by_name,
     constant_strategies,
+    make_obs,
     run_one_match,
     run_scenario,
 )
-from engine import validate_submission
+from engine import run_match, validate_submission
+from game_rules import GameSettings
+from players import RandomBot, ScriptedPlayer
 
 
 class TestValidateSubmission:
@@ -27,37 +33,15 @@ class TestValidateSubmission:
         "bid, super_bid, balance, expected",
         [
             (3, None, 6, (3, "ok", None)),
-            (0, None, 6, (0, "ok", None)),
-            (7, None, 7, (7, "ok", None)),
-            (7, None, 3, (0, "illegal", None)),   # 正常出价超余额
-            (8, None, 100, (0, "illegal", None)),  # 固定上限 7，余额充足也不行
-            (-1, None, 7, (0, "illegal", None)),
-            (2.5, None, 7, (0, "illegal", None)),  # 非整数
-            ("3", None, 7, (0, "illegal", None)),
-            (None, None, 7, (0, "illegal", None)),
-            (True, None, 7, (0, "illegal", None)),  # bool 也视为非法
+            (8, None, 100, (0, "illegal", None)),  # 正常出价非法，保留整单审计状态
             (3, 5, 7, (3, "ok", 5)),      # 合法超级：3 + 2 ≤ 7
-            (0, 7, 2, (0, "ok", 7)),      # 纯狙击：0 + 2 ≤ 2
-            (5, 7, 7, (5, "ok", 7)),      # 5 + 2 = 7：恰好够用
             (5, 5, 7, (0, "illegal", None)),  # 同值：整单作废
-            (0, 0, 7, (0, "illegal", None)),
-            (3, 8, 7, (0, "illegal", None)),   # 超级超范围：整单作废
-            (3, -1, 7, (0, "illegal", None)),
-            (3, 2.5, 7, (0, "illegal", None)),
-            (3, "5", 7, (0, "illegal", None)),
-            (3, True, 7, (0, "illegal", None)),
             (4, 5, 5, (0, "illegal", None)),   # 4 + 2 > 5：总耗资超余额
-            (7, 5, 8, (0, "illegal", None)),   # 7 + 2 > 8：满额出价就不能再狙
         ],
-        ids=["ok-3", "ok-0", "ok-6", "over-balance", "over-limit",
-             "negative", "float", "str", "none", "bool",
-             "super-ok", "super-pure-snipe", "super-exact-balance",
-             "super-same-value", "super-same-zero", "super-over-limit",
-             "super-negative", "super-float", "super-str", "super-bool",
-             "total-over-balance", "full-bid-plus-super"],
+        ids=["normal-ok", "normal-illegal", "super-ok", "super-same-value", "total-over-balance"],
     )
     def test_validate_submission(self, bid, super_bid, balance, expected):
-        assert validate_submission(bid, super_bid, balance) == expected
+        assert validate_submission(bid, super_bid, balance, TEST_GAME) == expected
 
 
 class TestWinningRules:
@@ -238,3 +222,60 @@ class TestIllegalBidInMatch:
         assert record.raw_bid == 7
         assert record.bid == 0
         assert record.status == "illegal"
+
+
+class TestConfiguredMatch:
+    def test_random_bot_uses_observed_limit_and_super_cost(self):
+        game = GameSettings(11, 2, (2, 3, 4), 9, 4, 6, 2, 1)
+        obs = make_obs(coins=11, game=game)
+        bot = RandomBot("甲", random.Random(42), super_chance=1)
+        submissions = [bot.decide_bid(obs) for _ in range(100)]
+
+        assert any(bid == 9 or super_bid == 9 for bid, super_bid in submissions)
+        for bid, super_bid in submissions:
+            assert 0 <= bid <= 9
+            if super_bid is not None:
+                assert 0 <= super_bid <= 9
+                assert super_bid != bid
+                assert bid + 4 <= 11
+
+    def test_three_players_custom_economy_and_unequal_daily_pool(self):
+        game = GameSettings(11, 2, (2, 3, 4), 9, 4, 6, 2, 1)
+        names = ["甲", "乙", "丙"]
+        bids = {"甲": [9, 4, 5], "乙": [3, 8, 2], "丙": [2, 2, 5]}
+        supers = {"甲": {2: 8}, "乙": {1: 9, 2: 9}}
+        captured = {name: [] for name in names}
+
+        def strategy(obs):
+            captured[obs.my_name].append(obs)
+            return bids[obs.my_name][obs.day - 1]
+
+        players = [
+            ScriptedPlayer(name, strategy, lambda obs: supers.get(obs.my_name, {}).get(obs.day))
+            for name in names
+        ]
+        log = run_match(players, 1, False, {name: [] for name in names}, [], game)
+
+        assert len(log.days) == 3
+        assert [day.pool for day in log.days] == [2, 3, 4]
+        assert [day.winner for day in log.days] == ["乙", "乙", "乙"]
+        assert log.wins == {"甲": 0, "乙": 9, "丙": 0}
+        assert log.days[0].super_uses == [{"player": "乙", "value": 9, "hit": True}]
+        assert log.days[1].super_uses == [{"player": "乙", "value": 9, "hit": False}]
+        assert log.days[1].bids[0].status == "illegal"  # 甲余额 4，正常 4 加成本 4 超余额
+        # 首日甲被狙付 9；乙付正常 3、成本 4、获赏 6；丙退还正常 2。
+        assert captured["甲"][1].all_coins == {"甲": 4, "乙": 12, "丙": 13}
+        # 第二日乙付正常 8 和落空成本 4；第三日再加工资 2。
+        assert captured["甲"][2].all_coins == {"甲": 6, "乙": 2, "丙": 15}
+        assert captured["甲"][1].my_last_sniped
+        assert captured["甲"][1].my_last_deduction == 9
+        assert all(obs.game is game for observations in captured.values() for obs in observations)
+        assert log.game is game
+        assert log.to_dict()["game"] == game.to_dict()
+
+    def test_custom_last_day_void_discards_accumulated_pool(self):
+        game = GameSettings(11, 2, (2, 3, 4), 9, 4, 6, 2, 1)
+        log = run_one_match(constant_strategies([0] * 6), game=game)
+        assert [day.pool for day in log.days] == [2, 5, 9]
+        assert all(day.is_void for day in log.days)
+        assert log.wins == {name: 0 for name in ["甲", "乙", "丙", "丁", "戊", "己"]}

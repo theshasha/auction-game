@@ -11,7 +11,7 @@ from pathlib import Path
 
 import prompts
 from ai_player import AIPlayer
-from configuration import ConfigurationError, load_configuration
+from configuration import ConfigurationError, load_configuration, load_game_settings
 from controller import (
     Controller,
     RoundTask,
@@ -19,8 +19,10 @@ from controller import (
     run_parallel_round,
 )
 from llm_client import MissingApiKeyError, make_chat_fn
-from models import MAX_BID, MatchLog, StandingsEntry
+from game_rules import GameSettings
+from models import MatchLog, StandingsEntry
 from players import RandomBot, ScriptedPlayer
+from rules import render_rules
 from tournament import run_tournament
 
 BOT_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
@@ -77,7 +79,8 @@ def make_publish(log_dir: Path):
 
 
 def print_final_result(result) -> None:
-    print(f"\n共进行 {len(result.match_logs)} 局（正赛 5 局 + 加赛 {result.playoff_count} 局）")
+    regular_count = sum(not log.is_playoff for log in result.match_logs)
+    print(f"\n共进行 {len(result.match_logs)} 局（正赛 {regular_count} 局 + 加赛 {result.playoff_count} 局）")
     if result.playoff_cap_hit:
         print("警告：加赛达到安全上限，第一名仍为并列，按当前总胜场结算")
     print("\n===== 最终排名 =====")
@@ -93,10 +96,11 @@ def print_final_result(result) -> None:
 class AISpeechDirector:
     """发言编排：开局/局末/终局，所有环节都经过 controller 的单步与暂停控制。"""
 
-    def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path):
+    def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path, *, game: GameSettings):
         self.players = players
         self.controller = controller
         self.speeches_log = log_dir / "speeches.md"
+        self.game = game
 
     def _record(self, text: str) -> None:
         with self.speeches_log.open("a", encoding="utf-8") as file:
@@ -143,7 +147,7 @@ class AISpeechDirector:
         )
         self._publish_speeches("开局发言", speeches)
         self._run_round(
-            {p: (prompts.opening_plan_request(self._others(speeches, p.name)), "opening_plan") for p in self.players},
+            {p: (prompts.opening_plan_request(self._others(speeches, p.name), self.game), "opening_plan") for p in self.players},
             "第一局策略规划（含首日出价）",
         )
 
@@ -158,7 +162,7 @@ class AISpeechDirector:
         self._publish_speeches(f"第 {log.match_index} 局局末发言", speeches)
         if will_continue:
             self._run_round(
-                {p: (prompts.next_match_plan_request(self._others(speeches, p.name)), f"match_{log.match_index}_plan") for p in self.players},
+                {p: (prompts.next_match_plan_request(self._others(speeches, p.name), self.game), f"match_{log.match_index}_plan") for p in self.players},
                 "下一局策略规划（含首日出价）",
             )
 
@@ -179,18 +183,28 @@ class AISpeechDirector:
 
 
 def run_bots(seed) -> None:
+    try:
+        game = load_game_settings()
+    except ConfigurationError as exc:
+        print(f"错误：配置读取失败：{exc}")
+        return
     rng = random.Random(seed)
     players = [RandomBot(name, random.Random(rng.random())) for name in BOT_NAMES]
     run_dir = make_run_dir("bot")
-    result = run_tournament(players, on_match_end=make_publish(run_dir))
+    (run_dir / "RULES.md").write_text(render_rules(game, [p.name for p in players]), encoding="utf-8")
+    result = run_tournament(players, game, on_match_end=make_publish(run_dir))
     print_final_result(result)
 
 
 def run_ai() -> None:
     try:
         config, player_configs = load_configuration()
+        game = load_game_settings()
     except ConfigurationError as exc:
         print(f"错误：配置读取失败：{exc}")
+        return
+    if len(player_configs) < 2:
+        print("错误：AI 对局至少需要 2 名玩家，请检查 players.yaml")
         return
     timeout = config["llm"]["timeout_seconds"]
 
@@ -211,6 +225,7 @@ def run_ai() -> None:
             return
 
     run_dir = make_run_dir("ai")
+    (run_dir / "RULES.md").write_text(render_rules(game, all_names), encoding="utf-8")
     controller = Controller(mode="step")
 
     players = [
@@ -221,6 +236,7 @@ def run_ai() -> None:
             predictions=predictions,
             all_names=all_names,
             chat_fn=chat_fns[pc["name"]],
+            game=game,
             log_path=run_dir / f"ai_{pc['name']}.jsonl",
         )
         for pc in player_configs
@@ -245,10 +261,11 @@ def run_ai() -> None:
         results = run_parallel_round(tasks, controller, label=label)
         return [results[player.name] for player, _ in observations]
 
-    director = AISpeechDirector(players, controller, run_dir)
+    director = AISpeechDirector(players, controller, run_dir, game=game)
     try:
         result = run_tournament(
             players,
+            game,
             on_match_end=make_publish(run_dir),
             director=director,
             bid_collector=bid_collector,
@@ -262,19 +279,25 @@ def run_ai() -> None:
 def run_benchmark(count: int) -> None:
     """规则平衡性验证（不写日志）：count 场纯随机 Bot 对战 + count 场鲸鱼探针对照。
 
-    鲸鱼探针：1 个恒出 MAX_BID 的 ScriptedPlayer + 5 个 RandomBot。若鲸鱼平均总胜场
+    鲸鱼探针：1 个恒出本场上限的 ScriptedPlayer + 5 个 RandomBot。若鲸鱼平均总胜场
     显著高于随机对手，说明「出最大数字」仍是无脑占优策略，规则需要再调。
     """
     from collections import Counter
+
+    try:
+        game = load_game_settings()
+    except ConfigurationError as exc:
+        print(f"错误：配置读取失败：{exc}")
+        return
 
     def play_tournament(seed: int, with_whale: bool):
         rng = random.Random(seed)
         players: list = []
         if with_whale:
-            players.append(ScriptedPlayer.constant("Whale", MAX_BID))
+            players.append(ScriptedPlayer.constant("Whale", game.max_bid))
         for name in BOT_NAMES[: 5 if with_whale else 6]:
             players.append(RandomBot(name, random.Random(rng.random())))
-        return run_tournament(players)
+        return run_tournament(players, game)
 
     def aggregate(results) -> dict:
         stats = {
@@ -313,15 +336,15 @@ def run_benchmark(count: int) -> None:
             avg_bid = f"{sum(bids) / len(bids):.2f}" if bids else "—（全流局）"
             print(f"  第 {day_index} 天：出价 {avg_bid}，奖池 {sum(pools) / len(pools):.2f}")
         win_dist = dict(sorted(stats["winning_bids"].items()))
-        cap_wins = stats["winning_bids"][MAX_BID]
+        cap_wins = stats["winning_bids"][game.max_bid]
         print(f"获胜价分布：{win_dist}")
-        print(f"获胜价={MAX_BID}（极点）占比：{cap_wins}/{decided}（{cap_wins / max(decided, 1):.1%}）")
+        print(f"获胜价={game.max_bid}（极点）占比：{cap_wins}/{decided}（{cap_wins / max(decided, 1):.1%}）")
 
     baseline = [play_tournament(seed=1000 + i, with_whale=False) for i in range(count)]
     print_stats(f"基准：{count} 场纯随机 Bot 对战", aggregate(baseline))
 
     probe = [play_tournament(seed=2000 + i, with_whale=True) for i in range(count)]
-    print_stats(f"鲸鱼探针：{count} 场「Whale 恒出 6 + 5 随机」", aggregate(probe))
+    print_stats(f"鲸鱼探针：{count} 场「Whale 恒出 {game.max_bid} + 5 随机」", aggregate(probe))
     whale_wins = []
     field_wins = []
     whale_ranks = []

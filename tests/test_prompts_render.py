@@ -2,7 +2,8 @@
 见 conftest.py。"""
 
 import prompts
-from conftest import make_day, make_log, make_standings
+from dataclasses import replace
+from conftest import TEST_GAME, make_day, make_log, make_standings
 
 
 class TestRenderMatchLog:
@@ -51,6 +52,11 @@ class TestRenderMatchLog:
     def test_empty_log(self):
         log = make_log(days=[])
         assert "未进行任何拍卖" in prompts.render_match_log(log)
+
+    def test_custom_last_day_void_forfeits_pool(self):
+        log = make_log(days=[make_day(3, [2, 2, 2, 1, 1, 1], 6, None, None, [1, 2], is_void=True)])
+        log.game = replace(TEST_GAME, daily_pool=(2, 1, 3))
+        assert "流局（奖池作废）" in prompts.render_match_log(log)
 
 
 class TestRenderStandings:

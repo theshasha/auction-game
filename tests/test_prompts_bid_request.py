@@ -2,9 +2,10 @@
 共享工厂（make_obs / history）见 conftest.py。"""
 
 import pytest
+from dataclasses import replace
 
 import prompts
-from conftest import history, make_obs
+from conftest import TEST_GAME, history, make_obs
 
 
 def make_prompt_obs(**kwargs):
@@ -181,3 +182,15 @@ class TestMyLastDayLine:
             my_last_bid=2, my_last_deduction=0,
         ))
         assert text.index("昨日公布") < text.index("昨日你的结果") < text.index("今日奖池")
+
+    def test_custom_game_sets_daily_limit_cost_and_bounty(self):
+        obs = make_prompt_obs(
+            day=2, coins=12, today_history=[history()],
+            my_last_bid=4, my_last_deduction=0, my_last_super_bid=9,
+            my_last_super_hit=True,
+        )
+        obs.game = replace(TEST_GAME, max_bid=9, super_cost=3, super_bounty=5)
+        text = prompts.bid_request(obs)
+        assert "今日可出最高价：9" in text
+        assert "超级出价 9 命中，扣除 3 金币成本，获得 5 金币悬赏" in text
+        assert "正常出价加 3 金币成本" in text

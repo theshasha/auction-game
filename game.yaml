@@ -1,0 +1,8 @@
+initial_coins: 7
+daily_salary: 3
+daily_pool: [1, 1, 1, 1, 1, 1]
+max_bid: 7
+super_cost: 2
+super_bounty: 3
+regular_matches: 5
+max_playoffs: 20

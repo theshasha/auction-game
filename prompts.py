@@ -1,57 +1,47 @@
 """所有发给 AI 的消息模板 + 局日志/排名的可读渲染（AI 消息与终端输出共用）。
 
-规则全文单一来源是 RULES.md：本模块加载时读入为 RULES_TEXT 注入 system 提示词，
-改规则只需改 RULES.md（进程重启后生效），不再在此维护副本。
+规则正文维护于 RULES.template.md，按本场 game 与实际名单实时渲染到 system。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
-from models import (
-    DAILY_POOL,
-    INITIAL_COINS,
-    MAX_BID,
-    MAX_DAYS,
-    SUPER_BOUNTY,
-    SUPER_COST,
-    MatchLog,
-    Observation,
-    StandingsEntry,
-)
-
-RULES_TEXT = (Path(__file__).parent / "RULES.md").read_text(encoding="utf-8").strip()
+from game_rules import GameSettings
+from models import MatchLog, Observation, StandingsEntry
+from rules import render_rules
 
 # 局末展示出价日志前的精简规则重申：结算三步是模型复盘局日志时的框架，
 # 实证错误（如「自己撞车推成退款」）都源于复盘时没套用这三步。
 # 只放局末发言请求（局日志唯一展示处），不重发全文。
-RULES_REMINDER = (
-    "【规则要点重申】每日结算按三步：① 某数值出现两笔及以上正常出价即撞车；"
-    "此外，被超级出价命中的数值（其上至少有 1 笔正常出价、且有超级出价指向它），"
-    "该数值上的所有正常出价也全部撞车——撞车的正常出价全部扣除且不能获胜；"
-    "② 未撞车的正常出价中最高的一笔获胜、其主人获得当天全部奖池"
-    "（0 是合法价位），当天正常出价全部撞车则流局、奖池并入次日；"
-    "③ 获胜与撞车的正常出价全额扣除，其余正常出价全额退还；"
-    f"超级出价每次提交固定扣除 {SUPER_COST} 金币（无论是否命中），"
-    f"命中的狙击者获得系统印发的 {SUPER_BOUNTY} 金币悬赏"
-    "（多人命中同一数值时每人各得一份）。"
-    f"超级出价不限次数（每天最多 1 笔）、0~{MAX_BID}、不能等于当天正常出价、"
-    "与当天正常出价合计不得超过你的余额、只狙击不能获胜；"
-    "命中 = 其数值上至少有 1 笔正常出价。"
-    "第 2 天起每天开始时公布昨日完整出价明细（含各人的超级出价数值）"
-    "与全场每人的当前金币余额。"
-    "友情提示：由于3-7都能直接赢，出0-2的胜率不足30%，天天出低价无法靠捡漏提高胜率。"
-    "友情提示：狙中只能赚1金币。狙7只会亏钱，因为出高价的人大概率已经狙7了，于是几乎无人出7。在出低价的时候不狙中间价而狙高价（如7）几乎无法提高胜率，因为出中间价的人大概率已经狙高价了。"
-)
+def rules_reminder(game: GameSettings) -> str:
+    """使用本局参数重申结算、成本约束与末日流局例外。"""
+    return (
+        "【规则要点重申】每日结算按三步：① 某数值出现两笔及以上正常出价即撞车；"
+        "此外，被超级出价命中的数值（其上至少有 1 笔正常出价、且有超级出价指向它），"
+        "该数值上的所有正常出价也全部撞车——撞车的正常出价全部扣除且不能获胜；"
+        "② 未撞车的正常出价中最高的一笔获胜、其主人获得当天全部奖池"
+        "（0 是合法价位），当天正常出价全部撞车则流局、奖池并入次日"
+        f"（第 {game.max_days} 天流局时奖池作废，不延长比赛）；"
+        "③ 获胜与撞车的正常出价全额扣除，其余正常出价全额退还；"
+        f"超级出价每次提交固定扣除 {game.super_cost} 金币（无论是否命中），"
+        f"命中的狙击者获得系统印发的 {game.super_bounty} 金币悬赏"
+        "（多人命中同一数值时每人各得一份）。"
+        f"超级出价不限次数（每天最多 1 笔）、0~{game.max_bid}、不能等于当天正常出价、"
+        f"当天正常出价加固定成本 {game.super_cost} 金币不得超过你的余额，"
+        "超级出价数值不计入支付金额，不能预支悬赏、只狙击不能获胜；"
+        "命中 = 其数值上至少有 1 笔正常出价。"
+        "第 2 天起每天开始时公布昨日完整出价明细（含各人的超级出价数值）"
+        "与全场每人的当前金币余额。"
+    )
 
 
-def bid_format_hint() -> str:
+def bid_format_hint(game: GameSettings) -> str:
     """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。
 
     super_bid 为可选字段：不使用就不要包含该字段；使用时两笔出价放在一个
     JSON 对象里一次提交。规则细节（命中判定、悬赏、不能获胜等）不在此每日
-    复述——规则有 system 的 RULES.md 与局末重申兜底，每日复述实证是诱导弱
+    复述——规则有 system 的实时渲染规则与局末重申兜底，每日复述实证是诱导弱
     模型跳读的冗余（20260829_230755 场次：超级规则一天出现 3 遍约 155 字符，
     误解仍集中在不读上下文的模型身上，复述并未起到防误解作用）。
     例外是提交合法性约束（同值、合计余额——v6 违反即整单作废）：
@@ -59,10 +49,10 @@ def bid_format_hint() -> str:
     """
     return (
         "请先回复你对当前局势的简要分析，然后在回复末尾用如下 JSON 给出今日出价：\n"
-        f'{{"bid": <0到{MAX_BID}的整数，不得超过你的余额>}}\n'
+        f'{{"bid": <0到{game.max_bid}的整数，不得超过你的余额>}}\n'
         f"若要同时使用超级出价（不得与正常出价同值，"
-        f"且正常出价加 {SUPER_COST} 金币成本不得超过你的余额），格式为：\n"
-        '{"bid": <正常出价>, "super_bid": <超级出价>}\n'
+        f"且正常出价加 {game.super_cost} 金币成本不得超过你的余额），格式为：\n"
+        f'{{"bid": <正常出价>, "super_bid": <0到{game.max_bid}的整数>}}\n'
         "不使用超级出价就不要包含 super_bid 字段。"
     )
 
@@ -99,6 +89,7 @@ def build_system_prompt(
     persona_text: str,
     predictions: list[tuple[str, int]],
     all_names: list[str],
+    game: GameSettings,
 ) -> str:
     """system 提示词：规则 + 身份 + 人设 + 全员公开的赛前预测。
 
@@ -109,8 +100,8 @@ def build_system_prompt(
     others = "、".join(n for n in all_names if n != name)
     prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
     return (
-        f"{RULES_TEXT}\n"
-        f"【你的身份】\n你叫 {name}，其他五位玩家是：{others}。\n"
+        f"{render_rules(game, all_names)}\n"
+        f"【你的身份】\n你叫 {name}，其他 {len(all_names) - 1} 位玩家是：{others}。\n"
         f"【你的人设】\n{persona_title}：{persona_text}\n"
         f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
         "请在游戏过程中认真思考，不要被人设的说话方式影响你的思考。"
@@ -124,22 +115,22 @@ def opening_speech_request() -> str:
     )
 
 
-def _day1_constant_info() -> str:
-    """第 1 天信息恒定：初始金币、0 胜场、当天奖池与固定上限都是常量。"""
+def _day1_constant_info(game: GameSettings) -> str:
+    """第 1 天信息由本场参数确定。"""
     return (
-        f"（第 1 天信息恒定：你的金币 {INITIAL_COINS}，本局已获胜场 0，"
-        f"今日奖池 {DAILY_POOL[0]} 个胜场，出价上限 {MAX_BID}）"
+        f"（第 1 天信息恒定：你的金币 {game.initial_coins}，本局已获胜场 0，"
+        f"今日奖池 {game.daily_pool[0]} 个胜场，出价上限 {game.max_bid}）"
     )
 
 
-def opening_plan_request(others_speeches: dict[str, str]) -> str:
+def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) -> str:
     return (
         "以下是其他玩家的开局发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价"
-        + _day1_constant_info()
+        + _day1_constant_info(game)
         + "。\n\n"
-        + bid_format_hint()
+        + bid_format_hint(game)
     )
 
 
@@ -149,7 +140,7 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
     零信息泄露（自己的出价与余额变化本来就可推出），只是免去推导——实证模型
     会把自己的撞车推成「唯一未中退款」且不与状态行余额核对，错误随即级联。
     正常出价与超级出价的结局分段给出：正常段只含正常出价的扣款，
-    超级段单独表述固定成本与命中悬赏（v6：超级出价每次提交固定扣 SUPER_COST）。
+    超级段单独表述本场固定成本与命中悬赏。
     """
     if obs.my_last_bid is None:
         return None
@@ -176,15 +167,15 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
         segments.append("未撞车但也不是最高，全额退还")
 
     if obs.my_last_super_bid is not None:
-        # 超级出价的结局只有命中/落空两种，固定成本 SUPER_COST 两种都扣
+        # 超级出价的结局只有命中/落空两种，两种都扣本场固定成本
         if obs.my_last_super_hit:
             segments.append(
                 f"超级出价 {obs.my_last_super_bid} 命中，"
-                f"扣除 {SUPER_COST} 金币成本，获得 {SUPER_BOUNTY} 金币悬赏"
+                f"扣除 {obs.game.super_cost} 金币成本，获得 {obs.game.super_bounty} 金币悬赏"
             )
         else:
             segments.append(
-                f"超级出价 {obs.my_last_super_bid} 落空，扣除 {SUPER_COST} 金币成本"
+                f"超级出价 {obs.my_last_super_bid} 落空，扣除 {obs.game.super_cost} 金币成本"
             )
     return "昨日你的结果：" + "，".join(segments) + "。"
 
@@ -208,7 +199,7 @@ def bid_request(obs: Observation) -> str:
     status_notes = []
     if obs.day >= 2:
         status_notes.append("已含今日工资")
-    status_notes.append(f"今日可出最高价：{min(MAX_BID, obs.my_coins)}")
+    status_notes.append(f"今日可出最高价：{min(obs.game.max_bid, obs.my_coins)}")
     status_line = (
         f"今日奖池：{obs.today_pool} 个胜场；"
         f"你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）；"
@@ -216,7 +207,7 @@ def bid_request(obs: Observation) -> str:
     )
     if not obs.today_history:
         # 首日：单行不换句
-        return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint()}"
+        return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint(obs.game)}"
 
     yesterday = obs.today_history[-1]
     if yesterday["winner"] == "流局":
@@ -247,18 +238,18 @@ def bid_request(obs: Observation) -> str:
     if my_last_line is not None:
         lines.append(my_last_line)
     lines.append(status_line)
-    return "\n".join(lines) + "\n\n" + bid_format_hint()
+    return "\n".join(lines) + "\n\n" + bid_format_hint(obs.game)
 
 
-def retry_bid_request() -> str:
+def retry_bid_request(game: GameSettings) -> str:
     return (
-        "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + bid_format_hint()
+        "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + bid_format_hint(game)
     )
 
 
-def invalid_bid_retry_request(reason: str) -> str:
+def invalid_bid_retry_request(reason: str, game: GameSettings) -> str:
     """数值非法（解析成功但违反出价规则）的提醒重试：写清具体违规原因。"""
-    return f"你的上一提交非法：{reason}。请重新出价。\n\n" + bid_format_hint()
+    return f"你的上一提交非法：{reason}。请重新出价。\n\n" + bid_format_hint(game)
 
 
 def render_match_log(log: MatchLog) -> str:
@@ -290,7 +281,7 @@ def render_match_log(log: MatchLog) -> str:
                     cell += "中"
             cells.append(cell)
         if day.is_void:
-            outcome = "流局（奖池作废）" if day.day == MAX_DAYS else "流局（奖池并入次日）"
+            outcome = "流局（奖池作废）" if day.day == log.game.max_days else "流局（奖池并入次日）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
         collision_text = "、".join(str(value) for value in day.collision_values) or "—"
@@ -327,26 +318,26 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], wil
         f"第 {log.match_index} 局（{kind}）结束。",
         # 局日志是模型复盘他人出价的唯一材料，复盘前先重申结算框架（实证错误
         # 多因复盘时不套用结算步骤，而非遗忘条款）
-        RULES_REMINDER,
+        rules_reminder(log.game),
         f"本局完整出价日志：\n{render_match_log(log)}",
         f"截至当前的累计排名与胜场明细：\n{render_standings(standings)}",
     ]
     # 只有正赛打完（或加赛后）第一名仍并列才有信息增量，其余局数无需预告
-    if will_continue and log.match_index >= 5:
+    if will_continue and log.match_index >= log.game.regular_matches:
         lines.append("第一名出现并列，按规则全员将进入加赛局，加赛局胜场计入总胜场。")
     lines.append("请向全体玩家发表你的局末发言（不超过 300 字）。")
     lines.append(speech_format_hint())
     return "\n\n".join(lines)
 
 
-def next_match_plan_request(others_speeches: dict[str, str]) -> str:
+def next_match_plan_request(others_speeches: dict[str, str], game: GameSettings) -> str:
     return (
         "以下是其他玩家的局末发言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你下一局的初步策略，并直接给出下一局第 1 天的出价"
-        + _day1_constant_info()
+        + _day1_constant_info(game)
         + "。\n\n"
-        + bid_format_hint()
+        + bid_format_hint(game)
     )
 
 

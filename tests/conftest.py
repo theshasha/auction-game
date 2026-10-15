@@ -13,10 +13,12 @@
 
 from ai_player import AIPlayer
 from engine import run_match
+from game_rules import GameSettings
 from models import BidRecord, DayResult, MatchLog, Observation, StandingsEntry
 from players import ScriptedPlayer
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
+TEST_GAME = GameSettings(7, 3, (1,) * 6, 7, 2, 3, 5, 20)
 
 
 # ---------- 1. 通用数据对象工厂 ----------
@@ -46,10 +48,11 @@ def make_day(day, bids, pool, winner, winning_bid, collision_values, wins_taken=
     )
 
 
-def make_log(match_index=1, is_playoff=False, days=None, wins=None):
+def make_log(match_index=1, is_playoff=False, days=None, wins=None, game=TEST_GAME):
     return MatchLog(
         match_index=match_index,
         is_playoff=is_playoff,
+        game=game,
         days=days if days is not None else [make_day(1, [5, 4, 3, 2, 1, 0], 1, "甲", 5, [], 1)],
         wins=wins if wins is not None else {name: 0 for name in NAMES},
     )
@@ -84,7 +87,7 @@ def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coi
              my_last_collided=False, my_last_sniped=False, my_last_bid_illegal=False,
              my_last_super_bid=None, my_last_super_hit=False,
              all_coins=None,
-             past_match_logs=None):
+             past_match_logs=None, game=TEST_GAME):
     """全字段 Observation 工厂（v6）。past_match_logs 默认空（即当前为第 1 局）。"""
     return Observation(
         my_name=my_name,
@@ -96,6 +99,7 @@ def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coi
         today_history=today_history or [],
         standings=[],
         past_match_logs=past_match_logs or [],
+        game=game,
         my_last_bid=my_last_bid,
         my_last_deduction=my_last_deduction,
         my_last_collided=my_last_collided,
@@ -109,14 +113,15 @@ def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coi
 
 # ---------- 2. 引擎场景构造器 ----------
 
-def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=None):
+def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=None,
+                  game=TEST_GAME):
     """用给定的 {名字: 策略函数} 跑一局，返回 MatchLog。super_strategies 可选。"""
     super_strategies = super_strategies or {}
     players = [
         ScriptedPlayer(name, strategies[name], super_strategies.get(name)) for name in NAMES
     ]
     wins_history = {name: [] for name in NAMES}
-    return run_match(players, match_index, is_playoff, wins_history, [])
+    return run_match(players, match_index, is_playoff, wins_history, [], game)
 
 
 def constant_by_name(bids_by_name: dict):
@@ -150,10 +155,12 @@ def super_by_day(table):
     return lambda obs: table.get(obs.day)
 
 
-def run_scenario(table, default=0, super_strategies=None, capture=None):
+def run_scenario(table, default=0, super_strategies=None, capture=None, game=TEST_GAME):
     """最常见场景：全员共用一张按天出价表（表内按名字区分出价），跑一局返回 MatchLog。"""
     strategy = bids_by_day(table, default=default, capture=capture)
-    return run_one_match({name: strategy for name in NAMES}, super_strategies=super_strategies)
+    return run_one_match(
+        {name: strategy for name in NAMES}, super_strategies=super_strategies, game=game
+    )
 
 
 # ---------- 3. AI 玩家测试夹具 ----------
@@ -178,9 +185,10 @@ def fake_chat_fn(script):
     return chat_fn
 
 
-def make_player(chat_fn, tmp_path=None):
+def make_player(chat_fn, tmp_path=None, game=TEST_GAME):
     log_path = (tmp_path / "ai_Alpha.jsonl") if tmp_path else None
-    return AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, chat_fn, log_path=log_path)
+    return AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
+                    chat_fn, game=game, log_path=log_path)
 
 
 def bid_reply(bid):
@@ -197,6 +205,6 @@ def legacy_speech_reply(speech):
     return f'发言策略：先放个烟雾弹。\n{{"speech": "{speech}"}}'
 
 
-def make_ai_obs(day=1, coins=6):
+def make_ai_obs(day=1, coins=6, game=TEST_GAME):
     """AI 玩家测试的极简 Observation（Alpha 视角；解析测试只关心出价合法性）。"""
-    return make_obs(my_name="Alpha", day=day, coins=coins)
+    return make_obs(my_name="Alpha", day=day, coins=coins, game=game)

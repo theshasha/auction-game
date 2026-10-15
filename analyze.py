@@ -13,17 +13,69 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from game_rules import GameSettings
+
 ROOT_DIR = Path(__file__).parent
 LOG_DIR = ROOT_DIR / "logs"
 
 RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(_\d+)?$")  # 时间戳场次目录，排除 archive 等归档目录
 
-FALLBACK_INITIAL_COINS = 6  # v7 起日志自带 initial_coins 字段；旧日志回退到此值（与 v5/v6 一致）
-FALLBACK_MAX_BID = 6        # 同上：v7 起日志自带 max_bid，旧日志上限为 6
-DAILY_SALARY = 3   # 与 models.py 保持一致：第 2 天起每天开始时的工资
-SUPER_BOUNTY = 3   # 与 models.py 保持一致：超级出价命中的悬赏金币（v5 起）
-SUPER_COST = 2     # 与 models.py 保持一致：超级出价每次提交的固定消耗（v6 起）
-REGULAR_MATCHES = 5  # 与 tournament.py 保持一致：正赛局数（加赛局号从 REGULAR_MATCHES+1 起）
+
+def _require_fields(record: dict, fields: tuple[str, ...], context: str) -> None:
+    if not isinstance(record, dict):
+        raise ValueError(f"日志格式不受支持：{context} 必须是对象")
+    missing = [field for field in fields if field not in record]
+    if missing:
+        raise ValueError(f"日志数据缺失：{context} 缺少 {', '.join(missing)}")
+
+
+def validate_match(match: dict) -> tuple[GameSettings, list[str]]:
+    """只接受含完整参数快照及当前结算明细的日志。"""
+    _require_fields(match, ("game", "match_index", "is_playoff", "wins", "days"), "match")
+    try:
+        game = GameSettings.from_dict(match["game"])
+    except ValueError as exc:
+        raise ValueError(f"日志 game 参数无效：{exc}") from exc
+    if not isinstance(match["wins"], dict):
+        raise ValueError("日志格式不受支持：match.wins 必须是对象")
+    if not isinstance(match["days"], list) or not match["days"]:
+        raise ValueError("日志数据缺失：match.days 必须包含至少一天")
+    player_names = None
+    for day in match["days"]:
+        _require_fields(day, ("day", "bids", "pool", "winner", "winning_bid", "wins_taken",
+                              "is_void", "collision_values", "super_uses"), "day")
+        if not all(isinstance(day[field], list) for field in ("bids", "collision_values", "super_uses")):
+            raise ValueError("日志格式不受支持：bids、collision_values、super_uses 必须是列表")
+        for bid in day["bids"]:
+            _require_fields(bid, ("player", "raw_bid", "bid", "status", "is_super"), "bid")
+        names = [bid["player"] for bid in day["bids"] if not bid["is_super"]]
+        if (len(names) < 2 or any(not isinstance(name, str) or not name.strip() for name in names)
+                or len(names) != len(set(names))):
+            raise ValueError("日志参赛名单无效：每天必须有至少两名不重名玩家的正常出价")
+        if player_names is None:
+            player_names = names
+        if set(names) != set(player_names) or set(match["wins"]) != set(player_names):
+            raise ValueError("日志参赛名单不一致：每日正常出价与 wins 必须覆盖同一名单")
+        for use in day["super_uses"]:
+            _require_fields(use, ("player", "value", "hit"), "super_uses 条目")
+        if any(record["player"] not in player_names for record in day["bids"] + day["super_uses"]):
+            raise ValueError("日志参赛名单不一致：出价或超级出价含未知玩家")
+    return game, player_names
+
+
+def validate_matches(matches: list[dict]) -> tuple[GameSettings, list[str]]:
+    if not matches:
+        raise ValueError("日志数据缺失：没有比赛")
+    first_game = None
+    first_names = None
+    for payload in matches:
+        _require_fields(payload, ("match",), "场次记录")
+        game, names = validate_match(payload["match"])
+        if first_game is None:
+            first_game, first_names = game, names
+        elif game != first_game or set(names) != set(first_names):
+            raise ValueError("场次日志不一致：各局 game 参数与参赛名单必须一致，请检查是否混入其他比赛")
+    return first_game, first_names
 
 
 def find_latest_ai_run() -> Path:
@@ -40,68 +92,53 @@ def load_match_logs(run_dir: Path) -> list[dict]:
     match_files = sorted(run_dir.glob("match_*.json"), key=lambda p: int(p.stem.split("_")[1]))
     if not match_files:
         sys.exit(f"{run_dir} 下没有 match_*.json")
-    return [json.loads(path.read_text(encoding="utf-8")) for path in match_files]
+    matches = []
+    for path in match_files:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            _require_fields(payload, ("match",), "场次记录")
+            validate_match(payload["match"])
+            matches.append(payload)
+        except ValueError as exc:
+            raise ValueError(f"{path.name}：日志格式不受支持或数据缺失：{exc}") from exc
+    validate_matches(matches)
+    return matches
 
 
 def recompute_remaining_coins(match: dict) -> dict[str, int]:
-    """按规则从出价日志重放金币：第 2 天起每天 +3 工资。
-    v6 日志（rules_version="v6"）：超级出价每次提交扣 SUPER_COST，命中 +SUPER_BOUNTY。
-    v5 日志（含 collision_values 字段、无 rules_version）：超级出价不扣款，
-    命中悬赏 +3 由系统印发。
-    旧格式日志：正常与超级出价混在一起按笔数计撞车；凭正常出价获胜者
-    （旧规则含冲顶税转判获得者）与撞车者扣除出价，超级出价永不扣款。"""
+    """按本局 game 快照重放金币：工资、正常价扣款、超级成本及命中悬赏。"""
+    game, player_names = validate_match(match)
     days = match["days"]
-    is_v6 = match.get("rules_version") in ("v6", "v7")
-    is_new_format = bool(days) and "collision_values" in days[0]
-    initial_coins = match.get("initial_coins", FALLBACK_INITIAL_COINS)
-    coins = {bid["player"]: initial_coins for bid in days[0]["bids"] if not bid.get("is_super")}
+    coins = dict.fromkeys(player_names, game.initial_coins)
     for day in days:
         if day["day"] >= 2:
             for name in coins:
-                coins[name] += DAILY_SALARY
-        if is_new_format:
-            burned_values = set(day["collision_values"])
-            for bid in day["bids"]:
-                if bid.get("is_super"):
-                    continue
-                won = bid["player"] == day["winner"] and bid["bid"] == day["winning_bid"]
-                if won or bid["bid"] in burned_values:
-                    coins[bid["player"]] -= bid["bid"]
-            for use in day.get("super_uses", []):
-                if is_v6:
-                    coins[use["player"]] -= SUPER_COST
-                if use["hit"]:
-                    coins[use["player"]] += SUPER_BOUNTY
-            continue
-        price_counts = Counter(bid["bid"] for bid in day["bids"])
-        transfer_recipient = day.get("transfer_recipient")  # 旧规则日志（含冲顶税转判）才有此字段
-        winner_paid_with_super = day.get("winning_is_super", False)
+                coins[name] += game.daily_salary
+        burned_values = set(day["collision_values"])
         for bid in day["bids"]:
-            if bid.get("is_super"):
-                continue  # 超级出价永不扣款
-            is_collider = price_counts[bid["bid"]] >= 2
-            won_with_normal = bid["player"] == day["winner"] and not winner_paid_with_super
-            if won_with_normal or bid["player"] == transfer_recipient or is_collider:
+            if bid["is_super"]:
+                continue
+            won = bid["player"] == day["winner"] and bid["bid"] == day["winning_bid"]
+            if won or bid["bid"] in burned_values:
                 coins[bid["player"]] -= bid["bid"]
+        for use in day["super_uses"]:
+            coins[use["player"]] -= game.super_cost
+            if use["hit"]:
+                coins[use["player"]] += game.super_bounty
     return coins
 
 
 def collect_player_stats(matches: list[dict]) -> dict:
-    """按玩家聚合整场统计：每局胜场矩阵 + 玩家明细行（口径与聚合段一致）。
+    """按玩家聚合整场统计：每局胜场矩阵 + 玩家明细行（均价只计正常出价）。
 
     返回 {"match_labels", "win_matrix", "rows"}；rows 按总胜场降序（同胜场按名字）。
-    旧格式日志（无 super_uses / collision_values）降级：超级出价使用次数从 bids 的
-    is_super 统计，命中率不可得（super_hits=None，展示层显示降级标记）。
     """
-    player_names = [
-        bid["player"] for bid in matches[0]["match"]["days"][0]["bids"] if not bid.get("is_super")
-    ]
+    _, player_names = validate_matches(matches)
     match_labels: list[str] = []
     win_matrix: dict[str, list[int]] = {name: [] for name in player_names}
     match_champions = {name: 0.0 for name in player_names}  # 第一名并列按 1/n 计
     super_uses_count = {name: 0 for name in player_names}
     super_hits = {name: 0 for name in player_names}
-    super_hit_known = True   # 任一旧格式局即无法得到全场命中数
     collision_burn = {name: 0 for name in player_names}
     normal_bids: dict[str, list[int]] = {name: [] for name in player_names}
     end_coins: dict[str, list[int]] = {name: [] for name in player_names}
@@ -111,54 +148,40 @@ def collect_player_stats(matches: list[dict]) -> dict:
     for payload in matches:
         match = payload["match"]
         days = match["days"]
-        is_new_format = bool(days) and "collision_values" in days[0]
+        game = GameSettings.from_dict(match["game"])
         if match["is_playoff"]:
-            match_labels.append(f"加{match['match_index'] - REGULAR_MATCHES}")
+            match_labels.append(f"加{match['match_index'] - game.regular_matches}")
         else:
             match_labels.append(str(match["match_index"]))
         wins = match["wins"]
         for name in player_names:
-            win_matrix[name].append(wins.get(name, 0))
+            win_matrix[name].append(wins[name])
         if wins:
             top_wins = max(wins.values())
             champions = [name for name, count in wins.items() if count == top_wins]
             for name in champions:
                 match_champions[name] += 1 / len(champions)
         for day in days:
-            if is_new_format:
-                burned_values = set(day["collision_values"])
-            else:
-                # 旧格式：正常与超级出价混在一起按笔数计撞车（与聚合段旧口径一致）
-                price_counts = Counter(bid["bid"] for bid in day["bids"])
+            burned_values = set(day["collision_values"])
             for bid in day["bids"]:
                 name = bid["player"]
                 if bid["status"] == "illegal":
                     illegal_counts[name] += 1
-                if bid.get("is_super"):
-                    if not is_new_format:
-                        super_uses_count[name] += 1
+                if bid["is_super"]:
                     continue
                 if bid["bid"] == 0:
                     zero_bid_counts[name] += 1
-                burned = (
-                    bid["bid"] in burned_values
-                    if is_new_format
-                    else price_counts[bid["bid"]] >= 2
-                )
-                if burned:
+                if bid["bid"] in burned_values:
                     collision_burn[name] += bid["bid"]
                 if not day["is_void"]:
                     normal_bids[name].append(bid["bid"])
-            if is_new_format:
-                for use in day.get("super_uses", []):
-                    super_uses_count[use["player"]] += 1
-                    if use["hit"]:
-                        super_hits[use["player"]] += 1
-        if not is_new_format:
-            super_hit_known = False
+            for use in day["super_uses"]:
+                super_uses_count[use["player"]] += 1
+                if use["hit"]:
+                    super_hits[use["player"]] += 1
         remaining = recompute_remaining_coins(match)
         for name in player_names:
-            end_coins[name].append(remaining.get(name, 0))
+            end_coins[name].append(remaining[name])
 
     rows = []
     for name in player_names:
@@ -168,7 +191,7 @@ def collect_player_stats(matches: list[dict]) -> dict:
             "total_wins": sum(win_matrix[name]),
             "match_champions": match_champions[name],
             "super_uses": super_uses_count[name],
-            "super_hits": super_hits[name] if super_hit_known else None,
+            "super_hits": super_hits[name],
             "collision_burn": collision_burn[name],
             "avg_bid": sum(bids) / len(bids) if bids else None,
             "end_coins": end_coins[name],
@@ -189,9 +212,7 @@ def print_player_stats(stats: dict) -> None:
         print(f"  {row['name']}：{cells}")
     print("  明细（胜场 / 局冠军 / 超级出价 / 撞车放血 / 平均正常出价 / 局末余额 / 违规 / 出0）：")
     for row in stats["rows"]:
-        if row["super_hits"] is None:
-            super_text = f"{row['super_uses']}用（旧格式命中率不可得：—）"
-        elif row["super_uses"]:
+        if row["super_uses"]:
             super_text = f"{row['super_uses']}用{row['super_hits']}中（{row['super_hits'] / row['super_uses']:.0%}）"
         else:
             super_text = "0用"
@@ -206,13 +227,11 @@ def print_player_stats(stats: dict) -> None:
 
 def analyze(run_dir: Path) -> None:
     matches = load_match_logs(run_dir)
-    player_names = [
-        bid["player"] for bid in matches[0]["match"]["days"][0]["bids"] if not bid.get("is_super")
-    ]
+    game, player_names = validate_matches(matches)
 
     total_days = 0
     void_days = 0
-    # 按「第几天」聚合非流局日的全部有效出价与当天奖池
+    # 按「第几天」聚合非流局日的全部有效出价；奖池包括流局日
     bids_by_day_index: dict[int, list[int]] = {}
     pools_by_day_index: dict[int, list[int]] = {}
     winning_bids: list[int] = []
@@ -223,62 +242,47 @@ def analyze(run_dir: Path) -> None:
     zero_bid_wins = 0
     collision_burn = 0   # 因撞车被没收的金币总数（只算正常出价；超级出价成本另计）
     super_uses = 0          # 超级出价使用总次数
-    super_wins = 0          # 凭超级出价获胜的天数（旧规则日志才有意义，v4 起恒 0）
-    super_collisions = 0    # 旧格式（v4 及以前）：超级出价撞车的次数（狙杀/对撞）
-    super_hits = 0          # 新格式（v5/v6）：超级出价命中次数（命中即 +3 悬赏）
-    super_bounty_minted = 0  # 新格式（v5/v6）：命中悬赏印发的金币总数
-    super_cost_spent = 0    # v6 起：超级出价固定成本消耗的金币总数（2 × 使用次数）
-    cap_wins = 0            # 获胜价=当日上限（极点）的天数（新规则无冲顶税，仅作分布参考）
-    cap_bid = matches[0]["match"].get("max_bid", FALLBACK_MAX_BID)  # 极点数值（v7 起从日志读）
+    super_hits = 0          # 超级出价命中次数
+    super_bounty_minted = 0  # 命中悬赏印发的金币总数
+    super_cost_spent = 0    # 超级出价固定成本消耗的金币总数
+    cap_wins = 0            # 获胜价=出价上限（极点）的天数
+    cap_bid = game.max_bid
 
     for payload in matches:
         match = payload["match"]
-        is_v6 = match.get("rules_version") in ("v6", "v7")
-        is_new_format = bool(match["days"]) and "collision_values" in match["days"][0]
+        game = GameSettings.from_dict(match["game"])
         wins = match["wins"]
         for name, win_count in wins.items():
-            if win_count >= 3:  # 单局多胜口径：≥3 胜场（每天奖池 1 个、单局共 5 个）
+            if win_count >= 3:  # 固定统计口径，不随本局计划总胜场改变
                 multi_win_matches.append((match["match_index"], name, win_count))
 
         for day in match["days"]:
             total_days += 1
             pools_by_day_index.setdefault(day["day"], []).append(day["pool"])
-            price_counts = Counter(bid["bid"] for bid in day["bids"])
-            burned_values = set(day["collision_values"]) if is_new_format else set()
+            burned_values = set(day["collision_values"])
             for bid in day["bids"]:
                 if bid["status"] == "illegal":
                     illegal_bids += 1
                 if bid["bid"] == 0:
                     zero_bids += 1
-                if bid.get("is_super"):
-                    super_uses += 1
-                    if is_v6:
-                        super_cost_spent += SUPER_COST
-                    if not is_new_format and price_counts[bid["bid"]] >= 2:
-                        super_collisions += 1
-                elif is_new_format:
-                    if bid["bid"] in burned_values:
-                        collision_burn += bid["bid"]
-                elif price_counts[bid["bid"]] >= 2:
+                if not bid["is_super"] and bid["bid"] in burned_values:
                     collision_burn += bid["bid"]
-            for use in day.get("super_uses", []):
+            for use in day["super_uses"]:
+                super_uses += 1
+                super_cost_spent += game.super_cost
                 if use["hit"]:
                     super_hits += 1
-                    super_bounty_minted += SUPER_BOUNTY
+                    super_bounty_minted += game.super_bounty
             if day["is_void"]:
                 void_days += 1
                 continue
             bids_by_day_index.setdefault(day["day"], []).extend(b["bid"] for b in day["bids"])
             winning_bids.append(day["winning_bid"])
-            if day["winning_bid"] == match.get("max_bid", FALLBACK_MAX_BID):
+            if day["winning_bid"] == game.max_bid:
                 cap_wins += 1
-            if day.get("winning_is_super"):
-                super_wins += 1
             if day["winning_bid"] == 0:
                 zero_bid_wins += 1
         remaining_coins_all.extend(recompute_remaining_coins(match).values())
-
-    decided_days = total_days - void_days
 
     print(f"场次目录：{run_dir.name}")
     print(f"玩家：{'、'.join(player_names)}")
@@ -308,22 +312,9 @@ def analyze(run_dir: Path) -> None:
           f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
     print(f"撞车放血：全场因撞车被没收 {collision_burn} 金币"
           f"（每局平均 {collision_burn / len(matches):.1f}，只计正常出价）")
-    has_new_format = any(
-        payload["match"]["days"] and "collision_values" in payload["match"]["days"][0]
-        for payload in matches
-    )
-    has_v6 = any(payload["match"].get("rules_version") in ("v6", "v7") for payload in matches)
-    if has_v6:
-        hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
-        print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
-              f"成本消耗 {super_cost_spent} 金币，悬赏印发 {super_bounty_minted} 金币")
-    elif has_new_format:
-        hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
-        print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
-              f"悬赏印发 {super_bounty_minted} 金币")
-    else:
-        print(f"超级出价：使用 {super_uses} 次，凭超级出价获胜 {super_wins} 天，"
-              f"超级出价撞车 {super_collisions} 次")
+    hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
+    print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
+          f"成本消耗 {super_cost_spent} 金币，悬赏印发 {super_bounty_minted} 金币")
     print()
 
     print_player_stats(collect_player_stats(matches))
@@ -341,7 +332,10 @@ def analyze(run_dir: Path) -> None:
 
 def main() -> None:
     run_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else find_latest_ai_run()
-    analyze(run_dir)
+    try:
+        analyze(run_dir)
+    except ValueError as exc:
+        sys.exit(str(exc))
 
 
 if __name__ == "__main__":

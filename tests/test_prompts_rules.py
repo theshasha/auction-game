@@ -1,8 +1,17 @@
-"""规则文本与局末规则重申的测试：RULES_TEXT 单一来源（RULES.md）、
-RULES_REMINDER 的覆盖要点与出现位置。共享工厂见 conftest.py。"""
+"""规则模板生成、参数贯通与局末重申。共享工厂见 conftest.py。"""
+
+from dataclasses import replace
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 import prompts
-from conftest import NAMES, make_log, make_standings
+import rules
+from configuration import load_game_settings, load_players
+from conftest import NAMES, TEST_GAME, make_log, make_standings
+from rules import render_rules
 
 
 class TestRulesReminder:
@@ -16,7 +25,7 @@ class TestRulesReminder:
         assert text.index("【规则要点重申】") < text.index("本局完整出价日志")
 
     def test_reminder_covers_three_steps_and_super_bid(self):
-        reminder = prompts.RULES_REMINDER
+        reminder = prompts.rules_reminder(TEST_GAME)
         assert "两笔及以上正常出价即撞车" in reminder
         assert "未撞车的正常出价中最高的一笔获胜" in reminder
         assert "全额退还" in reminder
@@ -32,20 +41,22 @@ class TestRulesReminder:
 
     def test_other_requests_have_no_reminder(self):
         standings = make_standings({n: [0] for n in NAMES})
-        assert "【规则要点重申】" not in prompts.next_match_plan_request({"乙": "发言"})
+        assert "【规则要点重申】" not in prompts.next_match_plan_request({"乙": "发言"}, TEST_GAME)
         assert "【规则要点重申】" not in prompts.final_speech_request(standings, make_log(match_index=5))
 
 
 class TestRulesText:
-    """规则全文单一来源是 RULES.md：RULES_TEXT 即文件内容，要点与文件逐条对齐。"""
+    """规则正文源于模板，生成文档与 system 使用相同渲染函数。"""
 
-    def test_rules_text_loaded_from_rules_md(self):
-        from pathlib import Path
-        rules_md = (Path(prompts.__file__).parent / "RULES.md").read_text(encoding="utf-8").strip()
-        assert prompts.RULES_TEXT == rules_md
+    def test_generated_rules_matches_configuration(self):
+        names = [player["name"] for player in load_players()]
+        text = render_rules(load_game_settings(), names)
+        assert rules.RULES_PATH.read_text(encoding="utf-8") == text
+        system = prompts.build_system_prompt(names[0], "人设", "正文", [], names, load_game_settings())
+        assert system.startswith(text)
 
     def test_core_mechanics_present(self):
-        text = prompts.RULES_TEXT
+        text = render_rules(TEST_GAME, NAMES)
         assert "每局 6 天" in text
         assert "每天拍卖 1 个胜场，每局共 6 个胜场" in text
         assert "并入次日奖池" in text
@@ -53,7 +64,7 @@ class TestRulesText:
         assert "0~7的整数" in text
 
     def test_super_bid_rules_present(self):
-        text = prompts.RULES_TEXT
+        text = render_rules(TEST_GAME, NAMES)
         # 规则 v6：超级出价是收费狙击工具——不限次数（每天最多 1 笔）、
         # 固定消耗 2 金币、与正常出价合计不超余额、不能等于当天正常出价、
         # 不能获胜；命中（≥1 笔正常出价）发 3 金币悬赏，多人命中同值各得 3
@@ -66,7 +77,7 @@ class TestRulesText:
         assert "每位狙击者均独立获得 3 金币悬赏" in text
 
     def test_settlement_three_steps_present(self):
-        text = prompts.RULES_TEXT
+        text = render_rules(TEST_GAME, NAMES)
         assert "判定撞车" in text
         assert "判定胜负" in text
         assert "金币结算" in text
@@ -76,14 +87,85 @@ class TestRulesText:
         assert "宣告流局" in text
 
     def test_no_cap_tax_anymore(self):
-        text = prompts.RULES_TEXT
+        text = render_rules(TEST_GAME, NAMES)
         assert "冲顶税" not in text
         assert "转判" not in text
 
     def test_publication_includes_yesterday_log_and_all_coins(self):
         # 规则四.1（v6）：第 2 天起公布昨日完整出价明细与全场每人当前余额
-        text = prompts.RULES_TEXT
+        text = render_rules(TEST_GAME, NAMES)
         assert "昨日出价日志" in text
         assert "具体出价明细" in text
         assert "全场每位玩家当前的总金币数" in text
         assert "每局结束后，公开该局完整出价日志" in text
+
+    def test_custom_parameters_and_actual_names_reach_system(self):
+        game = replace(
+            TEST_GAME, initial_coins=11, daily_salary=4, daily_pool=(2, 1, 3),
+            max_bid=9, super_cost=3, super_bounty=5, regular_matches=2, max_playoffs=4,
+        )
+        names = ["甲", "乙", "丙"]
+        text = render_rules(game, names)
+        assert "3 名玩家参赛（甲、乙、丙）" in text
+        assert "共 2 局正赛，每局 3 天" in text
+        assert "第 1 天 2 个胜场、第 2 天 1 个胜场、第 3 天 3 个胜场" in text
+        assert "每局计划共 6 个胜场" in text
+        assert "发放 11 枚金币" in text and "发放 4 枚金币" in text
+        assert "0~9的整数" in text and "固定消耗 3 枚金币" in text
+        assert "发放 5 金币悬赏" in text
+        assert "最多进行 4 局加赛" in text
+        assert "保留并列冠军" in text
+        assert "第 3 天未拍出的胜场作废" in text
+        assert "超级出价数值仅为狙击目标，不计入支付金额" in text
+        assert "友情提示" not in text
+        assert "{" not in text and "}" not in text
+        system = prompts.build_system_prompt("甲", "人设", "正文", [], names, game)
+        assert system.startswith(text)
+        assert "其他 2 位玩家是：乙、丙" in system
+        reminder = prompts.rules_reminder(game)
+        assert "固定扣除 3 金币" in reminder and "5 金币悬赏" in reminder
+        assert "第 3 天流局时奖池作废" in reminder
+        assert "当天正常出价加固定成本 3 金币不得超过你的余额" in reminder
+        assert "友情提示" not in reminder
+
+    @pytest.mark.parametrize("names", [[], ["甲"], ["甲", "甲"], ["甲", " "]])
+    def test_invalid_actual_names_rejected(self, names):
+        with pytest.raises(ValueError):
+            render_rules(TEST_GAME, names)
+
+    def test_unknown_placeholder_is_not_silently_preserved(self, tmp_path, monkeypatch):
+        template = tmp_path / "RULES.template.md"
+        template.write_text("{misspelled_parameter}", encoding="utf-8")
+        monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
+        with pytest.raises(KeyError, match="misspelled_parameter"):
+            render_rules(TEST_GAME, NAMES)
+
+    def test_runtime_render_does_not_read_generated_document(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rules, "RULES_PATH", tmp_path / "missing.md")
+        assert "唯一高价拍卖游戏规则" in prompts.build_system_prompt(
+            "甲", "人设", "正文", [], NAMES, TEST_GAME
+        )
+
+    def test_check_command_works_outside_project_without_writing(self, tmp_path):
+        before = rules.RULES_PATH.read_bytes()
+        result = subprocess.run(
+            [sys.executable, "-B", str(Path(rules.__file__).resolve()), "--check"],
+            cwd=tmp_path, capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+        assert rules.RULES_PATH.read_bytes() == before
+
+    def test_check_command_rejects_stale_document_without_writing(self, tmp_path, monkeypatch):
+        document = tmp_path / "RULES.md"
+        document.write_text("过期规则", encoding="utf-8")
+        monkeypatch.setattr(rules, "RULES_PATH", document)
+        monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
+        assert rules.main() == 1
+        assert document.read_text(encoding="utf-8") == "过期规则"
+
+    def test_check_command_rejects_bad_template(self, tmp_path, monkeypatch):
+        template = tmp_path / "RULES.template.md"
+        template.write_text("{unknown}", encoding="utf-8")
+        monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
+        monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
+        assert rules.main() == 1

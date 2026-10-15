@@ -8,6 +8,7 @@ import yaml
 import check_llm
 import main
 from configuration import ConfigurationError, load_configuration
+from game_rules import GameSettings
 
 
 @pytest.fixture
@@ -130,20 +131,33 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
     monkeypatch.setattr(entry, "load_configuration", load)
     monkeypatch.setattr(entry, "make_chat_fn", make_chat_fn)
     if entry is main:
+        game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
+        games_loaded = []
+
+        def load_game():
+            games_loaded.append(True)
+            return game
+
+        monkeypatch.setattr(main, "load_game_settings", load_game)
         monkeypatch.setattr(main, "make_run_dir", lambda mode: tmp_path)
         monkeypatch.setattr(main, "Controller", lambda mode: SimpleNamespace(start_stdin_reader=lambda: None))
 
-        def tournament(players, **kwargs):
+        def tournament(players, actual_game, **kwargs):
+            assert actual_game is game
+            assert kwargs["director"].game is game
             assert [p.name for p in players] == ["甲", "乙"]
             assert "沉稳温柔" in players[0].messages[0]["content"]
             assert "活泼好奇" in players[1].messages[0]["content"]
             for player in players:
+                assert player.game is game
                 assert player.log_path.parent == tmp_path
                 player.chat_fn([])
             raise main.TournamentAborted
 
         monkeypatch.setattr(main, "run_tournament", tournament)
         main.run_ai()
+        assert games_loaded == [True]
+        assert (tmp_path / "RULES.md").read_text(encoding="utf-8") == main.render_rules(game, ["甲", "乙"])
     else:
         assert check_llm.main() == 0
         assert chats == [check_llm.PING_MESSAGES, check_llm.PING_MESSAGES]

@@ -1,6 +1,10 @@
 """整场流程（排名结算与加赛循环）的测试，用 ScriptedPlayer 构造指定胜场分布。"""
 
-import tournament
+from dataclasses import replace
+
+import pytest
+
+from conftest import TEST_GAME
 from players import ScriptedPlayer
 from tournament import first_place_tied, run_tournament
 
@@ -32,9 +36,37 @@ def ranks(result):
 
 
 class TestRegularSeasonOnly:
+    def test_custom_regular_count_and_coins_reset_between_matches(self):
+        game = replace(TEST_GAME, initial_coins=11, daily_salary=2, daily_pool=(2, 3, 4),
+                       max_bid=9, super_cost=4, super_bounty=6, regular_matches=2)
+        seen = []
+
+        def strategy(obs):
+            seen.append(obs)
+            return 9 if obs.my_name == "甲" and obs.day == 1 else (1 if obs.my_name == "甲" else 0)
+
+        players = [ScriptedPlayer(name, strategy) for name in NAMES[:3]]
+        result = run_tournament(players, game)
+
+        assert len(result.match_logs) == 2
+        assert result.playoff_count == 0
+        assert totals(result) == {"甲": 18, "乙": 0, "丙": 0}
+        assert all(not log.is_playoff and log.game is game for log in result.match_logs)
+        first_days = [obs for obs in seen if obs.day == 1]
+        assert len(first_days) == 6
+        assert all(obs.my_coins == 11 for obs in first_days)
+        assert all(obs.game is game for obs in seen)
+        assert first_days[3].past_match_logs[0]["game"] == game.to_dict()
+
+    @pytest.mark.parametrize("names", [[], ["甲"], ["甲", "甲"], ["甲", ""], ["甲", "  "]])
+    def test_invalid_roster_is_rejected_before_playing(self, names):
+        players = [ScriptedPlayer.constant(name, 0) for name in names]
+        with pytest.raises(ValueError, match="玩家|比赛"):
+            run_tournament(players, TEST_GAME)
+
     def test_unique_first_place_no_playoff(self):
         players = make_players({1: "甲", 2: "甲", 3: "甲", 4: "甲", 5: "甲"})
-        result = run_tournament(players)
+        result = run_tournament(players, TEST_GAME)
 
         assert len(result.match_logs) == 5
         assert result.playoff_count == 0
@@ -45,7 +77,7 @@ class TestRegularSeasonOnly:
     def test_tie_below_first_place_does_not_trigger_playoff(self):
         # 乙丙丁戊己全部 0 胜场并列，但第一名唯一，不触发加赛，并列保持
         players = make_players({1: "甲", 2: "甲", 3: "甲", 4: "甲", 5: "甲"})
-        result = run_tournament(players)
+        result = run_tournament(players, TEST_GAME)
 
         assert result.playoff_count == 0
         for name in ["乙", "丙", "丁", "戊", "己"]:
@@ -59,7 +91,7 @@ class TestSalarySustainsBalances:
         # 甲每天出 2（唯一最高）获胜付 2，其余人每天出 1 撞车各付 1；
         # 工资 +3 覆盖双方支出：6 天全程无人余额耗尽、无人非法出价
         players = [ScriptedPlayer(n, (lambda b: lambda obs: b)(2 if n == "甲" else 1)) for n in NAMES]
-        result = run_tournament(players)
+        result = run_tournament(players, TEST_GAME)
 
         first_log = result.match_logs[0]
         assert len(first_log.days) == 6
@@ -77,7 +109,7 @@ class TestSalarySustainsBalances:
 class TestPlayoff:
     def test_first_place_tie_triggers_playoff_until_unique(self):
         players = make_players({1: "甲", 2: "甲", 3: "乙", 4: "乙", 5: "丙", 6: "甲"})
-        result = run_tournament(players)
+        result = run_tournament(players, TEST_GAME)
 
         assert result.playoff_count == 1
         assert len(result.match_logs) == 6
@@ -91,7 +123,7 @@ class TestPlayoff:
         # 正赛后甲乙并列 12 胜；第 6 局丙包揽后甲乙丙三人并列（并列者变化），
         # 第 7 局甲包揽后第一名唯一，加赛结束
         players = make_players({1: "甲", 2: "甲", 3: "乙", 4: "乙", 5: "丙", 6: "丙", 7: "甲"})
-        result = run_tournament(players)
+        result = run_tournament(players, TEST_GAME)
 
         assert result.playoff_count == 2
         assert len(result.match_logs) == 7
@@ -100,11 +132,11 @@ class TestPlayoff:
         assert ranks(result)["甲"] == 1
         assert ranks(result)["乙"] == 2 and ranks(result)["丙"] == 2  # 第二名并列保持
 
-    def test_playoff_cap_marks_abnormal_end(self, monkeypatch):
-        # 安全上限为 0 时，第一名并列直接触发封顶异常，不再加赛
-        monkeypatch.setattr(tournament, "MAX_PLAYOFFS", 0)
+    def test_zero_playoff_cap_preserves_tied_champions(self):
+        # 上限为 0 时，第一名并列直接封顶，不再加赛
+        game = replace(TEST_GAME, max_playoffs=0)
         players = make_players({1: "甲", 2: "甲", 3: "乙", 4: "乙", 5: "丙"})
-        result = run_tournament(players)
+        result = run_tournament(players, game)
 
         assert result.playoff_cap_hit
         assert result.playoff_count == 0
@@ -131,7 +163,7 @@ class TestDirectorWillContinue:
     def test_will_continue_false_on_last_match_when_decided(self):
         director = self.FakeDirector()
         players = make_players({i: "甲" for i in range(1, 6)})
-        result = run_tournament(players, director=director)
+        result = run_tournament(players, TEST_GAME, director=director)
 
         # 前 4 局仍有下一局，触发局末发言；第 5 局（最后一局）跳过局末发言
         assert [call[1] for call in director.match_end_calls] == [True, True, True, True]
@@ -142,12 +174,12 @@ class TestDirectorWillContinue:
         assert final_log.match_index == 5
         assert final_log is result.match_logs[-1]
 
-    def test_will_continue_respects_playoff_cap(self, monkeypatch):
+    def test_will_continue_respects_playoff_cap(self):
         # 上限缩到 2：全员每天出 0 撞车永远流局、人人 0 胜永远并列，直到封顶
-        monkeypatch.setattr(tournament, "MAX_PLAYOFFS", 2)
+        game = replace(TEST_GAME, max_playoffs=2)
         director = self.FakeDirector()
         players = make_players({})  # 无人被指定为赢家，全员每天出 0 撞车流局
-        result = run_tournament(players, director=director)
+        result = run_tournament(players, game, director=director)
 
         assert result.playoff_cap_hit
         assert result.playoff_count == 2
@@ -166,7 +198,7 @@ class TestPublicationOnMatchEnd:
     def test_callback_receives_match_log_and_standings_after_each_match(self):
         publications = []
         players = make_players({1: "甲", 2: "乙", 3: "丙", 4: "丁", 5: "戊", 6: "甲"})
-        run_tournament(players, on_match_end=lambda log, standings: publications.append((log, standings)))
+        run_tournament(players, TEST_GAME, on_match_end=lambda log, standings: publications.append((log, standings)))
 
         # 正赛后甲乙丙丁戊五人 6 胜并列第一，触发加赛；第 6 局甲包揽后唯一
         assert len(publications) == 6
@@ -192,7 +224,7 @@ class TestPublicationOnMatchEnd:
 
         match_winners = {i: "甲" for i in range(1, 8)}
         players = [ScriptedPlayer(name, make_strategy(name)) for name in NAMES]
-        run_tournament(players)
+        run_tournament(players, TEST_GAME)
 
         assert len(seen) == 6
         obs = seen[0]

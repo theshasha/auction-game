@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import prompts
-from models import INITIAL_COINS, MAX_BID, SUPER_COST, Observation
+from game_rules import GameSettings, validate_submission
+from models import Observation
 from players import Player
 
 JSON_BLOCK_PATTERN = re.compile(r"```json\s*(.*?)```", re.DOTALL)
@@ -62,13 +63,16 @@ class AIPlayer(Player):
         all_names: list[str],
         chat_fn: Callable[[list[dict]], str],
         log_path: Optional[Path] = None,
+        *,
+        game: GameSettings,
     ):
         super().__init__(name)
+        self.game = game
         self.messages: list[dict] = [
             {
                 "role": "system",
                 "content": prompts.build_system_prompt(
-                    name, persona_title, persona_text, predictions, all_names
+                    name, persona_title, persona_text, predictions, all_names, game
                 ),
             }
         ]
@@ -232,33 +236,16 @@ class AIPlayer(Player):
         return PARSE_FAILED
 
     @staticmethod
-    def validate_submission(bid: object, super_bid: object, coins: int) -> Optional[str]:
+    def validate_submission(
+        bid: object, super_bid: object, coins: int, game: GameSettings
+    ) -> Optional[str]:
         """校验一次出价提交（正常出价 + 可选超级出价），返回违规原因（None = 合法）。
 
         校验条件与引擎 validate_submission 一致（v6 整单口径：任一非法则整单
         作废为正常出价 0）；在 AIPlayer 内拦截是为了能给模型一次带原因的
         提醒重试，而不是静默记 0。
         """
-        if type(bid) is not int:  # bool 是 int 子类，同样视为非法
-            return f"bid 不是整数（{bid!r}）"
-        if bid < 0 or bid > MAX_BID:
-            return f"出价 {bid} 超出 0~{MAX_BID} 的范围"
-        if bid > coins:
-            return f"出价 {bid} 超过当前余额 {coins}"
-        if super_bid is None:
-            return None
-        if type(super_bid) is not int:
-            return f"super_bid 不是整数（{super_bid!r}）"
-        if super_bid < 0 or super_bid > MAX_BID:
-            return f"超级出价 {super_bid} 超出 0~{MAX_BID} 的范围"
-        if super_bid == bid:
-            return f"超级出价 {super_bid} 不能等于你的正常出价（同值属非法提交）"
-        if bid + SUPER_COST > coins:
-            return (
-                f"正常出价 {bid} 加超级出价成本 {SUPER_COST} 金币，"
-                f"合计超过当前余额 {coins}"
-            )
-        return None
+        return validate_submission(bid, super_bid, coins, game)
 
     def _interpret_bid_response(
         self, content: str, coins: int
@@ -272,7 +259,7 @@ class AIPlayer(Player):
         if data is PARSE_FAILED:
             return None, "parse"
         super_bid = data.get("super_bid")
-        reason = self.validate_submission(data["bid"], super_bid, coins)
+        reason = self.validate_submission(data["bid"], super_bid, coins, self.game)
         if reason is not None:
             return None, reason
         return (data["bid"], super_bid), None
@@ -294,9 +281,9 @@ class AIPlayer(Player):
         submission, failure = self._interpret_bid_response(content, coins)
         if failure is not None:
             retry_text = (
-                prompts.retry_bid_request()
+                prompts.retry_bid_request(self.game)
                 if failure == "parse"
-                else prompts.invalid_bid_retry_request(failure)
+                else prompts.invalid_bid_retry_request(failure, self.game)
             )
             retry_content = self._guarded_call(retry_text, f"{phase}_retry", context)
             submission, failure = self._interpret_bid_response(retry_content, coins)
@@ -383,11 +370,11 @@ class AIPlayer(Player):
         （decide_bid 第 1 天直接消费，缓存只保留到被消费，开局重新规划时
         先清后写，避免暂停重跑残留旧值）；解析失败与数值非法同出价规则：
         提醒重试 1 次，仍失败抛 ParseFailedError / InvalidBidError 升级轮级失败。
-        第 1 天余额恒为 INITIAL_COINS，校验用常量。
+        第 1 天余额使用本场 game.initial_coins。
         """
         self._pending_day1_bid = None
         submission, content = self._request_valid_bid(
-            user_text, phase, context, INITIAL_COINS
+            user_text, phase, context, self.game.initial_coins
         )
         self._pending_day1_bid = submission
         return content

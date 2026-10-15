@@ -4,7 +4,9 @@
 规则文本与局末重申见 test_prompts_rules.py；共享工厂见 conftest.py。"""
 
 import prompts
-from conftest import NAMES, make_log, make_standings
+from dataclasses import replace
+from conftest import NAMES, TEST_GAME, make_log, make_standings
+from rules import render_rules
 
 
 class TestSystemPrompt:
@@ -12,7 +14,7 @@ class TestSystemPrompt:
 
     def test_includes_persona_and_scope(self):
         system = prompts.build_system_prompt(
-            "甲", "傲娇大小姐", "自称本小姐。", [(name, 10) for name in NAMES], NAMES
+            "甲", "傲娇大小姐", "自称本小姐。", [(name, 10) for name in NAMES], NAMES, TEST_GAME
         )
         assert "你叫 甲" in system
         assert "傲娇大小姐：自称本小姐。" in system
@@ -22,9 +24,9 @@ class TestSystemPrompt:
     def test_predictions_public_to_everyone(self):
         predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
         for name in NAMES:
-            system = prompts.build_system_prompt(name, "人设", "正文", predictions, NAMES)
+            system = prompts.build_system_prompt(name, "人设", "正文", predictions, NAMES, TEST_GAME)
             assert "甲 50%" in system and "己 0%" in system  # 全员可见，含他人与自己的
-        system = prompts.build_system_prompt("甲", "人设", "正文", predictions, NAMES)
+        system = prompts.build_system_prompt("甲", "人设", "正文", predictions, NAMES, TEST_GAME)
         assert "乙、丙、丁、戊、己" in system  # 其他五位玩家名单
 
 
@@ -44,8 +46,8 @@ class TestSpeechWordLimits:
         assert "字" not in prompts.final_summary_request({"乙": "感言"})
 
     def test_rules_text_has_no_word_limit(self):
-        assert "500 字" not in prompts.RULES_TEXT
-        assert "300 字" not in prompts.RULES_TEXT
+        assert "500 字" not in render_rules(TEST_GAME, NAMES)
+        assert "300 字" not in render_rules(TEST_GAME, NAMES)
 
 
 class TestSpeechBlockFormat:
@@ -112,16 +114,23 @@ class TestPlayoffNotice:
         )
         assert "第一名出现并列" in text
 
+    def test_notice_uses_configured_regular_match_count(self):
+        log = make_log(match_index=2)
+        log.game = replace(TEST_GAME, regular_matches=2)
+        standings = make_standings({n: [0, 0] for n in NAMES})
+        assert "第一名出现并列" in prompts.match_end_speech_request(log, standings, True)
+        assert "第一名出现并列" not in prompts.match_end_speech_request(log, standings, False)
+
 
 class TestSpeechJoinBlankLines:
     """他人发言拼接：两人之间空一行。"""
 
     def test_opening_plan_separates_speeches_with_blank_line(self):
-        text = prompts.opening_plan_request({"甲": "发言A", "乙": "发言B"})
+        text = prompts.opening_plan_request({"甲": "发言A", "乙": "发言B"}, TEST_GAME)
         assert "【甲】发言A\n\n【乙】发言B" in text
 
     def test_next_match_plan_separates_speeches_with_blank_line(self):
-        text = prompts.next_match_plan_request({"甲": "发言A", "乙": "发言B"})
+        text = prompts.next_match_plan_request({"甲": "发言A", "乙": "发言B"}, TEST_GAME)
         assert "【甲】发言A\n\n【乙】发言B" in text
 
     def test_final_summary_separates_speeches_with_blank_line(self):
@@ -133,21 +142,21 @@ class TestPlanBidMerge:
     """规划请求与下一局第 1 天出价合并：附恒定首日状态与 JSON 出价格式（含超级出价）。"""
 
     def test_opening_plan_asks_for_day1_bid(self):
-        text = prompts.opening_plan_request({"乙": "发言"})
+        text = prompts.opening_plan_request({"乙": "发言"}, TEST_GAME)
         assert "第 1 局第 1 天的出价" in text
         assert "你的金币 7，本局已获胜场 0，今日奖池 1 个胜场，出价上限 7" in text
         assert '{"bid":' in text
         assert "```json" not in text  # 示例无围栏，避免模型误以为必须包代码块
 
     def test_next_match_plan_asks_for_day1_bid(self):
-        text = prompts.next_match_plan_request({"乙": "发言"})
+        text = prompts.next_match_plan_request({"乙": "发言"}, TEST_GAME)
         assert "下一局第 1 天的出价" in text
         assert "你的金币 7，本局已获胜场 0，今日奖池 1 个胜场，出价上限 7" in text
         assert '{"bid":' in text
         assert "```json" not in text
 
     def test_bid_format_hint_covers_super_bid(self):
-        text = prompts.bid_format_hint()
+        text = prompts.bid_format_hint(TEST_GAME)
         assert '"super_bid"' in text
         # 提交合法性约束（同值、合计余额——v6 违反即整单作废）放模板防无谓非法提交；
         # 策略规则细节（命中判定、悬赏、不能获胜等）不在每日消息复述，
@@ -157,12 +166,19 @@ class TestPlanBidMerge:
         assert "不使用超级出价就不要包含 super_bid 字段" in text
         assert "```json" not in text
 
+    def test_both_plans_use_custom_first_day_values(self):
+        game = replace(TEST_GAME, initial_coins=11, daily_pool=(2, 1, 3), max_bid=9, super_cost=3)
+        for build in (prompts.opening_plan_request, prompts.next_match_plan_request):
+            text = build({"乙": "发言"}, game)
+            assert "你的金币 11，本局已获胜场 0，今日奖池 2 个胜场，出价上限 9" in text
+            assert "0到9的整数" in text and "加 3 金币成本" in text
+
 
 class TestInvalidBidRetry:
     """数值非法（解析成功但违反出价规则）的提醒重试：写清具体违规原因。"""
 
     def test_includes_reason_and_format_hint(self):
-        text = prompts.invalid_bid_retry_request("你的出价 6 超过当前余额 4")
+        text = prompts.invalid_bid_retry_request("你的出价 6 超过当前余额 4", TEST_GAME)
         assert "你的出价 6 超过当前余额 4" in text
         assert "请重新出价" in text
         assert '{"bid":' in text  # 附出价格式提示

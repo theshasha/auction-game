@@ -5,23 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-INITIAL_COINS = 7              # 每局初始金币
-DAILY_SALARY = 3               # 第 2 天起每天开始时每人发放的工资
-MAX_DAYS = 6                   # 每局固定天数（流局不顺延天数，只把奖池并入次日）
-MAX_BID = 7                    # 出价上限（正常出价与超级出价共用）
-SUPER_COST = 2                 # 超级出价每次提交的固定消耗（无论是否命中都扣，v6 起）
-SUPER_BOUNTY = 3               # 超级出价命中（数值上 ≥1 笔正常出价）的悬赏金币（系统印发）
-RULES_VERSION = "v7"           # 当前规则版本，写入局日志供 analyze.py 按版本分发统计口径
-DAILY_POOL = (1, 1, 1, 1, 1, 1)  # 每天奖池的胜场数（固定 1，流局并入次日）
-WINS_PER_MATCH = sum(DAILY_POOL)  # 每局拍卖的胜场总数（6）
+from game_rules import GameSettings
 
 
 @dataclass
 class BidRecord:
     """一笔出价记录（次日即公开，局末再随完整日志公开）。一名玩家一天最多产生两笔：
     正常出价 + 超级出价（is_super=True，狙击工具：不能获胜、不参与撞车笔数，
-    每次提交固定消耗 SUPER_COST 金币，命中——其数值上 ≥1 笔正常出价——使该数值
-    全部正常出价按撞车处理，并获得 SUPER_BOUNTY 悬赏）。"""
+    每次提交消耗本场配置的固定成本，命中——其数值上 ≥1 笔正常出价——使该数值
+    全部正常出价按撞车处理，并获得本场配置的悬赏）。"""
 
     player: str
     raw_bid: Any          # 玩家提交的原始值，用于审计非法出价
@@ -41,15 +33,15 @@ class DayResult:
     winning_bid: Optional[int]
     wins_taken: int              # 获胜者实际获得的胜场数（恒等于 pool；流局为 0）
     # 当天超级出价使用情况；每条 {"player": str, "value": int, "hit": bool}，
-    # 命中即 +SUPER_BOUNTY（v6：出价明细次日公开，命中与否亦可由明细推出）
+    # 命中即获得本场配置的悬赏；出价明细次日公开，命中与否亦可由明细推出
     super_uses: list[dict] = field(default_factory=list)
     # 当天撞车价位的具体数值（升序；只含正常出价被扣款的价位：
     # 正常出价互撞 ≥2 笔 + 被超级出价命中（≥1 笔正常出价）的数值）
     collision_values: list[int] = field(default_factory=list)
-    is_void: bool = False            # 是否流局（奖池并入次日；第 6 天流局则作废）
+    is_void: bool = False            # 是否流局（奖池并入次日；末日流局则作废）
 
     def public_view(self) -> dict:
-        """规则四.1（v6）：第 2 天起每天开始时公布昨日完整出价明细（全场 6 人的
+        """规则四.1：第 2 天起每天开始时公布昨日完整出价明细（全场玩家的
         正常出价数值 + 是否使用超级出价及狙击数值）与昨日获胜者/流局情况。
         super_uses 与 collision_values 可由明细推出，保留是为呈现层免推导。"""
         bids_detail = []
@@ -83,17 +75,15 @@ class DayResult:
 class MatchLog:
     """一局的完整日志，局末向全体参赛者公开。"""
 
-    match_index: int             # 第几局（1 起；正赛 1-5，加赛 6 起）
+    match_index: int             # 第几局（1 起；正赛结束后继续编号加赛）
     is_playoff: bool
+    game: GameSettings
     days: list[DayResult] = field(default_factory=list)
     wins: dict[str, int] = field(default_factory=dict)   # 本局各人获得的胜场
 
     def to_dict(self) -> dict:
         return {
-            "rules_version": RULES_VERSION,  # v6 起写入；旧日志无此字段，analyze.py 按 v5 口径处理
-            # v7 起写入：金币重放与极点统计直接从日志取值，analyze.py 无需按版本硬编码
-            "initial_coins": INITIAL_COINS,
-            "max_bid": MAX_BID,
+            "game": self.game.to_dict(),
             "match_index": self.match_index,
             "is_playoff": self.is_playoff,
             "wins": dict(self.wins),
@@ -146,6 +136,7 @@ class Observation:
     today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）
     standings: list[StandingsEntry]   # 截至当前的累计排名（含本局已决出的胜场）
     past_match_logs: list[dict]  # 已结束各局的完整公开日志
+    game: GameSettings          # 本场不可变规则参数，与裁判和日志共用
     # 昨日自己的结算结果（第 1 天为 None/默认值）。自己的出价与余额变化本来就可
     # 从对话历史推出，直接给结论不泄露任何信息——实证模型复盘自己的结局时经常
     # 推错且不与状态行余额核对，错误随后级联到全场资金推断。
@@ -155,7 +146,7 @@ class Observation:
     my_last_sniped: bool = False           # 昨日自己的正常出价是否被超级出价狙中
     my_last_bid_illegal: bool = False      # 昨日提交是否非法（整单强制为正常出价 0）
     my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
-    my_last_super_hit: bool = False        # 昨日自己的超级出价是否命中（命中 +3 悬赏）
-    # 全场每人金币余额（含自己，含当日工资）：规则四.1（v6）规定第 2 天起每天
-    # 开始时公布；第 1 天为 None（恒定每人 INITIAL_COINS，无信息量，不渲染）。
+    my_last_super_hit: bool = False        # 昨日自己的超级出价是否命中（命中获得悬赏）
+    # 全场每人金币余额（含自己，含当日工资）：规则四.1 规定第 2 天起每天
+    # 开始时公布；第 1 天为 None（均为本场初始金币，无信息量，不渲染）。
     all_coins: Optional[dict[str, int]] = None

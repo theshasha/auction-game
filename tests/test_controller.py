@@ -7,6 +7,7 @@ import pytest
 from ai_player import AIPlayer
 from conftest import (
     ALL_NAMES,
+    TEST_GAME,
     TEST_PREDICTIONS,
     bid_reply,
     fake_chat_fn,
@@ -16,7 +17,7 @@ from controller import Controller, RoundTask, TournamentAborted, run_parallel_ro
 
 
 def make_named_player(name, chat_fn):
-    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, chat_fn)
+    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, chat_fn, game=TEST_GAME)
 
 
 class TestController:

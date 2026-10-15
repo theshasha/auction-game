@@ -5,14 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Optional
 
+from game_rules import GameSettings, validate_submission as submission_error
 from models import (
-    DAILY_POOL,
-    DAILY_SALARY,
-    INITIAL_COINS,
-    MAX_BID,
-    MAX_DAYS,
-    SUPER_BOUNTY,
-    SUPER_COST,
     BidRecord,
     DayResult,
     MatchLog,
@@ -23,30 +17,18 @@ from players import Player
 
 
 def validate_submission(
-    raw_bid: object, raw_super_bid: object, coins: int
+    raw_bid: object, raw_super_bid: object, coins: int, game: GameSettings
 ) -> tuple[int, str, Optional[int]]:
     """v6 整单校验：任何非法提交一律强制为（正常出价 0, 无超级出价），
     返回 (有效正常出价, 状态, 有效超级出价或 None)。
 
     非法情形：正常出价非整数/超 0~上限/超余额/未提交；超级出价非整数/
-    超 0~上限/与当天正常出价同值；正常出价 + SUPER_COST 总耗资超余额。
+    超 0~上限/与当天正常出价同值；正常出价 + 固定超级成本总耗资超余额。
 
     AI 模式下非法提交在收集层已被拦截重试（InvalidBidError），这里是
     Bot 模式与防御性兜底。
     """
-    if type(raw_bid) is not int:  # bool 是 int 子类，同样视为非法
-        return 0, "illegal", None
-    if raw_bid < 0 or raw_bid > MAX_BID or raw_bid > coins:
-        return 0, "illegal", None
-    if raw_super_bid is None:
-        return raw_bid, "ok", None
-    if (
-        type(raw_super_bid) is not int
-        or raw_super_bid < 0
-        or raw_super_bid > MAX_BID
-        or raw_super_bid == raw_bid
-        or raw_bid + SUPER_COST > coins
-    ):
+    if submission_error(raw_bid, raw_super_bid, coins, game) is not None:
         return 0, "illegal", None
     return raw_bid, "ok", raw_super_bid
 
@@ -94,9 +76,10 @@ def run_match(
     is_playoff: bool,
     wins_history: dict[str, list[int]],
     past_logs: list[MatchLog],
+    game: GameSettings,
     bid_collector=None,
 ) -> MatchLog:
-    """运行一局（正赛局或加赛局规则相同），固定 6 天，返回完整局日志。
+    """按本场参数运行一局（正赛局或加赛局规则相同），返回完整局日志。
 
     wins_history: 每名玩家在已结束各局的胜场分布，用于构造 Observation 中的排名。
     past_logs: 已结束各局的完整日志，局末公开后玩家可见。
@@ -105,21 +88,21 @@ def run_match(
     默认逐个顺序调用 decide_bid。暂停/失败的重跑由 run_parallel_round
     内部处理，对本函数透明。
     """
-    coins = {player.name: INITIAL_COINS for player in players}
+    coins = {player.name: game.initial_coins for player in players}
     match_wins = {player.name: 0 for player in players}
     rollover = 0  # 流局并入次日奖池的胜场数
-    log = MatchLog(match_index=match_index, is_playoff=is_playoff)
+    log = MatchLog(match_index=match_index, is_playoff=is_playoff, game=game)
     past_log_dicts = [past_log.to_dict() for past_log in past_logs]
 
-    for day in range(1, MAX_DAYS + 1):
+    for day in range(1, game.max_days + 1):
         if day >= 2:
             for name in coins:
-                coins[name] += DAILY_SALARY
-        pool = DAILY_POOL[day - 1] + rollover
+                coins[name] += game.daily_salary
+        pool = game.daily_pool[day - 1] + rollover
 
         # 昨日各玩家的自我结算结果（正常出价/扣款/撞车/被狙/非法/超级出价命中），
         # 从昨日 DayResult 复算。my_last_deduction 只含正常出价的扣款（获胜或撞车）；
-        # 超级出价的 SUPER_COST 消耗与 SUPER_BOUNTY 悬赏在「昨日你的结果」行单独表述。
+        # 超级出价的成本与悬赏在「昨日你的结果」行单独表述。
         my_last_by_player: dict[str, tuple[int, int, bool, bool, bool, Optional[int], bool]] = {}
         if log.days:
             yesterday_result = log.days[-1]
@@ -153,7 +136,7 @@ def run_match(
                     bool(my_super_use and my_super_use["hit"]),
                 )
 
-        # 同一天内 6 人的排名快照完全相同，循环外算一次；全场每人余额
+        # 同一天内全场玩家的排名快照完全相同，循环外算一次；全场每人余额
         # （规则四.1，第 2 天起公布）同理，取工资发放后的值，快照防当日结算后漂移
         all_coins_snapshot = dict(coins) if day >= 2 else None
         standings_snapshot = compute_standings(wins_history, match_wins)
@@ -181,6 +164,7 @@ def run_match(
                         today_history=[day_result.public_view() for day_result in log.days],
                         standings=standings_snapshot,
                         past_match_logs=past_log_dicts,
+                        game=game,
                         my_last_bid=last_bid,
                         my_last_deduction=last_deduction,
                         my_last_collided=last_collided,
@@ -204,7 +188,7 @@ def run_match(
             raw_bid, raw_super_bid = normalize_bid_submission(submission)
             # v6 整单校验：任何非法（含同值、总耗资超余额）整单强制为正常出价 0
             bid, status, super_value = validate_submission(
-                raw_bid, raw_super_bid, coins[player.name]
+                raw_bid, raw_super_bid, coins[player.name], game
             )
             bids.append(
                 BidRecord(player=player.name, raw_bid=raw_bid, bid=bid, status=status)
@@ -259,22 +243,22 @@ def run_match(
             winner = None
             winning_bid = None
             wins_taken = 0
-            rollover = pool  # 流局：奖池整体并入次日（第 6 天流局则随循环结束作废）
+            rollover = pool  # 流局：奖池整体并入次日（末日流局则随循环结束作废）
             is_void = True
 
         # 金币结算：获胜与撞车的正常出价全额扣除（流局日必然全员撞车，
         # 即全员扣除），其余正常出价全额退还，扣除部分系统没收；
-        # 超级出价每次提交固定扣 SUPER_COST（无论是否命中），
-        # 命中悬赏 +SUPER_BOUNTY 由系统印发（多人命中同一数值各得一份）。
+        # 超级出价每次提交扣本场固定成本（无论是否命中），
+        # 命中悬赏由系统印发（多人命中同一数值各得一份）。
         for record in bids:
             if record.is_super:
                 continue
             if record is winning_record or record.bid in burned_normal_values:
                 coins[record.player] -= record.bid
         for use in super_uses:
-            coins[use["player"]] -= SUPER_COST
+            coins[use["player"]] -= game.super_cost
             if use["hit"]:
-                coins[use["player"]] += SUPER_BOUNTY
+                coins[use["player"]] += game.super_bounty
 
         log.days.append(
             DayResult(

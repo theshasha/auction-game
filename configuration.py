@@ -1,4 +1,4 @@
-"""读取运行设置与玩家清单；默认路径固定在项目根目录，不依赖工作目录。"""
+"""读取运行设置、比赛参数与玩家清单；默认路径固定在项目根目录。"""
 
 from __future__ import annotations
 
@@ -7,9 +7,12 @@ from pathlib import Path
 
 import yaml
 
+from game_rules import GameSettings
+
 ROOT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT_DIR / "config.yaml"
 PLAYERS_PATH = ROOT_DIR / "players.yaml"
+GAME_PATH = ROOT_DIR / "game.yaml"
 
 
 class ConfigurationError(ValueError):
@@ -52,6 +55,22 @@ def load_configuration(
     ):
         raise ConfigurationError(f"{config_path}：llm.timeout_seconds 必须是正有限数字")
 
+    return config, load_players(players_path)
+
+
+def load_game_settings(path: str | Path = GAME_PATH) -> GameSettings:
+    """读取完整比赛参数；相对路径以项目根目录为基准，错误包含文件及字段。"""
+    path = ROOT_DIR / path
+    data = _read_mapping(path)
+    try:
+        return GameSettings.from_dict(data)
+    except ValueError as exc:
+        raise ConfigurationError(f"{path}：{exc}") from exc
+
+
+def load_players(path: str | Path = PLAYERS_PATH) -> list[dict]:
+    """读取并校验玩家清单，补入预测夺冠率=0；不依赖运行或比赛配置。"""
+    players_path = ROOT_DIR / path
     players = _read_mapping(players_path).get("players")
     if not isinstance(players, list) or not players:
         raise ConfigurationError(f"{players_path}：players 必须是非空列表")
@@ -72,4 +91,4 @@ def load_configuration(
         if protocol is not None and (not isinstance(protocol, str) or not protocol.strip()):
             raise ConfigurationError(f"{players_path}：{field}.protocol 必须是非空字符串或 null")
         player.setdefault("predicted_win_rate", 0)
-    return config, players
+    return players

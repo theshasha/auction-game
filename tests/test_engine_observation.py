@@ -1,6 +1,9 @@
 """Observation 字段、每日信息公布与局末日志/排名的引擎测试。场景构造器见 conftest.py。"""
 
+from dataclasses import replace
+
 from conftest import (
+    TEST_GAME,
     constant_strategies,
     run_one_match,
     run_scenario,
@@ -53,7 +56,7 @@ class TestMyLastDayObservation:
 
 class TestAllCoinsPublication:
     """全场每人金币余额：第 2 天起每天开始时公布（含当日工资，含自己），
-    第 1 天不公布（恒定每人 6 无信息量）。同一天内全场看到的快照完全相同。"""
+    第 1 天不公布（本组参数恒定每人 7 无信息量）。同一天内全场看到的快照完全相同。"""
 
     def test_day1_not_published(self):
         captured = {}
@@ -71,13 +74,34 @@ class TestAllCoinsPublication:
 
 
 class TestMatchLogPublication:
+    def test_game_snapshot_stays_bound_to_match_and_is_independently_serialized(self):
+        game = replace(TEST_GAME, initial_coins=11, daily_pool=(2, 3, 4), max_bid=9)
+        log = run_one_match(constant_strategies([0] * 6), game=game)
+        snapshot = log.to_dict()
+        changed_game = replace(game, initial_coins=100, max_bid=20)
+        snapshot["game"]["initial_coins"] = 0
+        snapshot["game"]["daily_pool"][0] = 99
+
+        assert changed_game.initial_coins == 100
+        assert log.to_dict()["game"] == {
+            "initial_coins": 11,
+            "daily_salary": 3,
+            "daily_pool": [2, 3, 4],
+            "max_bid": 9,
+            "super_cost": 2,
+            "super_bounty": 3,
+            "regular_matches": 5,
+            "max_playoffs": 20,
+        }
+
     def test_match_log_to_dict_contains_full_bid_history(self):
         log = run_one_match(constant_strategies([5, 4, 3, 2, 1, 0]))
         data = log.to_dict()
 
-        assert data["rules_version"] == "v7"  # 版本标记：analyze.py 按它分发统计口径
-        assert data["initial_coins"] == 7  # v7 起写入：金币重放与极点统计自描述
-        assert data["max_bid"] == 7
+        assert data["game"] == TEST_GAME.to_dict()
+        assert "rules_version" not in data
+        assert "initial_coins" not in data
+        assert "max_bid" not in data
         assert data["match_index"] == 1
         assert data["is_playoff"] is False
         assert len(data["days"]) == 6  # 固定 6 天
