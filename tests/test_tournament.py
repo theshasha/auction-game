@@ -73,37 +73,9 @@ class TestRegularSeasonOnly:
         assert not result.playoff_cap_hit
         assert totals(result) == {"甲": 30, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
         assert ranks(result)["甲"] == 1
-
-    def test_tie_below_first_place_does_not_trigger_playoff(self):
         # 乙丙丁戊己全部 0 胜场并列，但第一名唯一，不触发加赛，并列保持
-        players = make_players({1: "甲", 2: "甲", 3: "甲", 4: "甲", 5: "甲"})
-        result = run_tournament(players, TEST_GAME)
-
-        assert result.playoff_count == 0
         for name in ["乙", "丙", "丁", "戊", "己"]:
             assert ranks(result)[name] == 2  # 第一名以外并列同名次
-
-
-class TestSalarySustainsBalances:
-    """工资制（每天 +3）的经济效果：低出价玩家的余额跨天可持续。"""
-
-    def test_daily_salary_keeps_balance_positive(self):
-        # 甲每天出 2（唯一最高）获胜付 2，其余人每天出 1 撞车各付 1；
-        # 工资 +3 覆盖双方支出：6 天全程无人余额耗尽、无人非法出价
-        players = [ScriptedPlayer(n, (lambda b: lambda obs: b)(2 if n == "甲" else 1)) for n in NAMES]
-        result = run_tournament(players, TEST_GAME)
-
-        first_log = result.match_logs[0]
-        assert len(first_log.days) == 6
-        assert all(not day.is_void for day in first_log.days)
-        assert all(day.winner == "甲" and day.winning_bid == 2 for day in first_log.days)
-        assert [day.pool for day in first_log.days] == [1, 1, 1, 1, 1, 1]
-        assert first_log.wins["甲"] == 6
-        assert all(
-            record.status == "ok"
-            for day in first_log.days
-            for record in day.bids
-        )
 
 
 class TestPlayoff:

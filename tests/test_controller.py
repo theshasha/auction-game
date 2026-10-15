@@ -1,6 +1,8 @@
 """控制器与轮级并发执行器的测试：直接发命令，零网络。共享夹具见 conftest.py。"""
 
 import threading
+from contextlib import contextmanager
+from copy import deepcopy
 
 import pytest
 
@@ -14,6 +16,33 @@ from conftest import (
     make_ai_obs,
 )
 from controller import Controller, RoundTask, TournamentAborted, run_parallel_round
+import controller as controller_module
+
+
+@contextmanager
+def running(controller, fn, *release_events):
+    """把线程异常送回主测试，失败时也释放任务和闸门并回收线程。"""
+    outcome = {}
+
+    def run():
+        try:
+            outcome["result"] = fn()
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        yield thread, outcome
+    finally:
+        for event in release_events:
+            event.set()
+        controller.offer_command("q")
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "控制器线程未退出"
+        error = outcome.get("error")
+        if error is not None and not isinstance(error, TournamentAborted):
+            raise error
 
 
 def make_named_player(name, chat_fn):
@@ -22,20 +51,14 @@ def make_named_player(name, chat_fn):
 
 class TestController:
     def test_step_mode_gates_each_call(self):
-        controller = Controller(mode="step", announce=lambda msg: None)
-        done = []
-
-        def call_once():
-            controller.wait_for_turn("测试调用")
-            done.append(1)
-
-        thread = threading.Thread(target=call_once)
-        thread.start()
-        thread.join(timeout=0.2)
-        assert not done  # 未确认前阻塞
-        controller.offer_command("")  # 回车放行
-        thread.join(timeout=1)
-        assert done == [1]
+        gate = threading.Event()
+        controller = Controller(mode="step", announce=lambda msg: gate.set())
+        with running(controller, lambda: controller.wait_for_turn("测试调用")) as (thread, outcome):
+            assert gate.wait(timeout=5)
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert "result" in outcome
 
     def test_continuous_mode_passes_through(self):
         controller = Controller(mode="continuous", announce=lambda msg: None)
@@ -43,44 +66,45 @@ class TestController:
 
     def test_stale_enter_does_not_preconfirm_next_round(self):
         # 单步模式下在上一轮执行期间误按的回车不得预确认下一轮
-        controller = Controller(mode="step", announce=lambda msg: None)
-        done = []
+        first_gate = threading.Event()
+        second_gate = threading.Event()
+
+        def announce(msg):
+            if "第1轮" in msg:
+                first_gate.set()
+            elif "第2轮" in msg:
+                assert not controller._gate.is_set()  # 已确定丢弃执行期间误按的回车
+                second_gate.set()
+
+        controller = Controller(mode="step", announce=announce)
 
         def run_two_rounds():
             controller.wait_for_turn("第1轮")
             controller.offer_command("")  # 模拟执行期间误按的回车
             controller.wait_for_turn("第2轮")
-            done.append(1)
 
-        thread = threading.Thread(target=run_two_rounds)
-        thread.start()
-        thread.join(timeout=0.2)
-        assert not done
-        controller.offer_command("")  # 放行第1轮
-        thread.join(timeout=0.2)
-        assert not done  # 误按的回车已在第2轮闸门处被丢弃，仍阻塞
-        controller.offer_command("")  # 本轮提示之后的回车才算确认
-        thread.join(timeout=1)
-        assert done == [1]
+        with running(controller, run_two_rounds) as (thread, outcome):
+            assert first_gate.wait(timeout=5)
+            controller.offer_command("")
+            assert second_gate.wait(timeout=5)
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert "result" in outcome
 
     def test_pause_degenerates_to_step_gate(self):
         # 轮间按 p：不再有 RoundAborted，退化为单步闸门等回车
-        controller = Controller(mode="continuous", announce=lambda msg: None)
+        gate = threading.Event()
+        controller = Controller(
+            mode="continuous", announce=lambda msg: gate.set() if msg.startswith("[单步]") else None,
+        )
         controller.offer_command("p")
-        done = []
-
-        def call_once():
-            controller.wait_for_turn("测试轮")
-            done.append(1)
-
-        thread = threading.Thread(target=call_once)
-        thread.start()
-        thread.join(timeout=0.2)
-        assert not done  # 暂停被消费为单步闸门：未确认前阻塞
-        assert controller._mode == "step"
-        controller.offer_command("")
-        thread.join(timeout=1)
-        assert done == [1]
+        with running(controller, lambda: controller.wait_for_turn("测试轮")) as (thread, outcome):
+            assert gate.wait(timeout=5)
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert "result" in outcome
 
     def test_quit_raises_tournament_aborted(self):
         controller = Controller(mode="continuous", announce=lambda msg: None)
@@ -89,57 +113,118 @@ class TestController:
             controller.wait_for_turn("测试调用")
 
     def test_mode_switch_anytime(self):
-        controller = Controller(mode="step", announce=lambda msg: None)
-        controller.offer_command("c")
-        assert controller._mode == "continuous"
-        controller.offer_command("s")
-        assert controller._mode == "step"
+        first_gate = threading.Event()
+        second_gate = threading.Event()
+        continuous_passed = threading.Event()
+        continue_to_step = threading.Event()
+
+        def announce(msg):
+            if msg.startswith("[单步]"):
+                (second_gate if "单步轮" in msg else first_gate).set()
+
+        controller = Controller(mode="step", announce=announce)
+
+        def run_rounds():
+            controller.wait_for_turn("首轮")
+            controller.wait_for_turn("连续轮")  # c 后下一轮也直接通过
+            continuous_passed.set()
+            assert continue_to_step.wait(timeout=5)
+            controller.wait_for_turn("单步轮")
+
+        with running(controller, run_rounds, continue_to_step) as (thread, outcome):
+            assert first_gate.wait(timeout=5)
+            assert "result" not in outcome
+            controller.offer_command("c")
+            assert continuous_passed.wait(timeout=5)
+            controller.offer_command("s")
+            continue_to_step.set()
+            assert second_gate.wait(timeout=5)
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert "result" in outcome
 
 
 class TestParallelRound:
-    def test_parse_failure_escalates_to_round_rerun(self):
-        # 解析连续失败（ParseFailedError）与调用失败同路径：轮级挂起等确认，
-        # 回车仅重跑失败玩家，成功者不重跑
-        failure_announced = threading.Event()
+    def test_pause_restores_consumed_plan_before_result_collection(self, monkeypatch):
+        ready = threading.Event()
+        release_collection = threading.Event()
+        gate = threading.Event()
+        controller = Controller(
+            mode="continuous",
+            announce=lambda msg: gate.set() if msg.startswith("[单步]") else None,
+        )
+        chat_fn = fake_chat_fn(['{"bid": 2, "super_bid": 6}'])
+        player = make_named_player("Alpha", chat_fn)
+        player.plan_strategy("请规划", "opening_plan")
+        original_as_completed = controller_module.as_completed
+        first_pass = True
+
+        def hold_first_collection(futures):
+            nonlocal first_pass
+            for future in original_as_completed(futures):
+                if first_pass:
+                    first_pass = False
+                    assert future.result() == (2, 6)  # 缓存已消费，控制器尚未收集
+                    ready.set()
+                    assert release_collection.wait(timeout=5)
+                yield future
+
+        monkeypatch.setattr(controller_module, "as_completed", hold_first_collection)
+        tasks = [RoundTask("Alpha", player, lambda: player.decide_bid(make_ai_obs(day=1)))]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "首日"),
+                     release_collection) as (thread, outcome):
+            assert ready.wait(timeout=5)
+            assert player._pending_day1_bid is None
+            controller.offer_command("p")
+            release_collection.set()
+            assert gate.wait(timeout=5)
+            assert player._pending_day1_bid == (2, 6)
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"Alpha": (2, 6)}
+            assert len(chat_fn.calls) == 1
+
+    @pytest.mark.parametrize("failures, reason", [
+        ([RuntimeError("超时"), RuntimeError("余额不足")], "余额不足"),
+        (["没有块", "还是没有"], "连续两次解析失败"),
+        ([bid_reply(9), bid_reply(8)], "连续两次非法"),
+    ], ids=["call", "parse", "invalid-bid"])
+    def test_failure_reruns_only_failed_player(self, failures, reason):
+        gate = threading.Event()
         announcements = []
 
         def announce(msg):
             announcements.append(msg)
-            if msg.startswith("[失败]"):
-                failure_announced.set()
+            if msg.startswith("[单步]"):
+                gate.set()
 
         controller = Controller(mode="continuous", announce=announce)
         alpha_chat = fake_chat_fn([bid_reply(1)])
         alpha = make_named_player("Alpha", alpha_chat)
-        # Bravo 连续两次输出无 JSON 的垃圾 → ParseFailedError；重跑后正常
-        bravo_chat = fake_chat_fn(["没有块", "还是没有", bid_reply(2)])
+        bravo_chat = fake_chat_fn([*failures, bid_reply(2)])
         bravo = make_named_player("Bravo", bravo_chat)
         tasks = [
             RoundTask(key="Alpha", player=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
             RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
         ]
-        outcome = {}
+        with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮")) as (thread, outcome):
+            assert gate.wait(timeout=5)  # 等闸门提示，避免失败提示后的回车被清除
+            assert "result" not in outcome
+            assert len(alpha_chat.calls) == 1
+            assert len(bravo_chat.calls) == 2
+            assert [m["role"] for m in bravo.messages] == ["system"]
+            alpha_snapshot = deepcopy(alpha.messages)
+            assert any(msg.startswith("[失败]") and "Bravo" in msg for msg in announcements)
+            assert any(reason in msg for msg in announcements)
 
-        def run():
-            outcome["results"] = run_parallel_round(tasks, controller, label="测试轮")
-
-        thread = threading.Thread(target=run)
-        thread.start()
-        assert failure_announced.wait(timeout=5)
-        thread.join(timeout=0.3)
-        assert "results" not in outcome
-        assert len(bravo_chat.calls) == 2
-        alpha_snapshot = list(alpha.messages)
-
-        controller.offer_command("")              # 回车仅重跑解析失败的 Bravo
-        thread.join(timeout=5)
-        assert outcome["results"] == {"Alpha": (1, None), "Bravo": (2, None)}
-        assert len(bravo_chat.calls) == 3
-        assert len(alpha_chat.calls) == 1
-        assert alpha.messages == alpha_snapshot
-        # 垃圾问答对已随轮级 rollback 清除，重跑后对话线只有成功的一问一答
-        assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]
-        assert any("连续两次解析失败" in m for m in announcements)
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"Alpha": (1, None), "Bravo": (2, None)}
+            assert len(bravo_chat.calls) == 3
+            assert len(alpha_chat.calls) == 1
+            assert alpha.messages == alpha_snapshot
+            assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]
 
     def test_completed_round_returns_all_results(self):
         controller = Controller(mode="continuous", announce=lambda msg: None)
@@ -152,7 +237,14 @@ class TestParallelRound:
 
     def test_step_mode_gates_once_and_runs_concurrently(self):
         announcements = []
-        controller = Controller(mode="step", announce=announcements.append)
+        gate = threading.Event()
+
+        def announce(msg):
+            announcements.append(msg)
+            if msg.startswith("[单步]"):
+                gate.set()
+
+        controller = Controller(mode="step", announce=announce)
         barrier = threading.Barrier(6)  # 若被串行执行将超时破碎，以此证明并发
         players = [
             make_named_player(f"P{i}", fake_chat_fn([bid_reply(i)]))
@@ -166,64 +258,17 @@ class TestParallelRound:
             return fn
 
         tasks = [RoundTask(key=player.name, player=player, fn=make_fn(player)) for player in players]
-        outcome = {}
+        with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮")) as (thread, outcome):
+            assert gate.wait(timeout=5)
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert outcome.get("result") == {f"P{i}": (i, None) for i in range(6)}
+            step_gates = [msg for msg in announcements if msg.startswith("[单步]")]
+            assert len(step_gates) == 1
+            assert "测试轮" in step_gates[0]
 
-        def run():
-            outcome["results"] = run_parallel_round(tasks, controller, label="测试轮")
-
-        thread = threading.Thread(target=run)
-        thread.start()
-        thread.join(timeout=0.3)
-        assert "results" not in outcome  # 闸门未放行
-        controller.offer_command("")     # 回车一次放行整轮
-        thread.join(timeout=5)
-        assert outcome["results"] == {f"P{i}": (i, None) for i in range(6)}
-        step_gates = [m for m in announcements if m.startswith("[单步]")]
-        assert len(step_gates) == 1      # 整轮只闸门一次
-        assert "测试轮" in step_gates[0]
-
-    def test_partial_failure_retries_only_failed(self):
-        failure_announced = threading.Event()
-        announcements = []
-
-        def announce(msg):
-            announcements.append(msg)
-            if msg.startswith("[失败]"):
-                failure_announced.set()
-
-        controller = Controller(mode="continuous", announce=announce)
-        alpha_chat = fake_chat_fn([bid_reply(1)])
-        alpha = make_named_player("Alpha", alpha_chat)
-        bravo_chat = fake_chat_fn([RuntimeError("超时"), RuntimeError("余额不足"), bid_reply(2)])
-        bravo = make_named_player("Bravo", bravo_chat)
-        tasks = [
-            RoundTask(key="Alpha", player=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
-            RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
-        ]
-        outcome = {}
-
-        def run():
-            outcome["results"] = run_parallel_round(tasks, controller, label="测试轮")
-
-        thread = threading.Thread(target=run)
-        thread.start()
-        assert failure_announced.wait(timeout=5)  # 连续模式下双失败也会停下来等用户
-        thread.join(timeout=0.3)
-        assert "results" not in outcome           # 回车前不重跑
-        assert len(alpha_chat.calls) == 1
-        assert len(bravo_chat.calls) == 2         # 玩家内部已重试 1 次
-        alpha_snapshot = list(alpha.messages)
-
-        controller.offer_command("")              # 回车仅重跑失败的 Bravo
-        thread.join(timeout=5)
-        assert outcome["results"] == {"Alpha": (1, None), "Bravo": (2, None)}
-        assert len(bravo_chat.calls) == 3
-        assert len(alpha_chat.calls) == 1         # Alpha 未被重跑
-        assert alpha.messages == alpha_snapshot   # 成功者对话线原样保留
-        assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]
-        assert any("余额不足" in m for m in announcements)  # 失败原因已展示
-
-    def test_pause_keeps_completed_and_reruns_unfinished(self):
+    def test_pause_keeps_completed_and_reruns_unfinished(self, monkeypatch):
         gate_announced = threading.Event()
 
         def announce(msg):
@@ -231,48 +276,52 @@ class TestParallelRound:
                 gate_announced.set()
 
         controller = Controller(mode="continuous", announce=announce)
-        alpha_done = threading.Event()
+        alpha_collected = threading.Event()
         alpha_chat = fake_chat_fn([bid_reply(1)])
         alpha = make_named_player("Alpha", alpha_chat)
 
-        def alpha_fn():
-            result = alpha.decide_bid(make_ai_obs())
-            alpha_done.set()
-            return result
+        original_as_completed = controller_module.as_completed
+
+        def track_collection(futures):
+            for future in original_as_completed(futures):
+                yield future
+                # yield 返回时控制器已执行 collected[key] = future.result()
+                if future.result() == (1, None):
+                    alpha_collected.set()
+
+        monkeypatch.setattr(controller_module, "as_completed", track_collection)
 
         release_bravo = threading.Event()
+        bravo_started = threading.Event()
         bravo_calls = []
 
         def bravo_chat(messages):
-            bravo_calls.append(messages)
-            release_bravo.wait(timeout=5)
+            bravo_calls.append(deepcopy(messages))
+            bravo_started.set()
+            assert release_bravo.wait(timeout=5)
             return bid_reply(2)
 
         bravo = make_named_player("Bravo", bravo_chat)
         tasks = [
-            RoundTask(key="Alpha", player=alpha, fn=alpha_fn),
+            RoundTask(key="Alpha", player=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
             RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
         ]
-        outcome = {}
+        with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮"),
+                     release_bravo) as (thread, outcome):
+            assert alpha_collected.wait(timeout=5)
+            assert bravo_started.wait(timeout=5)
+            controller.offer_command("p")
+            release_bravo.set()
+            assert gate_announced.wait(timeout=5)
+            assert "result" not in outcome
+            alpha_snapshot = deepcopy(alpha.messages)
+            assert [m["role"] for m in bravo.messages] == ["system"]
 
-        def run():
-            outcome["results"] = run_parallel_round(tasks, controller, label="测试轮")
-
-        thread = threading.Thread(target=run)
-        thread.start()
-        assert alpha_done.wait(timeout=5)
-        gate_announced.wait(timeout=0.2)  # 给收集循环留出处理 Alpha 结果的时间
-        controller.offer_command("p")     # Alpha 已完成、Bravo 在途时暂停
-        release_bravo.set()
-        assert gate_announced.wait(timeout=5)  # 暂停后切单步，闸门提示补跑
-        thread.join(timeout=0.3)
-        assert "results" not in outcome
-        alpha_snapshot = list(alpha.messages)
-
-        controller.offer_command("")      # 恢复：仅补跑 Bravo
-        thread.join(timeout=5)
-        assert outcome["results"] == {"Alpha": (1, None), "Bravo": (2, None)}
-        assert len(alpha_chat.calls) == 1  # 已完成者保留，不重跑
-        assert len(bravo_calls) == 2       # 在途结果被丢弃，恢复后重跑
-        assert alpha.messages == alpha_snapshot
-        assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"Alpha": (1, None), "Bravo": (2, None)}
+            assert len(alpha_chat.calls) == 1
+            assert len(bravo_calls) == 2
+            assert bravo_calls[0] == bravo_calls[1]
+            assert alpha.messages == alpha_snapshot
+            assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]

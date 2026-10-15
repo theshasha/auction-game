@@ -15,28 +15,16 @@ from llm_client import (
 
 
 class TestStripThinkBlocks:
-    def test_no_think_block_unchanged(self):
-        text = '正常回复。\n```json\n{"bid": 42}\n```'
-        assert strip_think_blocks(text) == text
-
-    def test_leading_think_block_removed(self):
-        text = '<think>让我想想……</think>\n最终回答。'
-        assert strip_think_blocks(text) == '最终回答。'
-
-    def test_multiple_think_blocks_removed(self):
-        text = '<think>第一段</think>中间<think>第二段</think>结尾'
-        assert strip_think_blocks(text) == '中间结尾'
-
-    def test_multiline_think_block_removed(self):
-        text = '<think>\n多行\n推理\n</think>\n\n正文保留'
-        assert strip_think_blocks(text) == '正文保留'
-
-    def test_unclosed_think_block_truncated(self):
-        text = '前面内容<think>推理到一半被截断'
-        assert strip_think_blocks(text) == '前面内容'
-
-    def test_only_unclosed_think_block_becomes_empty(self):
-        assert strip_think_blocks('<think>全是推理') == ''
+    @pytest.mark.parametrize("text, expected", [
+        ('正常回复。\n```json\n{"bid": 42}\n```', '正常回复。\n```json\n{"bid": 42}\n```'),
+        ('<think>让我想想……</think>\n最终回答。', '最终回答。'),
+        ('<think>第一段</think>中间<think>第二段</think>结尾', '中间结尾'),
+        ('<think>\n多行\n推理\n</think>\n\n正文保留', '正文保留'),
+        ('前面内容<think>推理到一半被截断', '前面内容'),
+        ('<think>全是推理', ''),
+    ], ids=["plain", "leading", "multiple", "multiline", "unclosed", "only-unclosed"])
+    def test_strip_think_blocks(self, text, expected):
+        assert strip_think_blocks(text) == expected
 
 
 class TestCollectChatStream:
@@ -47,17 +35,12 @@ class TestCollectChatStream:
         delta = SimpleNamespace(content=content, reasoning_content=reasoning)
         return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
 
-    def test_accumulates_content_in_order(self):
-        chunks = [self._chunk("第一句。"), self._chunk("第二句。"), self._chunk('{"bid": 3}')]
+    def test_accumulates_only_content_in_order(self):
+        chunks = [
+            self._chunk(None, reasoning="推理ing"), self._chunk("第一句。"),
+            SimpleNamespace(choices=[]), self._chunk("第二句。"), self._chunk('{"bid": 3}'),
+        ]
         assert collect_chat_stream(chunks) == '第一句。第二句。{"bid": 3}'
-
-    def test_ignores_reasoning_content(self):
-        chunks = [self._chunk(None, reasoning="推理ing"), self._chunk("正文")]
-        assert collect_chat_stream(chunks) == "正文"
-
-    def test_skips_empty_choices_heartbeat(self):
-        chunks = [self._chunk("前"), SimpleNamespace(choices=[]), self._chunk("后")]
-        assert collect_chat_stream(chunks) == "前后"
 
     def test_empty_stream_becomes_empty_string(self):
         assert collect_chat_stream([]) == ""

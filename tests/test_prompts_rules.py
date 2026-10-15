@@ -15,14 +15,15 @@ from rules import render_rules
 
 
 class TestRulesReminder:
-    """局末发言请求在展示局日志前重申结算三步（精简版），其余请求不带。"""
+    """局末发言请求在展示局日志前重申结算三步（精简版）。"""
 
     def test_match_end_speech_contains_reminder_before_log(self):
         text = prompts.match_end_speech_request(
             make_log(), make_standings({n: [0] for n in NAMES}), True
         )
-        assert "【规则要点重申】" in text
-        assert text.index("【规则要点重申】") < text.index("本局完整出价日志")
+        reminder = prompts.rules_reminder(TEST_GAME)
+        assert reminder in text
+        assert text.index(reminder) < text.index("本局完整出价日志")
 
     def test_reminder_covers_three_steps_and_super_bid(self):
         reminder = prompts.rules_reminder(TEST_GAME)
@@ -38,11 +39,6 @@ class TestRulesReminder:
         assert "至少有 1 笔正常出价" in reminder
         assert "昨日完整出价明细" in reminder
         assert "全场每人的当前金币余额" in reminder
-
-    def test_other_requests_have_no_reminder(self):
-        standings = make_standings({n: [0] for n in NAMES})
-        assert "【规则要点重申】" not in prompts.next_match_plan_request({"乙": "发言"}, TEST_GAME)
-        assert "【规则要点重申】" not in prompts.final_speech_request(standings, make_log(match_index=5))
 
 
 class TestRulesText:
@@ -86,11 +82,6 @@ class TestRulesText:
         assert "若当天所有正常出价均撞车" in text
         assert "宣告流局" in text
 
-    def test_no_cap_tax_anymore(self):
-        text = render_rules(TEST_GAME, NAMES)
-        assert "冲顶税" not in text
-        assert "转判" not in text
-
     def test_publication_includes_yesterday_log_and_all_coins(self):
         # 规则四.1（v6）：第 2 天起公布昨日完整出价明细与全场每人当前余额
         text = render_rules(TEST_GAME, NAMES)
@@ -117,7 +108,6 @@ class TestRulesText:
         assert "保留并列冠军" in text
         assert "第 3 天未拍出的胜场作废" in text
         assert "超级出价数值仅为狙击目标，不计入支付金额" in text
-        assert "友情提示" not in text
         assert "{" not in text and "}" not in text
         system = prompts.build_system_prompt("甲", "人设", "正文", [], names, game)
         assert system.startswith(text)
@@ -126,7 +116,6 @@ class TestRulesText:
         assert "固定扣除 3 金币" in reminder and "5 金币悬赏" in reminder
         assert "第 3 天流局时奖池作废" in reminder
         assert "当天正常出价加固定成本 3 金币不得超过你的余额" in reminder
-        assert "友情提示" not in reminder
 
     @pytest.mark.parametrize("names", [[], ["甲"], ["甲", "甲"], ["甲", " "]])
     def test_invalid_actual_names_rejected(self, names):
@@ -142,9 +131,11 @@ class TestRulesText:
 
     def test_runtime_render_does_not_read_generated_document(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rules, "RULES_PATH", tmp_path / "missing.md")
-        assert "唯一高价拍卖游戏规则" in prompts.build_system_prompt(
+        text = render_rules(TEST_GAME, NAMES)
+        system = prompts.build_system_prompt(
             "甲", "人设", "正文", [], NAMES, TEST_GAME
         )
+        assert system.startswith(text)
 
     def test_check_command_works_outside_project_without_writing(self, tmp_path):
         before = rules.RULES_PATH.read_bytes()

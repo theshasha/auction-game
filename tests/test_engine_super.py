@@ -14,9 +14,11 @@ class TestSuperBid:
         # RULES.md 结算示例一（v6 口径）：甲出 6；乙正常出 4 + 超级出价 6；丙 5；
         # 丁戊 3；己 2。乙的超级 6 命中甲的唯一 6（甲按撞车扣 6），3 互撞
         # （丁戊各扣 3），丙未撞车最高 5 获胜扣 5；乙 -2 成本 +3 悬赏，正常出价 4 退还
+        captured = {}
         log = run_scenario(
             {1: [6, 4, 5, 3, 3, 2], 2: [6, 6, 0, 0, 0, 0]},
             super_strategies={"乙": super_by_day({1: 6, 2: 5})},
+            capture=captured,
         )
         day1 = log.days[0]
         assert day1.winner == "丙" and day1.winning_bid == 5
@@ -24,11 +26,12 @@ class TestSuperBid:
         assert day1.collision_values == [3, 6]  # 甲被狙的 6 + 丁戊互撞的 3
 
         records = {r.player: r for r in log.days[1].bids if not r.is_super}
-        # 甲被狙扣 6：余额 0+3=3，出 6 应非法
+        # 甲被狙扣 6：余额 7-6+3=4，出 6 应非法
         assert records["甲"].bid == 0 and records["甲"].status == "illegal"
-        # 乙第 1 天净 +1（-2 成本 +3 悬赏）：余额 6+1+3=10，出 6 合法
+        # 乙第 1 天净 +1（-2 成本 +3 悬赏）：次日余额 7-2+3+3=11。
+        assert captured["乙"][1].my_coins == 11
         assert records["乙"].bid == 6 and records["乙"].status == "ok"
-        # 不限次数：第 2 天乙的超级出价（5，异于正常出价 6，6+2≤10）再次被受理
+        # 不限次数：第 2 天乙的超级出价（5，异于正常出价 6，6+2≤11）再次被受理
         day2_super = next(
             (r for r in log.days[1].bids if r.player == "乙" and r.is_super), None
         )
@@ -52,7 +55,7 @@ class TestSuperBid:
 
     def test_super_bid_requires_balance_headroom(self):
         # 总耗资约束：正常出价 + 2 成本不得超过余额，否则整单作废
-        # 甲第 1 天出 6 获胜余额归零；第 2 天 +3 后正常出 3 再狙 6：3+2>3 → 整单作废
+        # 甲第 1 天出 6 获胜余额 1；第 2 天 +3 后正常出 3 再狙 6：3+2>4 → 整单作废
         log = run_scenario(
             {1: [6, 1, 1, 1, 1, 1], 2: [3, 0, 0, 0, 0, 0]},
             super_strategies={"甲": super_by_day({2: 6})},
@@ -65,16 +68,19 @@ class TestSuperBid:
 
     def test_pure_snipe_with_zero_normal_bid(self):
         # 正常出 0 + 超级出价（纯狙击）：0+2 ≤ 余额即合法。
-        # 甲第 1 天出 6 获胜余额归零，第 2 天 +3 后纯狙击出 6：落空（全员正常出 0 互撞），
+        # 甲第 1 天出 6 获胜余额 1，第 2 天 +3 后纯狙击出 6：落空（全员正常出 0 互撞），
         # 正常出价全灭流局，奖池并入第 3 天；甲扣 2 成本
+        captured = {}
         log = run_scenario(
             {1: [6, 1, 1, 1, 1, 1], 2: [0, 0, 0, 0, 0, 0]},
             super_strategies={"甲": super_by_day({2: 6})},
+            capture=captured,
         )
         day2 = log.days[1]
         assert day2.super_uses == [{"player": "甲", "value": 6, "hit": False}]
         assert day2.is_void and day2.winner is None
         assert log.days[2].pool == 2
+        assert captured["甲"][2].my_coins == 5  # 7-6+3-2+3，纯狙击仍扣成本
 
     def test_super_bid_equal_to_normal_voids_whole_submission(self):
         # 同值属非法提交：整单作废为正常出价 0、无超级出价（v5 只丢超级，v6 整单）。
@@ -94,9 +100,11 @@ class TestSuperBid:
 
     def test_multi_snipers_same_value_both_rewarded(self):
         # 多人命中同一数值各得 3 金币：乙、己的超级 6 同时命中甲的唯一 6
+        captured = {}
         log = run_scenario(
             {1: [6, 4, 5, 3, 3, 2], 2: [6, 6, 0, 0, 0, 6]},
             super_strategies={"乙": super_by_day({1: 6}), "己": super_by_day({1: 6})},
+            capture=captured,
         )
         day1 = log.days[0]
         assert day1.super_uses == [
@@ -105,21 +113,26 @@ class TestSuperBid:
         ]
         assert day1.winner == "丙" and day1.winning_bid == 5
         records = {r.player: r for r in log.days[1].bids if not r.is_super}
-        # 乙/己各净 +1（-2 +3）：余额 10，出 6 合法；甲被狙扣 6：余额 3，出 6 非法
+        # 乙/己各净 +1（-2 +3）：次日余额均为 11；甲被狙扣 6：余额 4，出 6 非法
+        assert captured["乙"][1].my_coins == 11
+        assert captured["己"][1].my_coins == 11
         assert records["乙"].status == "ok" and records["己"].status == "ok"
         assert records["甲"].status == "illegal"
 
     def test_snipe_non_top_unique_also_pays_bounty(self):
         # 命中不限于最高唯一价：乙的超级 0 命中己的唯一 0（扣 0 无实质损失），
         # 乙照拿 3 金币悬赏（净 +1）；胜者仍是未撞车最高的甲
+        captured = {}
         log = run_scenario(
             {1: [5, 4, 3, 2, 1, 0]},
             super_strategies={"乙": super_by_day({1: 0})},
+            capture=captured,
         )
         day1 = log.days[0]
         assert day1.super_uses == [{"player": "乙", "value": 0, "hit": True}]
         assert day1.winner == "甲" and day1.winning_bid == 5
         assert day1.collision_values == [0]
+        assert captured["乙"][1].my_coins == 11
 
     def test_snipe_value_with_multiple_normal_bids_still_hits(self):
         # v6 关键变化：被狙数值上有 ≥2 笔正常出价（本来就会互撞）也算命中发赏，

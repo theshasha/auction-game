@@ -69,8 +69,9 @@ class TestAllCoinsPublication:
         captured = {}
         run_scenario({1: [6, 1, 1, 1, 1, 1]}, capture=captured)
         expected = {"甲": 4, "乙": 9, "丙": 9, "丁": 9, "戊": 9, "己": 9}
-        assert captured["甲"][1].all_coins == expected
-        assert captured["乙"][1].all_coins == expected
+        for name, observations in captured.items():
+            assert observations[1].all_coins == expected, name
+            assert observations[1].my_coins == expected[name]
 
 
 class TestMatchLogPublication:
@@ -78,11 +79,9 @@ class TestMatchLogPublication:
         game = replace(TEST_GAME, initial_coins=11, daily_pool=(2, 3, 4), max_bid=9)
         log = run_one_match(constant_strategies([0] * 6), game=game)
         snapshot = log.to_dict()
-        changed_game = replace(game, initial_coins=100, max_bid=20)
         snapshot["game"]["initial_coins"] = 0
         snapshot["game"]["daily_pool"][0] = 99
 
-        assert changed_game.initial_coins == 100
         assert log.to_dict()["game"] == {
             "initial_coins": 11,
             "daily_salary": 3,

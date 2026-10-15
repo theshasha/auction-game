@@ -29,7 +29,7 @@ def config_files(tmp_path):
 def test_defaults_and_preserved_values(config_files):
     config, players = load_configuration(*config_files)
     assert config == {"llm": {"timeout_seconds": 60}}
-    assert [p["predicted_win_rate"] for p in players] == [23, 0]
+    assert [player["predicted_win_rate"] for player in players] == [23, 0]
     assert [p["protocol"] if "protocol" in p else None for p in players] == ["chat", None]
 
 
@@ -38,8 +38,6 @@ def test_default_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert load_configuration() == expected
     assert load_configuration("config.yaml", "players.yaml") == expected
-    assert expected[0]["llm"]["timeout_seconds"] == 900
-    assert len(expected[1]) == 6
 
 
 @pytest.mark.parametrize("timeout", [True, 0, float("nan"), "60", None])

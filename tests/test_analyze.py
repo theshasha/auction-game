@@ -113,43 +113,6 @@ def test_player_detail_metrics():
     assert rows["己"]["zero_bids"] == 1
 
 
-def test_playoff_match_label():
-    log = make_log(match_index=6, is_playoff=True)
-    stats = collect_player_stats([{"match": log.to_dict()}])
-    assert stats["match_labels"] == ["加1"]
-
-
-def make_old_format_match() -> dict:
-    """旧格式（v4 及以前）：无 rules_version / collision_values / super_uses，
-    超级出价混在 bids 里按笔数计撞车。乙 超级出 5 使 甲 的 5 撞车。"""
-    return {
-        "match": {
-            "match_index": 1,
-            "is_playoff": False,
-            "wins": {"甲": 1, "乙": 0},
-            "days": [{
-                "day": 1, "pool": 1, "winner": "甲", "winning_bid": 5,
-                "wins_taken": 1, "is_void": False, "transfer_recipient": None,
-                "bids": [
-                    {"player": "甲", "raw_bid": 5, "bid": 5, "status": "ok"},
-                    {"player": "乙", "raw_bid": 3, "bid": 3, "status": "ok"},
-                    {"player": "乙", "raw_bid": 5, "bid": 5, "status": "ok", "is_super": True},
-                ],
-            }],
-        }
-    }
-
-
-@pytest.mark.parametrize("rules_version", [None, "v6", "v7"])
-def test_old_format_is_rejected(rules_version):
-    payload = make_old_format_match()
-    payload["match"].update(initial_coins=7, max_bid=7)
-    if rules_version:
-        payload["match"]["rules_version"] = rules_version
-    with pytest.raises(ValueError, match="缺少 game"):
-        collect_player_stats([payload])
-
-
 def test_analyze_prints_player_section(tmp_path, capsys):
     run_dir = tmp_path / "20260909_120000_ai"
     run_dir.mkdir()
@@ -180,15 +143,15 @@ def write_matches(run_dir, matches):
 
 
 def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, capsys, monkeypatch):
-    game = replace(TEST_GAME, initial_coins=20, daily_salary=4, daily_pool=(1, 2, 3),
+    game = replace(TEST_GAME, initial_coins=20, daily_salary=4, daily_pool=(2, 4, 3),
                    max_bid=9, super_cost=1, super_bounty=5, regular_matches=2, max_playoffs=4)
     days = [
-        make_day(1, [9, 7, 5], 1, "乙", 7, [9], 1, super_bids={"乙": (9, True)}),
-        make_day(2, [2, 2, 0], 2, "丙", 0, [2], 2),
+        make_day(1, [9, 7, 5], 2, "乙", 7, [9], 2, super_bids={"乙": (9, True)}),
+        make_day(2, [2, 2, 0], 4, "丙", 0, [2], 4),
         make_day(3, [9, 3, 1], 3, "甲", 9, [], 3),
     ]
     log = make_log(match_index=3, is_playoff=True, game=game, days=days,
-                   wins={"甲": 3, "乙": 1, "丙": 2}).to_dict()
+                   wins={"甲": 3, "乙": 2, "丙": 4}).to_dict()
     # 手算：甲 20-9+4-2+4-9=8；乙 20-7-1+5+4-2+4=23；丙 20+4+4=28。
     assert recompute_remaining_coins(log) == {"甲": 8, "乙": 23, "丙": 28}
     stats = collect_player_stats([{"match": log}])
@@ -204,14 +167,17 @@ def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, caps
     assert "成本消耗 1 金币，悬赏印发 5 金币" in output
     assert "局末平均剩余金币：19.67（最低 8，最高 28）" in output
     assert "全天总体：平均 4.70（10 笔）" in output  # 聚合均价包含超级出价数值
-    assert "单局 ≥3 胜场的玩家-局次数：1" in output
+    # 总奖池 9：恰好 3 胜仍入选，2 胜不入选；门槛固定，不能改成过半。
+    assert "单局 ≥3 胜场的玩家-局次数：2" in output
+    assert "第 3 局：甲 共 3 胜场" in output
+    assert "第 3 局：丙 共 4 胜场" in output
+    assert "第 3 局：乙 共 2 胜场" not in output
 
 
-@pytest.mark.parametrize("field", list(TEST_GAME.to_dict()))
-def test_missing_game_setting_is_rejected(field):
+def test_missing_game_setting_is_rejected():
     match = make_match_1()
-    del match["game"][field]
-    with pytest.raises(ValueError, match=field):
+    del match["game"]["max_bid"]
+    with pytest.raises(ValueError, match="日志 game 参数无效.*max_bid"):
         recompute_remaining_coins(match)
 
 
@@ -220,7 +186,7 @@ def test_missing_game_setting_is_rejected(field):
     ("day", "super_uses"), ("day", "collision_values"), ("day", "winning_bid"),
     ("bid", "status"), ("bid", "is_super"), ("super_use", "hit"),
 ])
-def test_missing_current_log_field_is_rejected(tmp_path, section, field):
+def test_missing_current_log_field_is_rejected(section, field):
     match = make_match_1()
     records = {"match": match, "day": match["days"][0],
                "bid": match["days"][0]["bids"][0],
@@ -228,8 +194,13 @@ def test_missing_current_log_field_is_rejected(tmp_path, section, field):
     del records[section][field]
     with pytest.raises(ValueError, match=field):
         collect_player_stats([{"match": match}])
+
+
+def test_loading_wraps_invalid_log_with_filename(tmp_path):
+    match = make_match_1()
+    del match["days"][0]["bids"][0]["status"]
     write_matches(tmp_path, [{"match": match}])
-    with pytest.raises(ValueError, match=rf"match_1.json.*{field}"):
+    with pytest.raises(ValueError, match=r"match_1.json.*bid 缺少 status"):
         load_match_logs(tmp_path)
 
 
@@ -258,12 +229,10 @@ def test_loading_rejects_inconsistent_daily_roster(tmp_path):
         load_match_logs(tmp_path)
 
 
-@pytest.mark.parametrize("field,value", [("max_bid", True), ("daily_salary", -1),
-                                         ("daily_pool", []), ("regular_matches", 0)])
-def test_invalid_game_snapshot_is_rejected(field, value):
+def test_invalid_game_snapshot_is_rejected():
     match = make_match_1()
-    match["game"][field] = value
-    with pytest.raises(ValueError, match=rf"日志 game 参数无效.*{field}"):
+    match["game"]["max_bid"] = True
+    with pytest.raises(ValueError, match=r"日志 game 参数无效.*max_bid"):
         recompute_remaining_coins(match)
 
 

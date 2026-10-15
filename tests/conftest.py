@@ -11,6 +11,8 @@
    bid_reply / speech_reply / legacy_speech_reply / make_ai_obs。
 """
 
+from copy import deepcopy
+
 from ai_player import AIPlayer
 from engine import run_match
 from game_rules import GameSettings
@@ -170,12 +172,12 @@ TEST_PREDICTIONS = [(name, 10) for name in ALL_NAMES]
 
 
 def fake_chat_fn(script):
-    """script: 回复文本或异常的有序列表，每次调用弹出下一个。"""
+    """script: 回复文本或异常的有序列表；calls 保存每次请求时的独立快照。"""
     queue = list(script)
     calls = []
 
     def chat_fn(messages):
-        calls.append(messages)
+        calls.append(deepcopy(messages))
         item = queue.pop(0)
         if isinstance(item, Exception):
             raise item

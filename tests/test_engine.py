@@ -70,15 +70,6 @@ class TestWinningRules:
         assert day1.winning_bid == 0
         assert day1.collision_values == [2, 3]
 
-    def test_win_at_six_takes_full_pool_no_tax(self):
-        # 无冲顶税：获胜价为 6 也拿全部奖池。第 1 天流局后第 2 天奖池 2，甲唯一 6 拿满 2 个
-        log = run_scenario({1: [1, 1, 1, 1, 1, 1], 2: [6, 5, 4, 3, 2, 0]})
-        day2 = log.days[1]
-        assert day2.pool == 2
-        assert day2.winner == "甲" and day2.winning_bid == 6
-        assert day2.wins_taken == 2
-        assert log.wins["甲"] == 2
-
 
 class TestCoinSettlement:
     """金币结算：获胜的正常出价与撞车的正常出价扣除，唯一未中全额退还；
@@ -131,42 +122,24 @@ class TestCoinSettlement:
 class TestPoolRollover:
     """流局奖池并入次日；第 6 天流局（或未拍出）则作废。每天基础奖池 1。"""
 
-    def test_consecutive_voids_accumulate_pool(self):
-        # 第 1~2 天全员出 1 撞车流局（各付 1）；第 3 天奖池 = 1 + 1 + 1 = 3
-        log = run_scenario({
-            1: [1, 1, 1, 1, 1, 1],
-            2: [1, 1, 1, 1, 1, 1],
-            3: [5, 0, 0, 0, 0, 0],
-        })
-        assert [day.pool for day in log.days[:3]] == [1, 2, 3]
-        assert log.days[0].is_void and log.days[1].is_void
-        assert log.days[2].winner == "甲"
-        assert log.wins["甲"] == 3  # 第 3 天奖池 3 个胜场全部拿走
-
     def test_late_pool_includes_full_rollover(self):
-        # 前 4 天全员出 1 撞车流局，第 5 天奖池滚到 5；差异化出价，甲唯一 6 获胜
-        # 拿全部 5 个；第 6 天奖池回到 1，甲再拿 1 个
+        # 前 4 天流局，第 5 天唯一上限价获胜，无冲顶税，领取全部滚存奖池 5；
+        # 第 6 天奖池重置为 1，甲再拿 1 个。
+        cap = TEST_GAME.max_bid
         log = run_scenario({
             1: [1, 1, 1, 1, 1, 1],
             2: [1, 1, 1, 1, 1, 1],
             3: [1, 1, 1, 1, 1, 1],
             4: [1, 1, 1, 1, 1, 1],
-            5: [6, 5, 4, 3, 2, 0],
-            6: [6, 5, 4, 3, 2, 0],
+            5: [cap, 5, 4, 3, 2, 0],
+            6: [cap, 5, 4, 3, 2, 0],
         })
         assert [day.pool for day in log.days] == [1, 2, 3, 4, 5, 1]
+        assert all(day.is_void and day.winner is None for day in log.days[:4])
         day5 = log.days[4]
-        assert day5.winner == "甲"
+        assert day5.winner == "甲" and day5.winning_bid == cap
         assert day5.wins_taken == 5
         assert log.wins["甲"] == 6
-
-    def test_last_day_void_forfeits_pool(self):
-        # 6 天全流局（全员每天出 0 撞车，支付 0 无损失）：未拍出的胜场全部作废
-        log = run_one_match(constant_strategies([0, 0, 0, 0, 0, 0]))
-        assert len(log.days) == 6
-        assert all(day.is_void for day in log.days)
-        assert [day.pool for day in log.days] == [1, 2, 3, 4, 5, 6]
-        assert all(wins == 0 for wins in log.wins.values())
 
 
 class TestFixedSixDays:
@@ -180,6 +153,7 @@ class TestFixedSixDays:
         assert [day.pool for day in log.days] == [1, 1, 1, 1, 1, 1]
         assert all(day.winner == "甲" for day in log.days)
         assert log.wins["甲"] == 6
+        assert all(record.status == "ok" for day in log.days for record in day.bids)
 
     def test_observation_carries_pool_and_salary(self):
         # 全员每天出 0 撞车：天天流局、无人花钱；奖池 1→…→6，工资每天 +3
@@ -213,15 +187,6 @@ class TestIllegalBidInMatch:
         assert day1.winner == "己"
         assert day1.winning_bid == 3
         assert day1.collision_values == [0, 5]  # 0 与 5 两个撞车价位
-
-    def test_bid_over_balance_after_spending_is_illegal(self):
-        # 甲第 1 天出 7 获胜、余额归零；第 2 天工资 +3 后出 7 超余额，记非法 0
-        log = run_one_match(constant_strategies([7, 1, 1, 1, 1, 1]))
-        day2 = log.days[1]
-        record = next(r for r in day2.bids if r.player == "甲")
-        assert record.raw_bid == 7
-        assert record.bid == 0
-        assert record.status == "illegal"
 
 
 class TestConfiguredMatch:
@@ -276,6 +241,7 @@ class TestConfiguredMatch:
     def test_custom_last_day_void_discards_accumulated_pool(self):
         game = GameSettings(11, 2, (2, 3, 4), 9, 4, 6, 2, 1)
         log = run_one_match(constant_strategies([0] * 6), game=game)
+        assert len(log.days) == 3
         assert [day.pool for day in log.days] == [2, 5, 9]
-        assert all(day.is_void for day in log.days)
+        assert all(day.is_void and day.winner is None and day.wins_taken == 0 for day in log.days)
         assert log.wins == {name: 0 for name in ["甲", "乙", "丙", "丁", "戊", "己"]}

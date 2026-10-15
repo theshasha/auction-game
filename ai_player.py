@@ -49,7 +49,7 @@ class AIPlayer(Player):
     """LLM 驱动的玩家。
 
     前缀保护：messages 初始化后只 append，唯一的截断是 rollback 到 checkpoint
-    （暂停/失败回滚，只动尾部）。chat_fn 可注入，测试零网络。
+    （暂停/失败回滚，只动尾部并恢复首日缓存）。chat_fn 可注入，测试零网络。
     连续两次调用失败抛 CallFailedError，由 run_parallel_round 收集失败名单、
     仅重跑失败的玩家；对话线在抛出前已回滚到本轮 checkpoint 状态。
     """
@@ -84,13 +84,15 @@ class AIPlayer(Player):
 
     # ---- 对话线维护 ----
 
-    def checkpoint(self) -> int:
-        """记录当前对话线长度，供暂停回滚使用。"""
-        return len(self.messages)
+    def checkpoint(self) -> tuple[int, Optional[tuple[int, Optional[int]]]]:
+        """快照进程内的对话线长度与首日缓存，供暂停/失败回滚使用。"""
+        return len(self.messages), self._pending_day1_bid
 
-    def rollback(self, checkpoint: int) -> None:
-        """截断到 checkpoint，只动尾部，前缀逐字节不变。"""
-        del self.messages[checkpoint:]
+    def rollback(self, checkpoint: tuple[int, Optional[tuple[int, Optional[int]]]]) -> None:
+        """恢复进程内快照：只截断消息尾部，并恢复首日缓存；不提供重启续赛。"""
+        length, pending_bid = checkpoint
+        del self.messages[length:]
+        self._pending_day1_bid = pending_bid
 
     def _write_log(self, entry: dict) -> None:
         if self.log_path is None:
@@ -163,7 +165,7 @@ class AIPlayer(Player):
         """
         last_error: Optional[Exception] = None
         for attempt in (1, 2):
-            mark = len(self.messages)
+            mark = self.checkpoint()
             try:
                 return self._call(user_text, phase)
             except Exception as exc:

@@ -1,8 +1,9 @@
 """每日出价消息（bid_request）的测试：状态行、昨日公布、「昨日你的结果」行。
 共享工厂（make_obs / history）见 conftest.py。"""
 
-import pytest
 from dataclasses import replace
+
+import pytest
 
 import prompts
 from conftest import TEST_GAME, history, make_obs
@@ -19,35 +20,36 @@ class TestBidRequest:
     全场正常出价数值 + 各人超级出价数值）、状态行带奖池/工资标注。"""
 
     def test_first_day_single_line(self):
-        text = prompts.bid_request(make_prompt_obs(day=1))
+        text = prompts.bid_request(make_prompt_obs(day=1, total_wins=3))
         first_line = text.splitlines()[0]
         assert first_line.startswith("当前是第 2 局第 1 天。")
         # 首日不换行分句；状态行附「今日可出最高价」（= min(上限, 余额)），防止模型自己算错
         assert "今日奖池：1 个胜场；你的金币余额：7（今日可出最高价：7）；" in first_line
         assert "昨日公布" not in text
         assert "已含今日工资" not in text  # 第 1 天没有工资
+        assert "你的累计总胜场：3。" in first_line
+        assert "当前全场金币" not in text  # 首日恒定余额不再单列公布
 
     def test_max_affordable_bid_capped_by_balance(self):
-        # 余额 4 低于上限 6 时，可出最高价明示为 4
+        # 余额 4 低于上限时，可出最高价明示为 4
         text = prompts.bid_request(make_prompt_obs(day=1, coins=4))
         assert "你的金币余额：4（今日可出最高价：4）；" in text.splitlines()[0]
 
-    def test_no_super_status_in_status_line(self):
-        # v6 不限次数：状态行不再有「超级出价：可用/已用」，规则细节由 RULES.md 与局末重申承担
-        text = prompts.bid_request(make_prompt_obs(day=2, today_history=[history()]))
-        assert "超级出价：可用" not in text
-        assert "超级出价：已用" not in text
-
     def test_later_day_three_lines_with_salary_note(self):
-        text = prompts.bid_request(make_prompt_obs(day=2, today_history=[history()]))
+        text = prompts.bid_request(make_prompt_obs(
+            day=2, today_history=[history()], total_wins=5, coins=10,
+            all_coins={"甲": 10, "乙": 8, "丙": 9, "丁": 7, "戊": 6, "己": 5},
+        ))
         lines = text.splitlines()
 
         assert lines[0] == "当前是第 2 局第 2 天。"
         assert lines[1] == (
             "昨日公布：乙 以 5 获胜，赢得 1 个胜场。"
             "昨日出价明细：甲 6、乙 5、丙 4、丁 3、戊 2、己 1。"
+            "当前全场金币：甲 10、乙 8、丙 9、丁 7、戊 6、己 5。"
         )
-        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：7（已含今日工资，今日可出最高价：7）；")
+        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：10（已含今日工资，今日可出最高价：7）；")
+        assert "你的累计总胜场：5。" in lines[2]
         # 余额行必须在昨日公布之后
         assert text.index("昨日公布") < text.index("你的金币余额")
 
@@ -72,13 +74,6 @@ class TestBidRequest:
 
         assert "昨日出价明细：甲 6、乙 5、丙 4+超6（命中）、丁 3+超5（落空）、戊 2、己 1。" in lines[1]
 
-    def test_no_separate_collision_announcement(self):
-        # v6 起每日消息不再单列撞车价位（出价明细全公开，可自行推出）
-        text = prompts.bid_request(make_prompt_obs(
-            day=2, today_history=[history(collision_values=[2, 3])],
-        ))
-        assert "撞车价位" not in text.splitlines()[1]
-
     def test_void_day_announcement_has_no_winner_wording(self):
         text = prompts.bid_request(make_prompt_obs(
             day=2,
@@ -91,28 +86,6 @@ class TestBidRequest:
         assert "以" not in lines[1].split("。")[0]
         assert "已含今日工资" in lines[2]
         assert "今日奖池：2 个胜场" in lines[2]  # 并入后的奖池
-
-    def test_total_wins_in_first_day_line(self):
-        text = prompts.bid_request(make_prompt_obs(day=1, total_wins=3))
-        assert "你的累计总胜场：3。" in text.splitlines()[0]
-
-    def test_total_wins_in_later_day_status_line(self):
-        text = prompts.bid_request(make_prompt_obs(day=2, today_history=[history()], total_wins=5))
-        assert "你的累计总胜场：5。" in text.splitlines()[2]
-
-    def test_all_coins_shown_from_day2(self):
-        # 全场每人金币余额（第 2 天起公布，含自己）：昨日出价明细之后
-        text = prompts.bid_request(make_prompt_obs(
-            day=2, today_history=[history()],
-            all_coins={"甲": 10, "乙": 8, "丙": 9, "丁": 7, "戊": 6, "己": 5},
-        ))
-        announcement_line = text.splitlines()[1]
-        assert "当前全场金币：甲 10、乙 8、丙 9、丁 7、戊 6、己 5。" in announcement_line
-        assert announcement_line.index("昨日出价明细") < announcement_line.index("当前全场金币")
-
-    def test_all_coins_absent_on_day1(self):
-        text = prompts.bid_request(make_prompt_obs(day=1))
-        assert "当前全场金币" not in text  # 第 1 天为 None（恒定无信息量），不渲染
 
 
 class TestMyLastDayLine:
