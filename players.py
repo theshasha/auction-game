@@ -8,6 +8,8 @@ from typing import Callable, Optional
 
 from models import Observation
 
+BOT_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
+
 
 class Player(ABC):
     """玩家统一接口。规则引擎只依赖此接口，与具体实现（Bot / LLM）解耦。"""

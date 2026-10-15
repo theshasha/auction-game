@@ -12,9 +12,12 @@ Bot 默认 6 人；局数、经济与奖池由 `game.yaml` 决定，第一名并
 - `game.yaml`、`game_rules.py`：比赛参数及共享校验；生产默认值只维护在 `game.yaml`。
 - `models.py`、`engine.py`、`tournament.py`：数据结构、出价结算和比赛流程。
 - `ai_player.py`、`llm_client.py`、`prompts.py`：模型玩家、服务调用和提示词。
-- `main.py`、`controller.py`：程序入口、运行控制。
+- `main.py`：命令行解析与模式分派；`runners.py`：Bot/AI 玩家组装与比赛启动。
+- `ai_speech.py`：AI 发言编排；`run_output.py`：运行目录、局末日志与最终结果展示。
+- `benchmark.py`：批量策略对照及统计；`players.py`：Bot 名单和随机/脚本玩家。
+- `controller.py`：单步、连续、暂停与轮级并行控制。
 - `players.yaml`：玩家名称、人设、模型及服务提供方（provider）。
-- `config.yaml`：超时等运行配置；`configuration.py` 供 `main.py`、`check_llm.py` 共享读取配置。
+- `config.yaml`：超时等运行配置；`configuration.py` 供 `runners.py`、`benchmark.py`、`check_llm.py` 共享读取配置。
 - `analyze.py`：对局统计，统计口径见 `docs/analyze.md`。
 - `logs/`：对局日志；`docs/history/`：历史验证记录。
 
@@ -35,9 +38,12 @@ Bot 默认 6 人；局数、经济与奖池由 `game.yaml` 决定，第一名并
 
     python main.py --seed 42
 
-批量运行随机玩家和固定高价策略的对照实验：
+批量运行纯随机与最高可付价策略对照，场数须为正整数；两组各 N 场，共 2N 场，不写日志。
+策略玩家每天出 `min(出价上限, 当前余额)`，不使用超级出价；策略与随机对手的均值比较均取第二组。
 
     python main.py --benchmark 50
+
+`main.py` 成功或用户主动 `q` 中止返回 0，已处理的启动配置错误返回 1，命令行参数错误返回 2。
 
 ### AI 对局
 

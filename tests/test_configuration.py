@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 import check_llm
-import main
+import runners
 from configuration import ConfigurationError, load_configuration
 from game_rules import GameSettings
 
@@ -105,7 +105,7 @@ def test_missing_file(tmp_path):
     assert "读取失败" in str(exc.value)
 
 
-@pytest.mark.parametrize("entry", [main, check_llm])
+@pytest.mark.parametrize("entry", [runners, check_llm])
 def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, entry):
     config_path, _ = config_files
     config_path.write_text("llm:\n  timeout_seconds: 900.5\n", encoding="utf-8")
@@ -128,7 +128,7 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
 
     monkeypatch.setattr(entry, "load_configuration", load)
     monkeypatch.setattr(entry, "make_chat_fn", make_chat_fn)
-    if entry is main:
+    if entry is runners:
         game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
         games_loaded = []
 
@@ -136,9 +136,9 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
             games_loaded.append(True)
             return game
 
-        monkeypatch.setattr(main, "load_game_settings", load_game)
-        monkeypatch.setattr(main, "make_run_dir", lambda mode: tmp_path)
-        monkeypatch.setattr(main, "Controller", lambda mode: SimpleNamespace(start_stdin_reader=lambda: None))
+        monkeypatch.setattr(runners, "load_game_settings", load_game)
+        monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path)
+        monkeypatch.setattr(runners, "Controller", lambda mode: SimpleNamespace(start_stdin_reader=lambda: None))
 
         def tournament(players, actual_game, **kwargs):
             assert actual_game is game
@@ -150,12 +150,12 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
                 assert player.game is game
                 assert player.log_path.parent == tmp_path
                 player.chat_fn([])
-            raise main.TournamentAborted
+            raise runners.TournamentAborted
 
-        monkeypatch.setattr(main, "run_tournament", tournament)
-        main.run_ai()
+        monkeypatch.setattr(runners, "run_tournament", tournament)
+        assert runners.run_ai() == 0
         assert games_loaded == [True]
-        assert (tmp_path / "RULES.md").read_text(encoding="utf-8") == main.render_rules(game, ["甲", "乙"])
+        assert (tmp_path / "RULES.md").read_text(encoding="utf-8") == runners.render_rules(game, ["甲", "乙"])
     else:
         assert check_llm.main() == 0
         assert chats == [check_llm.PING_MESSAGES, check_llm.PING_MESSAGES]
@@ -167,15 +167,15 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
     ]
 
 
-@pytest.mark.parametrize("entry", [main, check_llm])
+@pytest.mark.parametrize("entry", [runners, check_llm])
 def test_entries_report_configuration_errors(config_files, monkeypatch, capsys, entry):
     config_path, _ = config_files
     config_path.write_text("llm: null", encoding="utf-8")
     monkeypatch.setattr(entry, "load_configuration", lambda: load_configuration(*config_files))
     monkeypatch.setattr(entry, "make_chat_fn", lambda **kwargs: pytest.fail("配置错误时不应创建客户端"))
-    if entry is main:
-        monkeypatch.setattr(main, "make_run_dir", lambda mode: pytest.fail("配置错误时不应创建日志"))
-        main.run_ai()
+    if entry is runners:
+        monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("配置错误时不应创建日志"))
+        assert runners.run_ai() == 1
     else:
         assert check_llm.main() == 1
     output = capsys.readouterr().out

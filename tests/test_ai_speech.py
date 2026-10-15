@@ -2,9 +2,11 @@
 
 import json
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
+import ai_speech
 from ai_player import CallFailedError, ParseFailedError
 from conftest import (
     bid_reply,
@@ -14,6 +16,35 @@ from conftest import (
     make_player,
     speech_reply,
 )
+from game_rules import GameSettings
+from players import ScriptedPlayer
+
+
+class TestSpeechDirector:
+    """发言编排向开局和下局规划传入实际参数。"""
+
+    def test_passes_game_to_both_plans(self, monkeypatch, tmp_path):
+        game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
+        players = [ScriptedPlayer.constant(name, 0) for name in ("甲", "乙")]
+        director = ai_speech.AISpeechDirector(players, None, tmp_path, game=game)
+        plans = []
+
+        def request(others, actual_game):
+            assert actual_game is game
+            plans.append(others)
+            return "规划"
+
+        monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", request)
+        monkeypatch.setattr(ai_speech.prompts, "next_match_plan_request", request)
+        monkeypatch.setattr(ai_speech.prompts, "match_end_speech_request", lambda *args: "局末发言")
+        monkeypatch.setattr(director, "_run_round", lambda *args: {"甲": "发言甲", "乙": "发言乙"})
+        monkeypatch.setattr(director, "_publish_speeches", lambda *args: None)
+
+        director.on_opening()
+        director.on_match_end(SimpleNamespace(match_index=1), [], True)
+        assert plans == [{"乙": "发言乙"}, {"甲": "发言甲"}] * 2
+        director.on_match_end(SimpleNamespace(match_index=2), [], False)
+        assert len(plans) == 4
 
 
 class TestSpeech:

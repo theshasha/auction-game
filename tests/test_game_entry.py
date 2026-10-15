@@ -1,13 +1,22 @@
 """比赛入口的参数传递与本场规则保存，全部离线执行。"""
 
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import main
+import runners
 from configuration import ConfigurationError
 from game_rules import GameSettings
-from players import ScriptedPlayer
+from llm_client import MissingApiKeyError
+from players import BOT_NAMES
+from rules import render_rules
 
 
 @pytest.fixture
@@ -25,110 +34,151 @@ def test_bots_load_once_and_save_actual_rules(monkeypatch, tmp_path, game):
 
     def tournament(players, actual_game, **kwargs):
         assert actual_game is game
-        assert [p.name for p in players] == main.BOT_NAMES
+        assert [p.name for p in players] == BOT_NAMES
         assert callable(kwargs["on_match_end"])
         return result
 
-    monkeypatch.setattr(main, "load_game_settings", load)
-    monkeypatch.setattr(main, "make_run_dir", lambda mode: tmp_path)
-    monkeypatch.setattr(main, "run_tournament", tournament)
+    monkeypatch.setattr(runners, "load_game_settings", load)
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path)
+    monkeypatch.setattr(runners, "run_tournament", tournament)
     printed = []
-    monkeypatch.setattr(main, "print_final_result", printed.append)
-    main.run_bots(42)
+    monkeypatch.setattr(runners, "print_final_result", printed.append)
+    assert runners.run_bots(42) == 0
 
     assert loaded == [True]
     assert printed == [result]
-    assert (tmp_path / "RULES.md").read_text(encoding="utf-8") == main.render_rules(game, main.BOT_NAMES)
-
-
-def test_benchmark_uses_one_game_without_logs(monkeypatch, capsys, game):
-    run_tournament = main.run_tournament
-    loaded = []
-    calls = []
-
-    def load():
-        loaded.append(True)
-        return game
-
-    def tournament(players, actual_game):
-        assert actual_game is game
-        calls.append([p.name for p in players])
-        if players[0].name == "Whale":
-            assert players[0].decide_bid(None) == (9, None)
-        return run_tournament(players, actual_game)
-
-    monkeypatch.setattr(main, "load_game_settings", load)
-    monkeypatch.setattr(main, "run_tournament", tournament)
-    monkeypatch.setattr(main, "make_run_dir", lambda mode: pytest.fail("benchmark 不应写日志"))
-    main.run_benchmark(2)
-
-    assert loaded == [True]
-    assert calls == [main.BOT_NAMES] * 2 + [["Whale"] + main.BOT_NAMES[:5]] * 2
-    output = capsys.readouterr().out
-    assert "Whale 恒出 9 + 5 随机" in output
-    assert "获胜价=9（极点）" in output
+    assert (tmp_path / "RULES.md").read_text(encoding="utf-8") == render_rules(game, BOT_NAMES)
 
 
 @pytest.mark.parametrize("entry,args", [
-    (main.run_bots, (42,)),
-    (main.run_benchmark, (1,)),
-    (main.run_ai, ()),
+    (runners.run_bots, (42,)),
+    (runners.run_ai, ()),
 ])
 def test_game_errors_stop_before_clients_or_logs(monkeypatch, capsys, entry, args):
     def load():
         raise ConfigurationError("game.yaml：max_bid 必须是非负整数")
 
-    monkeypatch.setattr(main, "load_game_settings", load)
-    monkeypatch.setattr(main, "load_configuration", lambda: ({}, []))
-    monkeypatch.setattr(main, "make_chat_fn", lambda **kwargs: pytest.fail("参数错误时不应创建客户端"))
-    monkeypatch.setattr(main, "make_run_dir", lambda mode: pytest.fail("参数错误时不应创建日志"))
-    entry(*args)
+    monkeypatch.setattr(runners, "load_game_settings", load)
+    monkeypatch.setattr(runners, "load_configuration", lambda: ({}, []))
+    monkeypatch.setattr(runners, "make_chat_fn", lambda **kwargs: pytest.fail("参数错误时不应创建客户端"))
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("参数错误时不应创建日志"))
+    assert entry(*args) == 1
     assert "配置读取失败：game.yaml：max_bid" in capsys.readouterr().out
 
 
 def test_ai_single_player_stops_before_clients_or_logs(monkeypatch, capsys, game):
-    monkeypatch.setattr(main, "load_configuration", lambda: (
+    monkeypatch.setattr(runners, "load_configuration", lambda: (
         {"llm": {"timeout_seconds": 30}},
         [{"name": "甲", "provider": "openai", "model": "test-model"}],
     ))
-    monkeypatch.setattr(main, "load_game_settings", lambda: game)
-    monkeypatch.setattr(main, "make_chat_fn", lambda **kwargs: pytest.fail("一人名单不应创建客户端"))
-    monkeypatch.setattr(main, "make_run_dir", lambda mode: pytest.fail("一人名单不应创建日志"))
+    monkeypatch.setattr(runners, "load_game_settings", lambda: game)
+    monkeypatch.setattr(runners, "make_chat_fn", lambda **kwargs: pytest.fail("一人名单不应创建客户端"))
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("一人名单不应创建日志"))
 
-    main.run_ai()
+    assert runners.run_ai() == 1
 
     assert "错误：AI 对局至少需要 2 名玩家，请检查 players.yaml" in capsys.readouterr().out
 
 
-def test_final_result_counts_actual_regular_matches(capsys):
-    result = SimpleNamespace(
-        match_logs=[SimpleNamespace(is_playoff=value) for value in (False, False, True)],
-        playoff_count=1,
-        playoff_cap_hit=False,
-        final_standings=[SimpleNamespace(rank=1, player="甲", total_wins=8, wins_per_match=[3, 3, 2])],
+@pytest.mark.parametrize("args,expected", [
+    (["--seed", "42"], ("bots", 42)),
+    (["--ai"], ("ai",)),
+    (["--benchmark", "2"], ("benchmark", 2)),
+])
+@pytest.mark.parametrize("status", [0, 1])
+def test_main_dispatches_mode(monkeypatch, args, expected, status):
+    calls = []
+
+    def record(*call):
+        calls.append(call)
+        return status
+
+    monkeypatch.setattr("sys.argv", ["main.py", *args])
+    monkeypatch.setattr(runners, "run_bots", lambda seed: record("bots", seed))
+    monkeypatch.setattr(runners, "run_ai", lambda: record("ai"))
+    monkeypatch.setattr(main.benchmark, "run_benchmark", lambda count: record("benchmark", count))
+
+    assert main.main() == status
+
+    assert calls == [expected]
+
+
+@pytest.mark.parametrize("count", ["0", "-1", "1.5", "abc"])
+def test_main_rejects_invalid_benchmark_before_dispatch(monkeypatch, capsys, count):
+    def unexpected(*args):
+        pytest.fail("非法场数不应启动比赛")
+
+    monkeypatch.setattr("sys.argv", ["main.py", "--benchmark", count])
+    monkeypatch.setattr(runners, "run_bots", unexpected)
+    monkeypatch.setattr(runners, "run_ai", unexpected)
+    monkeypatch.setattr(main.benchmark, "run_benchmark", unexpected)
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+    assert exc.value.code == 2
+    assert "场数必须是正整数" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("error_type", [MissingApiKeyError, ValueError])
+def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, error_type):
+    monkeypatch.setattr(runners, "load_configuration", lambda: (
+        {"llm": {"timeout_seconds": 30}},
+        [{"name": name, "provider": "test", "model": "test"} for name in ["甲", "乙"]],
+    ))
+    monkeypatch.setattr(runners, "load_game_settings", lambda: game)
+
+    def make_chat_fn(**kwargs):
+        raise error_type("初始化失败")
+
+    monkeypatch.setattr(runners, "make_chat_fn", make_chat_fn)
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("初始化失败不应创建日志"))
+    assert runners.run_ai() == 1
+    assert "玩家 甲 的 LLM 配置不可用：初始化失败" in capsys.readouterr().out
+
+
+def test_ai_success_returns_zero(monkeypatch, tmp_path, game):
+    monkeypatch.setattr(runners, "load_configuration", lambda: (
+        {"llm": {"timeout_seconds": 30}},
+        [dict(name=name, provider="test", model="test", persona_title="测试", persona_text="测试人设")
+         for name in ["甲", "乙"]],
+    ))
+    monkeypatch.setattr(runners, "load_game_settings", lambda: game)
+    monkeypatch.setattr(runners, "make_chat_fn", lambda **kwargs: lambda messages: pytest.fail("不应联网"))
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path)
+    monkeypatch.setattr(runners, "Controller", lambda mode: SimpleNamespace(start_stdin_reader=lambda: None))
+    result = object()
+    monkeypatch.setattr(runners, "run_tournament", lambda *args, **kwargs: result)
+    printed = []
+    monkeypatch.setattr(runners, "print_final_result", printed.append)
+    assert runners.run_ai() == 0
+    assert printed == [result]
+
+
+@pytest.mark.parametrize("args,valid_game,status,writes_logs", [
+    (["--seed", "42"], True, 0, True),
+    (["--benchmark", "1"], True, 0, False),
+    ([], False, 1, False),
+    (["--ai"], False, 1, False),
+    (["--benchmark", "1"], False, 1, False),
+    (["--benchmark", "0"], True, 2, False),
+    (["--benchmark", "-1"], True, 2, False),
+    (["--benchmark", "1.5"], True, 2, False),
+    (["--benchmark", "abc"], True, 2, False),
+])
+def test_script_exit_codes_in_isolated_checkout(tmp_path, game, args, valid_game, status, writes_logs):
+    root = Path(main.__file__).parent
+    for pattern in ("*.py", "*.yaml", "RULES.template.md"):
+        for path in root.glob(pattern):
+            shutil.copy2(path, tmp_path / path.name)
+    (tmp_path / "game.yaml").write_text(
+        yaml.safe_dump(game.to_dict()) if valid_game else "max_bid: -1\n",
+        encoding="utf-8",
     )
-    main.print_final_result(result)
-    assert "共进行 3 局（正赛 2 局 + 加赛 1 局）" in capsys.readouterr().out
-
-
-def test_speech_director_passes_game_to_both_plans(monkeypatch, tmp_path, game):
-    players = [ScriptedPlayer.constant(name, 0) for name in ("甲", "乙")]
-    director = main.AISpeechDirector(players, None, tmp_path, game=game)
-    plans = []
-
-    def request(others, actual_game):
-        assert actual_game is game
-        plans.append(others)
-        return "规划"
-
-    monkeypatch.setattr(main.prompts, "opening_plan_request", request)
-    monkeypatch.setattr(main.prompts, "next_match_plan_request", request)
-    monkeypatch.setattr(main.prompts, "match_end_speech_request", lambda *args: "局末发言")
-    monkeypatch.setattr(director, "_run_round", lambda *args: {"甲": "发言甲", "乙": "发言乙"})
-    monkeypatch.setattr(director, "_publish_speeches", lambda *args: None)
-
-    director.on_opening()
-    director.on_match_end(SimpleNamespace(match_index=1), [], True)
-    assert plans == [{"乙": "发言乙"}, {"甲": "发言甲"}] * 2
-    director.on_match_end(SimpleNamespace(match_index=2), [], False)
-    assert len(plans) == 4
+    process = subprocess.run(
+        [sys.executable, "-B", "main.py", *args], cwd=tmp_path,
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+    assert process.returncode == status, process.stdout + process.stderr
+    assert (tmp_path / "logs").exists() is writes_logs
+    if status == 2:
+        assert "场数必须是正整数" in process.stderr
