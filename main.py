@@ -9,10 +9,9 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-import yaml
-
 import prompts
 from ai_player import AIPlayer
+from configuration import ConfigurationError, load_configuration
 from controller import (
     Controller,
     RoundTask,
@@ -27,7 +26,6 @@ from tournament import run_tournament
 BOT_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
 ROOT_DIR = Path(__file__).parent
 LOG_DIR = ROOT_DIR / "logs"
-CONFIG_PATH = ROOT_DIR / "config.yaml"
 
 ABSENT_SPEECH = "（放弃发言）"
 
@@ -189,11 +187,13 @@ def run_bots(seed) -> None:
 
 
 def run_ai() -> None:
-    config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    llm_config = config.get("llm", {})
-    timeout = llm_config.get("timeout_seconds", 60)
+    try:
+        config, player_configs = load_configuration()
+    except ConfigurationError as exc:
+        print(f"错误：配置读取失败：{exc}")
+        return
+    timeout = config["llm"]["timeout_seconds"]
 
-    player_configs = config["players"]
     all_names = [pc["name"] for pc in player_configs]
     predictions = [(pc["name"], pc.get("predicted_win_rate", 0)) for pc in player_configs]
 
@@ -346,7 +346,7 @@ def run_benchmark(count: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="唯一高价拍卖游戏")
     parser.add_argument("--seed", type=int, default=None, help="随机种子（仅 Bot 模式），用于复现对局")
-    parser.add_argument("--ai", action="store_true", help="AI 模式：读取 config.yaml，每玩家走各自的 provider/model")
+    parser.add_argument("--ai", action="store_true", help="AI 模式：config.yaml 读取运行设置，players.yaml 读取玩家与 provider/model")
     parser.add_argument("--benchmark", type=int, metavar="N", default=None,
                         help="平衡性验证：跑 N 场纯随机 + N 场鲸鱼探针对照（不写日志）")
     args = parser.parse_args()

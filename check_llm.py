@@ -1,6 +1,7 @@
-"""连通性冒烟测试：对 config.yaml 中每个玩家的 provider/model 各发一条最小请求。
+"""连通性冒烟测试：对 players.yaml 中每个玩家的 provider/model 各发一条最小请求。
 
 用法：python3 check_llm.py
+超时等运行设置读取 config.yaml。
 会真实调用网络 API。全部通过后再运行 main.py --ai 正式对局。
 """
 
@@ -8,14 +9,9 @@ from __future__ import annotations
 
 import sys
 import time
-from pathlib import Path
 
-import yaml
-
+from configuration import ConfigurationError, load_configuration
 from llm_client import MissingApiKeyError, make_chat_fn
-
-ROOT_DIR = Path(__file__).parent
-CONFIG_PATH = ROOT_DIR / "config.yaml"
 
 PING_MESSAGES = [
     {"role": "system", "content": "你是一个简洁的助手。"},
@@ -24,11 +20,15 @@ PING_MESSAGES = [
 
 
 def main() -> int:
-    config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    timeout = config.get("llm", {}).get("timeout_seconds", 60)
+    try:
+        config, players = load_configuration()
+    except ConfigurationError as exc:
+        print(f"[配置错误] {exc}")
+        return 1
+    timeout = config["llm"]["timeout_seconds"]
 
     failures = 0
-    for player in config["players"]:
+    for player in players:
         protocol_suffix = f" / {player['protocol']}" if player.get("protocol") else ""
         label = f"{player['name']}（{player['provider']}{protocol_suffix} / {player['model']}）"
         try:
@@ -54,7 +54,7 @@ def main() -> int:
         preview = " ".join(reply.split())[:80]
         print(f"[通过] {label}  耗时 {elapsed:.1f}s  回复: {preview}")
 
-    print(f"\n共 {len(config['players'])} 个端点，失败 {failures} 个")
+    print(f"\n共 {len(players)} 个端点，失败 {failures} 个")
     return 1 if failures else 0
 
 

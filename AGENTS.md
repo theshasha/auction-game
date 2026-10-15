@@ -11,7 +11,8 @@
 - `models.py`、`engine.py`、`tournament.py`：数据结构、出价结算和比赛流程。
 - `ai_player.py`、`llm_client.py`、`prompts.py`：模型玩家、服务调用和提示词。
 - `main.py`、`controller.py`：程序入口、运行控制。
-- `config.yaml`：玩家名称、人设、模型、服务提供方及超时配置。
+- `players.yaml`：玩家名称、人设、模型及服务提供方（provider）。
+- `config.yaml`：超时等运行配置；`configuration.py` 供 `main.py`、`check_llm.py` 共享读取配置。
 - `analyze.py`：对局统计，统计口径见 `docs/analyze.md`。
 - `logs/`：对局日志；`docs/history/`：历史验证记录。
 
@@ -37,7 +38,7 @@
 
 ### AI 对局
 
-先在 `config.yaml` 中配置玩家及模型，在 `.env` 中填写相应服务的密钥等配置。
+先在 `players.yaml` 中配置玩家名称、人设、模型及 provider，在 `config.yaml` 中设置超时等运行配置，在 `.env` 中填写相应服务的密钥等配置。
 以下命令会访问真实服务，可能产生费用，执行前先征求用户同意。
 
 检查模型服务连接：
