@@ -1,0 +1,106 @@
+"""Offline production Agent / SDK wire contracts; see docs/pydantic-ai-integration.md.
+
+No dotenv, provider discovery or real HTTP: every SDK gets a fake key and MockTransport.
+Successful-stream checking and SDK construction use the production model factory.
+"""
+
+import asyncio
+from copy import deepcopy
+from dataclasses import replace
+import json
+
+import pytest
+
+import httpx2 as http
+
+from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.messages import ToolCallPart, ToolReturnPart, ModelRequest, SystemPromptPart
+
+from tests.support.factories import CHANNELS, TEST_GAME
+from auction_game.configuration import channel_model_profile
+from auction_game.ai.llm_client import ModelFactory, RequestCapture
+from auction_game.reporting.replay import capture_protocol_definition, protocol_tools
+from auction_game.ai.agent_tasks import AuctionDeps, BidOutput as Bid, make_agent as production_agent
+from tests.support.wire import PROTOCOLS, MODEL, SYSTEM, GOOD, Harness, reply, run, make_agent
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_real_sdk_stream_contract(protocol):
+    async def scenario():
+        data = dict(GOOD, super_bid=0)
+        async with Harness(protocol, [reply(data)]) as h:
+            capture = RequestCapture(h.model)
+            result = await run(make_agent(capture), coins=4)
+            assert result.output == Bid(**data)
+            assert len(h.requests) == 1
+            request, body = h.requests[0]
+            assert request.url.path == {"chat": "/v1/chat/completions", "responses": "/v1/responses",
+                                        "anthropic": "/anthropic/v1/messages"}[protocol]
+            assert body["model"] == MODEL and body["stream"] is True
+            field = "max_output_tokens" if protocol == "responses" else "max_tokens"
+            assert body[field] == 123 and "max_completion_tokens" not in body
+            assert request.extensions["timeout"]["read"] == 3.0
+            assert request.headers["x-api-key" if protocol == "anthropic" else "authorization"] == (
+                "fake-key" if protocol == "anthropic" else "Bearer fake-key")
+            assert json.dumps(body).count(SYSTEM) == 1
+            assert json.dumps(body).count('"today"') == 1
+            assert body["tool_choice"] == ({"type": "any"} if protocol == "anthropic" else "required")
+            tool = body["tools"][0]
+            assert tool.get("function", tool)["name"] == "bid"
+            # Unknown aliases retain the provider's default profile, not guessed model-brand routing.
+            assert h.model.profile["supports_tools"] is True
+            parts = [p for m in result.all_messages() for p in m.parts]
+            call = next(p for p in parts if isinstance(p, ToolCallPart))
+            returned = next(p for p in parts if isinstance(p, ToolReturnPart))
+            assert call.tool_call_id == returned.tool_call_id
+            # 同一真实 SDK 请求的工具定义必须与回放离线捕获完全相同；不复制协议转换。
+            snapshot = await capture_protocol_definition(h.factory, capture.requests[0])
+            assert snapshot["source"] == "offline_sdk_mock_transport"
+            assert snapshot["definition"] == protocol_tools(body)
+            assert "body" not in snapshot and snapshot["versions"]["openai"]
+            schema = tool.get("function", tool)
+            schema = schema.get("parameters", schema.get("input_schema"))
+            assert schema["additionalProperties"] is False
+            assert {"type": "null"} in schema["properties"]["super_bid"]["anyOf"]
+            if protocol == "responses":
+                assert snapshot["definition"]["tools"][0]["strict"] is False
+                # 让同一公开 SDK 边界实际发送 JSON null，覆盖展示提取时的保真。
+                nullable = deepcopy(capture.requests[0])
+                nullable["parameters"]["output_tools"][0]["parameters_json_schema"]["properties"]["super_bid"]["default"] = None
+                with_null = await capture_protocol_definition(h.factory, nullable)
+                assert with_null["definition"]["tools"][0]["parameters"]["properties"]["super_bid"]["default"] is None
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("replies,succeeds", [
+    ([reply(dict(GOOD, bid="2")), reply()], True),
+    ([reply(dict(GOOD, bid=6)), reply(dict(GOOD, bid="2"))], False),
+], ids=["schema-then-success", "business-then-schema-exhausts"])
+def test_one_shared_correction_budget(protocol, replies, succeeds):
+    async def scenario():
+        h = Harness(protocol, replies)
+        h.factory = replace(h.factory, model_profile=channel_model_profile(CHANNELS["hub"], protocol))
+        async with h:
+            if succeeds:
+                result = await run(make_agent(h.model), coins=5)
+                assert result.output.bid == 2
+            else:
+                with pytest.raises(UnexpectedModelBehavior, match="retries"):
+                    await run(make_agent(h.model), coins=5)
+            assert len(h.requests) == 2
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_no_tool_exhausts_correction(protocol):
+    async def scenario():
+        # 即使文本是合法出价 JSON，也必须调用输出工具；auto 保留共享一次纠错。
+        h = Harness(protocol, [reply(tool=False, text=json.dumps(GOOD))] * 2)
+        h.factory = replace(h.factory, model_profile=channel_model_profile(CHANNELS["hub"], protocol))
+        async with h:
+            with pytest.raises(UnexpectedModelBehavior):
+                await run(make_agent(h.model))
+            assert len(h.requests) == 2
+            if protocol == "responses":
+                assert all(body["tool_choice"] == "auto" for _, body in h.requests)
+    asyncio.run(scenario())

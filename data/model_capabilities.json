@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "retrieved_from": "https://models.dev/api.json",
+  "fetched_at": "2026-10-16T07:45:56.809070+00:00",
+  "models": {
+    "gpt_astra": {
+      "source": {
+        "provider": "openai",
+        "model": "gpt-6-astra"
+      },
+      "status": "matched",
+      "matched_id": "gpt-6-astra",
+      "canonical_model_id": "openai/gpt-6-astra",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "gpt_sol": {
+      "source": {
+        "provider": "openai",
+        "model": "gpt-6.1-sol"
+      },
+      "status": "matched",
+      "matched_id": "gpt-6.1-sol",
+      "canonical_model_id": "openai/gpt-6.1-sol",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "test_luna": {
+      "source": {
+        "provider": "openai",
+        "model": "gpt-6-luna"
+      },
+      "status": "matched",
+      "matched_id": "gpt-6-luna",
+      "canonical_model_id": "openai/gpt-6-luna",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "deepseek_flash": {
+      "source": {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "canonical_model_id": "deepseek/deepseek-v4.1-flash"
+      },
+      "status": "matched",
+      "matched_id": "deepseek-v4-flash",
+      "canonical_model_id": "deepseek/deepseek-v4.1-flash",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 393216
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "gemini_flash": {
+      "source": {
+        "provider": "google",
+        "model": "gemini-3.8-flash"
+      },
+      "status": "matched",
+      "matched_id": "gemini-3.8-flash",
+      "canonical_model_id": "google/gemini-3.8-flash",
+      "limit": {
+        "context": 1048576,
+        "input": null,
+        "output": 65536
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "glm_pro": {
+      "source": {
+        "provider": "zhipuai",
+        "model": "glm-5.3"
+      },
+      "status": "matched",
+      "matched_id": "glm-5.3",
+      "canonical_model_id": "zhipuai/glm-5.3",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 131072
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "glm_flash": {
+      "source": {
+        "provider": "zhipuai",
+        "model": "glm-5.3-flash"
+      },
+      "status": "matched",
+      "matched_id": "glm-5.3-flash",
+      "canonical_model_id": "zhipuai/glm-5.3-flash",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 131072
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "deepseek_pro": {
+      "source": {
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro"
+      },
+      "status": "matched",
+      "matched_id": "deepseek-v4-pro",
+      "canonical_model_id": "deepseek/deepseek-v4-pro-0813",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 393216
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    }
+  }
+}

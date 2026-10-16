@@ -1,91 +1,42 @@
-# 项目说明
+# 拍卖个人赛
 
-用 Python 实现的大模型拍卖个人赛。AI 名单由 `players.yaml` 决定，
-Bot 默认 6 人；局数、经济与奖池由 `game.yaml` 决定，第一名并列时加赛。
+Python 大模型拍卖游戏；第一名并列加赛。只支持当前规则与新场次格式，历史日志归档保留在 `logs/archive_20261016/`。
 
-当前优先选型、接入成熟通用模型接口，具体方案先调查并经用户确认后实施；
-接入完成后再讨论指挥官设计，确认后开发。
+## 用户修改入口
 
-## 代码与文档入口
+- `configs/game.yaml`：局数、经济与奖池，生产默认值只维护在此。
+- `configs/models.yaml`：模型目录、角色名、显式协议与 models.dev 精确来源。
+- `configs/players.yaml`：阵容目录引用、人设与虚构预测胜率；名单只在配置维护，文档和测试使用实际配置或合成名单。
+- `configs/config.yaml`：测试替身、超时、渠道 URL 与密钥环境变量名；密钥只放根 `.env`。
+- `RULES.template.md`：规则正文源；规则文字与代码共同维护。
 
-- `RULES.template.md`：完整规则正文的维护源；`rules.py` 按比赛参数与实际名单渲染，供 `prompts.py` 构建提示词。
-- `RULES.md`：生成的可读规则，修改规则时编辑模板并重新生成。
-- `game.yaml`、`game_rules.py`：比赛参数及共享校验；生产默认值只维护在 `game.yaml`。
-- `models.py`、`engine.py`、`tournament.py`：数据结构、出价结算和比赛流程。
-- `ai_player.py`：规范历史与首日缓存事务；`agent_tasks.py`：拍卖任务与共享纠错；`prompts.py`：提示词。
-- `agent_execution.py`：通用 Agent 执行与历史隔离；`agent_log.py`：审计写入与消息投影；`llm_client.py`：模型工厂与请求级重试。
-- `main.py`：命令行解析与模式分派；`runners.py`：Bot/AI 玩家组装与比赛启动。
-- `ai_speech.py`：AI 发言编排；`run_output.py`：运行目录、局末日志与最终结果展示。
-- `benchmark.py`：批量策略对照及统计；`players.py`：Bot 名单和随机/脚本玩家。
-- `controller.py`：轮级并行与暂停控制；`RoundTask.participant` 显式接入可选检查点参与者。
-- `players.yaml`：玩家名称、人设、渠道引用（provider）、显式协议与输出预算。
-- `config.yaml`：超时及渠道地址、密钥环境变量名；`configuration.py` 集中校验运行与玩家配置。
-- `analyze.py`：对局统计，统计口径见 `docs/analyze.md`。
-- `offline_demo.py`、`replay.py`：生产入口的离线完整赛与单玩家关键节点回放，使用方式见 `docs/pydantic-ai-integration.md`。
-- `logs/`：对局日志；`docs/history/`：历史验证记录。
+AI、Bot、benchmark、offline 启动在创建日志或请求模型前自动同步根 `RULES.md`；根文档使用配置身份，场次使用实际名单。内容一致不重写，配置、模板或写入失败停止启动。Bot 无需密钥，能力快照只离线读取。手动预览：`python -m auction_game.game.rules`；`--check` 只读。连通检查独立于游戏参数，统计不修改历史。
 
-规则文字与代码共同决定实际行为，修改规则时需要一起检查。
-每场 AI/Bot 日志目录保存本场 `RULES.md`；统计使用日志内的参数快照。
+## 按任务查代码
 
-## 运行
+- 启动与路径：根 `main.py` 保留参数解析及模式分派；`auction_game/paths.py` 集中默认路径，配置在 `configuration.py`，组装在 `runners.py`。
+- 游戏规则、结算、Bot、比赛流程：`auction_game/game/`。
+- 提示词：`auction_game/ai/prompts.py`；schema 与共享纠错：`agent_tasks.py`；历史事务：`ai_player.py`。
+- 修改模型调用、历史、重试或协议兼容前，先读 `docs/pydantic-ai-integration.md`。通用执行器、模型工厂与发言编排在 `auction_game/ai/`。
+- 修改暂停与补跑前查 `auction_game/controller.py`，保留两种暂停竞态回归。`RoundTask.participant` 显式接入检查点，已完成结果保留，仅补跑未完成部分。
+- 日志布局、捕获与回放：`auction_game/reporting/`；统计口径先读 `docs/analyze.md`。
+- 用户命令、能力预算与产物阅读：`docs/usage.md`。独立工具在 `auction_game/cli/`，使用 `python -m`，无旧脚本转发壳。
 
-在项目根目录使用现有 `C:\Python313\python.exe` 安装依赖，再执行以下命令：
+## 费用边界
 
-    python -m pip install -r requirements.txt
+用户授权连通排查后，可执行单次最小对照请求，每次至多一次调用且无自动重试；扩大批量范围须确认。其他收费操作，包括测试赛、正式赛与重跑，均给出命令由用户亲自运行。首次真实比赛由用户运行全测试模型完整赛，检查并确认后再用常规阵容。
 
-### 测试与随机玩家
+比赛最大输出使用能力快照，未知回退 64000；明确列出 high 才按协议使用公开设置，详见使用说明。Hub Responses 的兼容 profile 保留，严格 schema 和一次共享纠错不变。
 
-自动化测试不调用真实模型服务：
+## 离线验证
 
-    python -m pytest tests/ -q
+使用现有 `C:\Python313\python.exe`，不创建隔离环境。测试不调用真实模型，不读取真实 `.env`。
 
-运行一场随机玩家对局，固定随机种子便于复现：
+```bash
+python -m pytest tests/ -q
+python -m auction_game.game.rules --check
+python -m pip check
+git diff --check
+```
 
-    python main.py --seed 42
-
-批量运行纯随机与最高可付价策略对照，场数须为正整数；两组各 N 场，共 2N 场，不写日志。
-策略玩家每天出 `min(出价上限, 当前余额)`，不使用超级出价；策略与随机对手的均值比较均取第二组。
-
-    python main.py --benchmark 50
-
-`main.py` 成功或用户主动 `q` 中止返回 0，已处理的启动配置错误返回 1，命令行参数错误返回 2。
-
-### AI 对局
-
-先在 `players.yaml` 中配置玩家名称、人设、原始模型名、provider、protocol、max_tokens。
-provider 引用 `config.yaml` 的 `llm.channels`；渠道定义 base_url 和 api_key_env，密钥写入 `.env` 对应变量。
-protocol 必填 `chat` / `responses` / `anthropic`，渠道名不决定协议。OpenAI 地址保留 `/v1`，Anthropic 地址由 SDK 追加 `/v1/messages`。
-AI、Bot 和 benchmark 均读取 `game.yaml`；`check_llm.py` 只检查服务连接，不依赖比赛参数。
-Agent 负责结构化输出及一次共享纠错；SDK 重试为 0，模型层每请求至多一次基础设施重试。修改任务、历史事务、重试或排查协议兼容时先读 `docs/pydantic-ai-integration.md`。
-拍卖业务提示统一维护在 `prompts.py`；输出 schema 与纠错继续维护在 `agent_tasks.py`。
-以下命令会访问真实服务，可能产生费用，执行前先征求用户同意。
-
-检查模型服务连接：
-
-    python check_llm.py
-
-开始 AI 对局：
-
-    python main.py --ai
-
-运行中：回车推进一次出价或发言，`c` 连续运行，`s` 切回单步，
-`p` 暂停，`q` 中止。暂停后恢复会保留已完成结果，只补跑未完成部分。
-
-### 生成规则文档
-
-修改 `game.yaml`、`players.yaml` 或规则模板后刷新可读文档；生成和检查均离线执行：
-
-    python rules.py
-    python rules.py --check
-
-`--check` 在文档过期或模板错误时返回非零。比赛提示词直接按本场参数生成，刷新文档不影响比赛运行。
-
-### 查看统计
-
-分析最新 AI 对局：
-
-    python analyze.py
-
-分析指定对局：
-
-    python analyze.py logs/<场次目录>
+完整假模型赛：`python -m auction_game.cli.offline_demo`，所有新场次统一进入 `logs/`，benchmark 不写场次。优先复用现有完整赛和合成回归，保持严格校验、请求预算、隐私隔离与暂停行为。

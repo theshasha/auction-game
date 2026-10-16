@@ -1,0 +1,70 @@
+# 稳定目录键供 players.yaml / config.test_model 引用；名称只在这里维护。
+# models_dev 是精确公共来源，与 Hub API ID 分开；预算由离线能力快照生成。
+# high 支持以同步条目的 reasoning_options 为准，公开设置按 protocol 选择。
+models:
+  gpt_astra:
+    name: GPT姐姐
+    model: gpt-6-astra
+    provider: hub
+    protocol: responses
+    models_dev:
+      provider: openai
+      model: gpt-6-astra
+  gpt_sol:
+    name: GPT妹妹
+    model: gpt-6.1-sol
+    provider: hub
+    protocol: responses
+    models_dev:
+      provider: openai
+      model: gpt-6.1-sol
+  test_luna:
+    # 测试替身没有参赛角色名，不可直接加入 players。
+    model: gpt-6-luna
+    provider: hub
+    protocol: responses
+    models_dev:
+      provider: openai
+      model: gpt-6-luna
+  deepseek_flash:
+    name: 鲸鱼妹妹
+    model: deepseek-v4.1-flash
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: deepseek
+      # 上游官方条目保留旧键，但 canonical ID 明确对应当前型号；同步时校验。
+      model: deepseek-v4-flash
+      canonical_model_id: deepseek/deepseek-v4.1-flash
+  gemini_flash:
+    name: 双子妹妹
+    model: gemini-3.8-flash
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: google
+      model: gemini-3.8-flash
+  glm_pro:
+    name: GLM姐姐
+    model: glm-5.3
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: zhipuai
+      model: glm-5.3
+  glm_flash:
+    name: GLM妹妹
+    model: glm-5.3-flash
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: zhipuai
+      model: glm-5.3-flash
+  deepseek_pro:
+    name: 鲸鱼姐姐
+    model: deepseek-v4-pro
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: deepseek
+      model: deepseek-v4-pro

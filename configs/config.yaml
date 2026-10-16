@@ -1,0 +1,12 @@
+# models.yaml 的 provider 引用这里的渠道；OpenAI 地址保留 /v1。
+# 测试模式整体采用此目录条目的调用配置，身份与历史保持独立。
+test_model: test_luna
+llm:
+  timeout_seconds: 900
+  channels:
+    hub:
+      base_url: https://hub.oaifree.com/v1
+      api_key_env: HUB_API_KEY
+      # Hub Responses 仅接受 auto；保留工具及 Agent 的严格输出校验。
+      responses_profile:
+        supports_forced_tool_choice: false
