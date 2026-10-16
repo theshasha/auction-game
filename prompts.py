@@ -1,6 +1,7 @@
-"""所有发给 AI 的消息模板 + 局日志/排名的可读渲染（AI 消息与终端输出共用）。
+"""拍卖业务提示的集中入口 + 局日志/排名的可读渲染。
 
 规则正文维护于 RULES.template.md，按本场 game 与实际名单实时渲染到 system。
+依次提供 system、开局、规划、出价、局末和终局提示；schema 与纠错留在 agent_tasks。
 """
 
 from __future__ import annotations

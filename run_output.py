@@ -15,7 +15,7 @@ LOG_DIR = ROOT_DIR / "logs"
 
 
 def make_run_dir(mode: str) -> Path:
-    """为本场运行创建独立日志目录 logs/<时间戳>_<模式>/，并更新 logs/latest 软链接。"""
+    """为本场运行创建独立日志目录 logs/<时间戳>_<模式>/。"""
     base_name = f"{datetime.now():%Y%m%d_%H%M%S}_{mode}"
     run_dir = LOG_DIR / base_name
     suffix = 2
@@ -24,15 +24,7 @@ def make_run_dir(mode: str) -> Path:
         suffix += 1
     run_dir.mkdir(parents=True)
 
-    latest_link = LOG_DIR / "latest"
-    try:
-        if latest_link.is_symlink() or latest_link.exists():
-            latest_link.unlink()
-        latest_link.symlink_to(run_dir.name)
-    except OSError as exc:
-        print(f"警告：更新 logs/latest 软链接失败（{exc}），不影响日志写入")
-
-    print(f"本场日志目录：{run_dir.relative_to(ROOT_DIR)}")
+    print(f"本场日志目录：{run_dir}")
     return run_dir
 
 
@@ -54,7 +46,7 @@ def make_publish(log_dir: Path):
             f"截至本局的累计排名:\n{prompts.render_standings(standings)}\n"
         )
         (log_dir / f"match_{log.match_index}.md").write_text(text, encoding="utf-8")
-        match_log_path = (log_dir / f"match_{log.match_index}").relative_to(ROOT_DIR)
+        match_log_path = log_dir / f"match_{log.match_index}"
         print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {match_log_path}.json/.md")
 
     return publish

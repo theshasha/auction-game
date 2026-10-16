@@ -16,7 +16,8 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart, ModelRequest, SystemPromptPart
 
 from conftest import TEST_GAME
-from llm_client import ModelFactory
+from llm_client import ModelFactory, RequestCapture
+from replay import capture_protocol_definition, protocol_tools
 from agent_tasks import AuctionDeps, BidOutput as Bid, make_agent as production_agent
 
 
@@ -196,7 +197,8 @@ def test_real_sdk_stream_contract(protocol):
     async def scenario():
         data = dict(GOOD, super_bid=0)
         async with Harness(protocol, [reply(data)]) as h:
-            result = await run(make_agent(h.model), coins=4)
+            capture = RequestCapture(h.model)
+            result = await run(make_agent(capture), coins=4)
             assert result.output == Bid(**data)
             assert len(h.requests) == 1
             request, body = h.requests[0]
@@ -219,6 +221,23 @@ def test_real_sdk_stream_contract(protocol):
             call = next(p for p in parts if isinstance(p, ToolCallPart))
             returned = next(p for p in parts if isinstance(p, ToolReturnPart))
             assert call.tool_call_id == returned.tool_call_id
+            # 同一真实 SDK 请求的工具定义必须与回放离线捕获完全相同；不复制协议转换。
+            snapshot = await capture_protocol_definition(h.factory, capture.requests[0])
+            assert snapshot["source"] == "offline_sdk_mock_transport"
+            assert snapshot["definition"] == protocol_tools(body)
+            assert snapshot["definition"] == protocol_tools(snapshot["body"])
+            schema = tool.get("function", tool)
+            schema = schema.get("parameters", schema.get("input_schema"))
+            assert schema["additionalProperties"] is False
+            assert {"type": "null"} in schema["properties"]["super_bid"]["anyOf"]
+            if protocol == "responses":
+                assert snapshot["definition"]["tools"][0]["strict"] is False
+                # 让同一公开 SDK 边界实际发送 JSON null，覆盖展示提取时的保真。
+                nullable = deepcopy(capture.requests[0])
+                nullable["parameters"]["output_tools"][0]["parameters_json_schema"]["properties"]["super_bid"]["default"] = None
+                with_null = await capture_protocol_definition(h.factory, nullable)
+                assert with_null["body"]["tools"][0]["parameters"]["properties"]["super_bid"]["default"] is None
+                assert with_null["definition"]["tools"][0]["parameters"]["properties"]["super_bid"]["default"] is None
     asyncio.run(scenario())
 
 

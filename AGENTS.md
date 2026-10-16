@@ -21,6 +21,7 @@ Bot 默认 6 人；局数、经济与奖池由 `game.yaml` 决定，第一名并
 - `players.yaml`：玩家名称、人设、渠道引用（provider）、显式协议与输出预算。
 - `config.yaml`：超时及渠道地址、密钥环境变量名；`configuration.py` 集中校验运行与玩家配置。
 - `analyze.py`：对局统计，统计口径见 `docs/analyze.md`。
+- `offline_demo.py`、`replay.py`：生产入口的离线完整赛与单玩家关键节点回放，使用方式见 `docs/pydantic-ai-integration.md`。
 - `logs/`：对局日志；`docs/history/`：历史验证记录。
 
 规则文字与代码共同决定实际行为，修改规则时需要一起检查。
@@ -56,6 +57,7 @@ provider 引用 `config.yaml` 的 `llm.channels`；渠道定义 base_url 和 api
 protocol 必填 `chat` / `responses` / `anthropic`，渠道名不决定协议。OpenAI 地址保留 `/v1`，Anthropic 地址由 SDK 追加 `/v1/messages`。
 AI、Bot 和 benchmark 均读取 `game.yaml`；`check_llm.py` 只检查服务连接，不依赖比赛参数。
 Agent 负责结构化输出及一次共享纠错；SDK 重试为 0，模型层每请求至多一次基础设施重试。修改任务、历史事务、重试或排查协议兼容时先读 `docs/pydantic-ai-integration.md`。
+拍卖业务提示统一维护在 `prompts.py`；输出 schema 与纠错继续维护在 `agent_tasks.py`。
 以下命令会访问真实服务，可能产生费用，执行前先征求用户同意。
 
 检查模型服务连接：

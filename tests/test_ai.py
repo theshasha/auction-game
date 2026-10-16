@@ -28,19 +28,35 @@ def test_invalid_output_uses_one_shared_correction(invalid):
     assert any(isinstance(p, RetryPromptPart) for m in player.messages for p in m.parts)
 
 
-def test_format_then_business_error_does_not_reset_budget(tmp_path):
+def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch):
     runner = fake_task_runner([bid_reply("2"), bid_reply(7)])
+    runner.executor.capture_requests = True
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
-        player.decide_bid(make_ai_obs(coins=3))
+        player.decide_bid(make_ai_obs(day=2, coins=3))
     assert len(runner.calls) == 2 and player.messages == before
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     assert entry["status"] == "failed" and entry["error"]["type"] == "OutputFailedError"
+    assert [request["request"] for request in entry["requests"]] == [1, 2]
+    assert any(part["part_kind"] == "retry-prompt"
+               for message in entry["requests"][1]["messages"] for part in message["parts"])
+    assert all(request["response"] for request in entry["requests"])
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 2
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "retry-prompt" in md and "call-1" in md and "OutputFailedError" in md
+    # 同一次真实纠错审计导出后，首次无效回复与纠错输入都必须可见。
+    from configuration import load_configuration
+    import replay
+    config, players = load_configuration()
+    monkeypatch.setattr(replay, "load_configuration", lambda: (config, [dict(players[0], name="Alpha")]))
+    monkeypatch.setattr(replay, "load_match_logs", lambda _: [{"standings_after_match": []}])
+    readable = replay.export_replay(tmp_path, "Alpha", simulated=True).read_text(encoding="utf-8")
+    assert "第一次回复" in readable and "纠正后回复" in readable
+    assert '"bid": "2"' in readable and '"bid": 7' in readable
+    assert "渲染后的新增提示全文" in readable and "Input should be a valid integer" in readable
+    assert "本次结果不提交玩家历史" in readable
 
 
 def test_custom_game_and_realtime_balance_use_shared_rules():

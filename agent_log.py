@@ -53,15 +53,16 @@ class AgentLog:
         self.name = name
         self.path = path
         self.result_renderer = result_renderer
+        self._task_number = 0
 
     def success(self, entry: dict, result: ExecutionResult) -> None:
-        self._write({**entry, "status": "success",
+        self._write({**entry, **({"requests": result.requests} if result.requests else {}), "status": "success",
                      "messages": ModelMessagesTypeAdapter.dump_python(result.messages, mode="json"),
                      "request_errors": result.request_errors,
                      "result": result.output.model_dump() if isinstance(result.output, BaseModel) else result.output})
 
     def failure(self, entry: dict, error: CallFailedError) -> None:
-        self._write({**entry, "status": "failed",
+        self._write({**entry, **({"requests": error.requests} if error.requests else {}), "status": "failed",
                      "messages": ModelMessagesTypeAdapter.dump_python(error.messages, mode="json"),
                      "request_errors": error.request_errors,
                      "error": {"type": type(error).__name__, "message": str(error)}})
@@ -69,6 +70,8 @@ class AgentLog:
     def _write(self, entry: dict) -> None:
         if self.path is None:
             return
+        self._task_number += 1
+        entry = {"task_id": f"task-{self._task_number:04d}", **entry}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")

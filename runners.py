@@ -36,7 +36,12 @@ def run_bots(seed) -> int:
     return 0
 
 
-def run_ai() -> int:
+def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=None,
+           start_reader=True) -> int:
+    """生产组装入口；离线演示仅注入模型边界、输出目录及控制器推进方式。
+
+    record_player 按需记录单玩家完整逻辑请求，默认不膨胀普通比赛日志。
+    """
     try:
         config, player_configs = load_configuration()
         game = load_game_settings()
@@ -52,23 +57,25 @@ def run_ai() -> int:
     predictions = [(pc["name"], pc.get("predicted_win_rate", 0)) for pc in player_configs]
 
     task_runners = {}
+    model_factory = model_factory or make_model_factory
     for pc in player_configs:
         try:
-            task_runners[pc["name"]] = TaskRunner(make_model_factory(
+            task_runners[pc["name"]] = TaskRunner(model_factory(
                 provider=pc["provider"],
                 channel=config["llm"]["channels"][pc["provider"]],
                 model=pc["model"],
                 timeout=timeout,
                 protocol=pc["protocol"],
                 max_tokens=pc["max_tokens"],
-            ))
+            ), capture_requests=pc["name"] == record_player)
         except (MissingApiKeyError, ValueError) as exc:
             print(f"错误：玩家 {pc['name']} 的 LLM 配置不可用：{exc}")
             return 1
 
-    run_dir = make_run_dir("ai")
+    run_dir = run_dir if run_dir is not None else make_run_dir("ai")
+    run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "RULES.md").write_text(render_rules(game, all_names), encoding="utf-8")
-    controller = Controller(mode="step")
+    controller = controller if controller is not None else Controller(mode="step")
 
     players = [
         AIPlayer(
@@ -86,7 +93,8 @@ def run_ai() -> int:
     for pc in player_configs:
         print(f"{pc['name']}: {pc['provider']} / {pc['model']}（人设：{pc['persona_title']}）")
 
-    controller.start_stdin_reader()
+    if start_reader:
+        controller.start_stdin_reader()
     print("命令：回车=推进一轮 / c=连续模式 / s=单步模式 / p=暂停（保留已完成，恢复后仅补跑未完成）/ q=中止比赛")
 
     def bid_collector(observations):

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field
 import os
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from pydantic_ai.models import CompletedStreamedResponse
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_core import to_jsonable_python
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -35,6 +38,34 @@ def retryable_request_error(exc: Exception) -> bool:
         return retryable_request_error(exc.__cause__)
     return isinstance(exc, (openai.APIConnectionError, anthropic.APIConnectionError,
                             http.NetworkError, http.TimeoutException, http.RemoteProtocolError))
+
+
+class RequestCapture(WrapperModel):
+    """按需捕获 Agent 的逻辑请求；不干预流、结束判定或重试。"""
+
+    def __init__(self, wrapped):
+        super().__init__(wrapped)
+        self.requests = []
+
+    @property
+    def request_errors(self):
+        return self.wrapped.request_errors
+
+    @asynccontextmanager
+    async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
+        record = {"request": len(self.requests) + 1,
+                  "messages": ModelMessagesTypeAdapter.dump_python(deepcopy(messages), mode="json"),
+                  "settings": to_jsonable_python(deepcopy(model_settings)),
+                  "parameters": to_jsonable_python(asdict(model_request_parameters))}
+        self.requests.append(record)
+        try:
+            async with self.wrapped.request_stream(messages, model_settings, model_request_parameters, run_context) as stream:
+                yield stream
+                record["response"] = ModelMessagesTypeAdapter.dump_python([stream.get()], mode="json")[0]
+        finally:
+            errors = [error.copy() for error in self.request_errors if error["request"] == record["request"]]
+            if errors:
+                record["errors"] = errors
 
 
 class BufferedRequest(WrapperModel):

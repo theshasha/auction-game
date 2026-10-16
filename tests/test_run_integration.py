@@ -21,13 +21,6 @@ def test_bot_run_publishes_rules_and_replayable_statistics(tmp_path, monkeypatch
     run_dirs = [path for path in log_dir.glob("*_bot") if path.is_dir()]
     assert len(run_dirs) == 1
     run_dir = run_dirs[0]
-    # Windows 无创建软链接权限时，沿用 make_run_dir 的告警容错。
-    latest = log_dir / "latest"
-    if latest.is_symlink():
-        assert latest.resolve() == run_dir.resolve()
-    else:
-        assert "更新 logs/latest 软链接失败" in run_output_text
-
     matches = analyze.load_match_logs(run_dir)
     assert len(matches) == 4
     assert "共进行 4 局（正赛 2 局 + 加赛 2 局）" in run_output_text
