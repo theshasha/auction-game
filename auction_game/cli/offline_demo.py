@@ -76,7 +76,8 @@ class DemoFactory:
 
 def generate_demo(output: Path | None = None, player: str | None = None, *, test_model=False):
     """返回回放路径及模型资源计数；赛后另以假密钥离线捕获 SDK 工具定义。"""
-    _, configs = load_configuration(test_model=test_model)
+    loaded_configuration = load_configuration(test_model=test_model)
+    _, configs = loaded_configuration
     game = load_game_settings()
     sync_root_rules(game)
     names = [pc["name"] for pc in configs]
@@ -105,7 +106,8 @@ def generate_demo(output: Path | None = None, player: str | None = None, *, test
     controller.offer_command("c")
     with override_allow_model_requests(False):
         status = run_ai(model_factory=factory, run_dir=output, controller=controller,
-                         record_player=player, start_reader=False, test_model=test_model, run_type="offline")
+                         record_player=player, start_reader=False, test_model=test_model, run_type="offline",
+                         loaded_configuration=loaded_configuration)
     if status:
         raise RuntimeError(f"离线比赛启动失败：{status}")
     replay = export_replay(output, player, simulated=True, capture_definitions=True)

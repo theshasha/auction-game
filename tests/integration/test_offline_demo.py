@@ -52,7 +52,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     monkeypatch.setattr(analyze, "LOG_DIR", tmp_path)
     with pytest.raises(SystemExit, match="没有有效"):
         analyze.find_latest_ai_run()
-    assert len(matches) == game.regular_matches == 5
+    assert len(matches) == game.regular_matches
     expected_wins = sum(game.daily_pool)
     for index, payload in enumerate(matches, 1):
         match = payload["match"]
@@ -176,7 +176,8 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     monkeypatch.setattr("auction_game.configuration.load_game_settings", lambda: (_ for _ in ()).throw(AssertionError("应读快照")))
     analyze.analyze(run_dir)
     output = capsys.readouterr().out
-    assert "共进行 5 局（正赛 5 局 + 加赛 0 局）" in output
-    assert "总拍卖天数：30" in output
-    assert f"{selected}：胜30" in output
+    # 跟随当前比赛配置核对完整赛输出，修改生产参数无需同步维护旧默认值。
+    assert f"共进行 {game.regular_matches} 局（正赛 {game.regular_matches} 局 + 加赛 0 局）" in output
+    assert f"总拍卖天数：{game.regular_matches * game.max_days}" in output
+    assert f"{selected}：胜{game.regular_matches * expected_wins}" in output
     assert "测试运行结果（非身份模型成绩）" in output

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,8 +48,10 @@ def render_task_result(result: dict | str) -> list[str]:
         lines.append(f"### 私有策略\n\n{result['strategy']}")
     if "speech" in result:
         lines.append(f"### 公开发言\n\n{result['speech']}")
-    else:
-        lines.append("出价结果：" + json.dumps(result, ensure_ascii=False))
+    elif "bid" in result:
+        super_bid = result["super_bid"]
+        lines.append(f"### 提交出价\n\n正常出价 {result['bid']}；超级出价 "
+                     f"{super_bid if super_bid is not None else '未使用'}")
     return lines
 
 

@@ -40,13 +40,16 @@ def run_bots(seed) -> int:
 
 
 def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=None,
-           start_reader=True, test_model=False, run_type=None) -> int:
+           start_reader=True, test_model=False, run_type=None, loaded_configuration=None) -> int:
     """生产组装入口；离线演示仅注入模型边界、输出目录及控制器推进方式。
 
     record_player 按需记录单玩家完整逻辑请求，默认不膨胀普通比赛日志。
+    loaded_configuration 供离线入口复用本次启动已解析的配置，不再次读取 YAML。
     """
     try:
-        config, player_configs = load_configuration(test_model=True) if test_model else load_configuration()
+        if loaded_configuration is None:
+            loaded_configuration = load_configuration(test_model=True) if test_model else load_configuration()
+        config, player_configs = loaded_configuration
         game = load_game_settings()
         sync_root_rules(game)
     except ConfigurationError as exc:
@@ -56,6 +59,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         print("错误：AI 对局至少需要 2 名玩家，请检查 players.yaml")
         return 1
     timeout = config["llm"]["timeout_seconds"]
+    max_concurrency = config["llm"]["max_concurrency"]
 
     all_names = [pc["name"] for pc in player_configs]
     predictions = [(pc["name"], pc.get("predicted_win_rate", 0)) for pc in player_configs]
@@ -86,6 +90,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         "mode": "test_model" if test_model else "regular",
         "game": game.to_dict(),
         "timeout_seconds": timeout,
+        "max_concurrency": max_concurrency,
         "players": [{
             "name": pc["name"], "persona_title": pc["persona_title"], "persona_text": pc["persona_text"],
             "predicted_win_rate": pc.get("predicted_win_rate", 0),
@@ -99,6 +104,8 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
     }
     paths = initialize_run(run_dir, snapshot, render_rules(game, all_names))
     controller = controller if controller is not None else Controller(mode="step")
+    # 注入的离线控制器也使用同一份已校验配置，所有轮级任务共用此上限。
+    controller.max_concurrency = max_concurrency
 
     players = [
         AIPlayer(
@@ -116,6 +123,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         for number, pc in enumerate(player_configs, 1)
     ]
     print("测试运行：全员使用配置的测试模型，角色身份与独立历史保持不变。" if test_model else "常规阵容运行")
+    print(f"整轮任务并发上限：{max_concurrency}（实际不超过待执行任务数）")
     for pc in player_configs:
         print(f"{pc['name']}: 身份 {pc['identity_model']['model']} → 实际 {pc['provider']} / "
               f"{pc['protocol']} / {pc['model']}（人设：{pc['persona_title']}）")
@@ -127,7 +135,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
 
     if start_reader:
         controller.start_stdin_reader()
-    print("命令：回车=推进一轮 / c=连续模式 / s=单步模式 / p=暂停（保留已完成，恢复后仅补跑未完成）/ q=中止比赛")
+    print("命令：回车=推进一轮 / c=连续模式 / s=单步模式 / p=暂停（等待在途并保留成功，恢复仅补跑失败/未启动）/ q=中止比赛")
 
     def bid_collector(observations):
         sample_obs = observations[0][1]  # 同一轮内所有玩家的局/天相同

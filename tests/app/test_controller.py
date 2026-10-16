@@ -19,6 +19,7 @@ from tests.support.factories import (
 )
 from auction_game.controller import Controller, RoundTask, TournamentAborted, run_parallel_round
 from auction_game import controller as controller_module
+from auction_game.ai.agent_execution import CallFailedError
 
 
 @contextmanager
@@ -148,6 +149,191 @@ class TestController:
 
 
 class TestParallelRound:
+    @pytest.mark.parametrize("limit", [1, 2, 10])
+    def test_bounded_dispatch_and_serial_order(self, limit):
+        count = 5
+        releases = [threading.Event() for _ in range(count)]
+        started = [threading.Event() for _ in range(count)]
+        lock = threading.Lock()
+        live = 0
+        peak = 0
+        calls = []
+        controller = Controller(mode="continuous", max_concurrency=limit, announce=lambda _: None)
+
+        def task(index):
+            nonlocal live, peak
+            with lock:
+                live += 1
+                peak = max(peak, live)
+                calls.append(index)
+            started[index].set()
+            assert releases[index].wait(timeout=5)
+            with lock:
+                live -= 1
+            return index
+
+        tasks = [RoundTask(str(i), lambda i=i: task(i)) for i in range(count)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "有界"), *releases) as (thread, outcome):
+            first_batch = min(limit, count)
+            assert all(event.wait(timeout=5) for event in started[:first_batch])
+            assert not any(event.is_set() for event in started[first_batch:])
+            for index in range(count):
+                assert started[index].wait(timeout=5)
+                releases[index].set()
+            thread.join(timeout=5)
+            assert outcome.get("result") == {str(i): i for i in range(count)}
+            assert peak == first_batch
+            if limit == 1:
+                assert calls == list(range(count))
+
+    @pytest.mark.parametrize("command", ["", "c"])
+    def test_fast_resume_and_repeated_pause_preserve_event(self, command):
+        release = threading.Event()
+        started = threading.Event()
+        announcements = []
+        controller = Controller(mode="continuous", max_concurrency=1, announce=announcements.append)
+        calls = []
+
+        def first():
+            calls.append("first")
+            started.set()
+            assert release.wait(timeout=5)
+            return 1
+
+        def second():
+            calls.append("second")
+            return 2
+
+        tasks = [RoundTask("first", first), RoundTask("second", second)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "快速恢复"), release) as (thread, outcome):
+            assert started.wait(timeout=5)
+            controller.offer_command("p")
+            controller.offer_command(command)
+            controller.offer_command("p")  # 已暂停时重复 p，不清除恢复意图
+            release.set()
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"first": 1, "second": 2}
+            assert calls == ["first", "second"]
+            assert sum("正在暂停" in message for message in announcements) == 1
+            assert any("成功 1、失败 0、未启动 1" in message for message in announcements)
+
+    def test_pause_keeps_success_and_holds_unstarted_until_resume(self):
+        release = threading.Event()
+        started = threading.Event()
+        gate = threading.Event()
+        controller = Controller(mode="continuous", max_concurrency=1,
+                                announce=lambda msg: gate.set() if msg.startswith("[单步]") else None)
+        calls = []
+
+        def first():
+            calls.append("first")
+            started.set()
+            assert release.wait(timeout=5)
+            return 1
+
+        def second():
+            calls.append("second")
+            return 2
+
+        tasks = [RoundTask("first", first), RoundTask("second", second)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "暂停派发"), release) as (thread, outcome):
+            assert started.wait(timeout=5)
+            controller.offer_command("p")
+            release.set()
+            assert gate.wait(timeout=5)
+            assert calls == ["first"]
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"first": 1, "second": 2}
+            assert calls == ["first", "second"]
+
+    def test_pause_retries_failed_and_unstarted_only_after_new_confirmation(self):
+        release = threading.Event()
+        first_started = threading.Event()
+        pause_requested = threading.Event()
+        gate = threading.Event()
+        announcements = []
+
+        def announce(message):
+            announcements.append(message)
+            if message.startswith("[单步]"):
+                gate.set()
+
+        controller = Controller(mode="continuous", max_concurrency=2, announce=announce)
+        calls = [0, 0, 0]
+
+        def task(index):
+            calls[index] += 1
+            if index == 0:
+                first_started.set()
+                assert release.wait(timeout=5)
+            if index == 1 and calls[index] == 1:
+                controller.offer_command("p")
+                controller.offer_command("c")  # 失败发生前的恢复不足以确认重试
+                pause_requested.set()
+                raise CallFailedError("测试失败")
+            return index
+
+        tasks = [RoundTask(str(i), lambda i=i: task(i)) for i in range(3)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "混合"), release) as (thread, outcome):
+            assert first_started.wait(timeout=5)
+            assert pause_requested.wait(timeout=5)
+            release.set()
+            assert gate.wait(timeout=5)
+            assert "result" not in outcome
+            assert calls == [1, 1, 0]
+            assert any("成功 1、失败 1、未启动 1" in message for message in announcements)
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"0": 0, "1": 1, "2": 2}
+            assert calls == [1, 2, 1]
+
+    def test_quit_drains_inflight_rolls_back_and_does_not_dispatch_more(self):
+        release = threading.Event()
+        started = threading.Event()
+        controller = Controller(mode="continuous", max_concurrency=1, announce=lambda _: None)
+
+        class Participant:
+            value = 0
+            restored = []
+
+            def checkpoint(self):
+                return None
+
+            def rollback(self, checkpoint):
+                self.restored.append(checkpoint)
+                self.value = 0
+
+            def run(self):
+                started.set()
+                assert release.wait(timeout=5)
+                self.value = 1
+                return 1
+
+        participant = Participant()
+        tasks = [RoundTask("first", participant.run, participant),
+                 RoundTask("unstarted", lambda: pytest.fail("q 后不得派发"))]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "中止"), release) as (thread, outcome):
+            assert started.wait(timeout=5)
+            controller.offer_command("q")
+            assert thread.is_alive()
+            release.set()
+            thread.join(timeout=5)
+            assert isinstance(outcome.get("error"), TournamentAborted)
+            assert participant.value == 0
+            assert participant.restored == [None]
+
+    def test_program_error_propagates_even_after_pause(self):
+        controller = Controller(mode="continuous", announce=lambda _: None)
+
+        def broken():
+            controller.offer_command("p")
+            raise ValueError("真实程序错误")
+
+        with pytest.raises(ValueError, match="真实程序错误"):
+            run_parallel_round([RoundTask("broken", broken)], controller, "程序错误")
+
     def test_non_player_participant_rolls_back_while_stateless_result_is_kept(self, monkeypatch):
         started = threading.Event()
         release = threading.Event()
@@ -174,6 +360,8 @@ class TestParallelRound:
                 self.value += 1
                 started.set()
                 assert release.wait(timeout=5)
+                if self.calls == 1:
+                    raise CallFailedError("测试服务故障")
                 return self.value
 
         counter = Counter()
@@ -188,7 +376,7 @@ class TestParallelRound:
         def track_collection(futures):
             for future in original_as_completed(futures):
                 yield future
-                if future.result() == "ready":
+                if future.exception() is None and future.result() == "ready":
                     stateless_collected.set()
 
         monkeypatch.setattr(controller_module, "as_completed", track_collection)
@@ -205,17 +393,30 @@ class TestParallelRound:
             assert outcome.get("result") == {"stateless": "ready", "counter": 1}
             assert counter.calls == 2 and stateless_calls == [1]
 
-    def test_pause_restores_consumed_plan_before_result_collection(self, monkeypatch):
+    def test_pause_keeps_consumed_plan_before_result_collection(self, monkeypatch):
         ready = threading.Event()
         release_collection = threading.Event()
         gate = threading.Event()
+        announcements = []
+
+        def announce(message):
+            announcements.append(message)
+            if message.startswith("[单步]"):
+                gate.set()
+
         controller = Controller(
             mode="continuous",
-            announce=lambda msg: gate.set() if msg.startswith("[单步]") else None,
+            announce=announce,
         )
         task_runner = fake_task_runner([bid_reply(2, 6)])
         player = make_named_player("Alpha", task_runner)
         player.plan_strategy("请规划", "opening_plan")
+        history = deepcopy(player.messages)
+        bid_calls = []
+
+        def consume_plan():
+            bid_calls.append(1)
+            return player.decide_bid(make_ai_obs(day=1))
         original_as_completed = controller_module.as_completed
         first_pass = True
 
@@ -230,7 +431,7 @@ class TestParallelRound:
                 yield future
 
         monkeypatch.setattr(controller_module, "as_completed", hold_first_collection)
-        tasks = [RoundTask("Alpha", lambda: player.decide_bid(make_ai_obs(day=1)), participant=player)]
+        tasks = [RoundTask("Alpha", consume_plan, participant=player)]
         with running(controller, lambda: run_parallel_round(tasks, controller, "首日"),
                      release_collection) as (thread, outcome):
             assert ready.wait(timeout=5)
@@ -238,11 +439,16 @@ class TestParallelRound:
             controller.offer_command("p")
             release_collection.set()
             assert gate.wait(timeout=5)
-            assert player._pending_day1_bid == (2, 6)
+            assert player._pending_day1_bid is None
+            assert player.messages == history
+            assert "result" not in outcome
+            assert any("全部成功，继续本轮" in message for message in announcements)
+            assert not any("补跑" in message for message in announcements)
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"Alpha": (2, 6)}
             assert len(task_runner.calls) == 1
+            assert bid_calls == [1]
 
     @pytest.mark.parametrize("failures, reason", [
         ([ModelAPIError("offline", "service unavailable")], "service unavailable"),
@@ -323,7 +529,7 @@ class TestParallelRound:
             assert len(step_gates) == 1
             assert "测试轮" in step_gates[0]
 
-    def test_pause_keeps_completed_and_reruns_unfinished(self, monkeypatch):
+    def test_pause_keeps_collected_and_inflight_success(self, monkeypatch):
         gate_announced = threading.Event()
 
         def announce(msg):
@@ -370,17 +576,16 @@ class TestParallelRound:
             assert gate_announced.wait(timeout=5)
             assert "result" not in outcome
             alpha_snapshot = deepcopy(alpha.messages)
-            assert len(bravo.messages) == 1
-            bravo_prefix = deepcopy(bravo.messages)
+            assert len(bravo.messages) > 1
+            bravo_snapshot = deepcopy(bravo.messages)
 
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"Alpha": (1, None), "Bravo": (2, None)}
             assert len(alpha_chat.calls) == 1
-            assert len(bravo_calls) == 2
-            assert [p.content for m in bravo_calls[0] for p in m.parts] == [p.content for m in bravo_calls[1] for p in m.parts]
+            assert len(bravo_calls) == 1
             assert alpha.messages == alpha_snapshot
-            assert bravo.messages[:len(bravo_prefix)] == bravo_prefix
+            assert bravo.messages == bravo_snapshot
             parts = [p for m in bravo.messages for p in m.parts]
             calls = [p for p in parts if isinstance(p, ToolCallPart)]
             assert len(calls) == 1 and calls[0].args_as_dict()["bid"] == 2

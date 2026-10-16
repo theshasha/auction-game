@@ -15,7 +15,7 @@ from tests.support.factories import CHANNELS
 
 def test_defaults_and_preserved_values(config_files):
     config, players = load_configuration(*config_files)
-    assert config["llm"] == {"timeout_seconds": 60, "channels": CHANNELS}
+    assert config["llm"] == {"max_concurrency": 10, "timeout_seconds": 60, "channels": CHANNELS}
     assert config["test_model"] == "substitute"
     assert [player["predicted_win_rate"] for player in players] == [23, 0]
     assert [p["protocol"] for p in players] == ["chat", "anthropic"]
@@ -36,6 +36,27 @@ def test_invalid_timeout(config_files, timeout):
         load_configuration(*config_files)
     assert str(config_path) in str(exc.value)
     assert "llm.timeout_seconds" in str(exc.value)
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, 2.0, "10", None])
+def test_invalid_max_concurrency(config_files, value):
+    path = config_files[0]
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["llm"]["max_concurrency"] = value
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match=r"llm.max_concurrency.*正整数") as exc:
+        load_configuration(*config_files)
+    assert str(path) in str(exc.value)
+
+
+@pytest.mark.parametrize("value", [1, 2, 10, 100])
+def test_valid_max_concurrency(config_files, value):
+    path = config_files[0]
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["llm"]["max_concurrency"] = value
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    config, _ = load_configuration(*config_files)
+    assert config["llm"]["max_concurrency"] == value
 
 
 @pytest.mark.parametrize("file_index,text,field", [
@@ -99,7 +120,7 @@ def test_missing_file(tmp_path):
 @pytest.mark.parametrize("test_model", [False, True])
 def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, entry, test_model):
     config_path = config_files[0]
-    config_path.write_text(yaml.safe_dump({"test_model": "substitute", "llm": {"timeout_seconds": 900.5, "channels": CHANNELS}}), encoding="utf-8")
+    config_path.write_text(yaml.safe_dump({"test_model": "substitute", "llm": {"max_concurrency": 2, "timeout_seconds": 900.5, "channels": CHANNELS}}), encoding="utf-8")
     loaded = []
     factories = []
     chats = []
@@ -132,6 +153,7 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
         def tournament(players, actual_game, **kwargs):
             assert actual_game is game
             assert kwargs["director"].game is game
+            assert kwargs["director"].controller.max_concurrency == 2
             assert [p.name for p in players] == ["甲", "乙"]
             assert "沉稳温柔" in players[0].messages[0].parts[0].content
             assert "活泼好奇" in players[1].messages[0].parts[0].content
@@ -148,6 +170,8 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
         monkeypatch.setattr(runners, "run_tournament", tournament)
         assert runners.run_ai(test_model=test_model) == 0
         assert games_loaded == [True]
+        snapshot = json.loads((tmp_path / "run" / "data" / "run_config.json").read_text(encoding="utf-8"))
+        assert snapshot["max_concurrency"] == 2
         assert (tmp_path / "run" / "RULES.md").read_text(encoding="utf-8") == runners.render_rules(game, ["甲", "乙"])
     else:
         assert check_llm.main(["--test-model"] if test_model else []) == 0

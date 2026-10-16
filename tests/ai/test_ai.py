@@ -48,7 +48,8 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch)
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 2
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
-    assert "retry-prompt" in md and "call-1" in md and "OutputFailedError" in md
+    assert "输出纠错 1 次，最终失败" in md and "OutputFailedError" in md
+    assert "retry-prompt" not in md and "call-1" not in md
     # 同一次真实纠错审计导出后，首次无效回复与纠错输入都必须可见。
     from auction_game.reporting import replay
     from auction_game.reporting.run_paths import RunPaths
@@ -99,7 +100,7 @@ def test_history_is_append_only_and_tool_pairs_survive_rollback(tmp_path):
     assert entries[0]["result"] == bid_reply(1)
     assert ModelMessagesTypeAdapter.validate_python(entries[0]["messages"]) == middle[len(prefix):]
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
-    assert md.startswith("# Alpha · 私人对话") and "tool-return" in md and "私有策略" in md
+    assert md.startswith("# Alpha · 私人对话") and "tool-return" not in md and "私有策略" in md
 
 
 def test_program_errors_propagate_without_retry_or_state_change():

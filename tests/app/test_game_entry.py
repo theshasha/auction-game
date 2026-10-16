@@ -134,7 +134,7 @@ def test_main_dispatches_test_model_and_rejects_other_modes(monkeypatch):
 @pytest.mark.parametrize("error_type", [MissingApiKeyError, ValueError])
 def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, error_type):
     monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"timeout_seconds": 30, "channels": {"test": {}}}},
+        {"llm": {"max_concurrency": 10, "timeout_seconds": 30, "channels": {"test": {}}}},
         [{"name": name, "provider": "test", "model": "test", "protocol": "chat", "max_tokens": 123,
           "model_settings": {}}
          for name in ["甲", "乙"]],
@@ -152,7 +152,7 @@ def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, er
 
 def test_ai_success_returns_zero_with_mocked_tournament(monkeypatch, tmp_path, game):
     monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"timeout_seconds": 30, "channels": {"test": {"base_url": "https://offline.invalid/v1"}}}},
+        {"llm": {"max_concurrency": 10, "timeout_seconds": 30, "channels": {"test": {"base_url": "https://offline.invalid/v1"}}}},
         [dict(name=name, provider="test", model="test", protocol="chat", max_tokens=123,
               model_settings={}, capabilities={"reasoning_status": "unknown", "reasoning_detail": "synthetic",
                                                "output_fallback_reason": None},

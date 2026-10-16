@@ -50,6 +50,9 @@ def load_configuration(
     llm = config.setdefault("llm", {})
     if not isinstance(llm, dict):
         raise ConfigurationError(f"{config_path}：llm 必须是 mapping（键值配置）")
+    max_concurrency = llm.setdefault("max_concurrency", 10)
+    if type(max_concurrency) is not int or max_concurrency <= 0:
+        raise ConfigurationError(f"{config_path}：llm.max_concurrency 必须是正整数")
     timeout = llm.setdefault("timeout_seconds", 60)
     if (
         isinstance(timeout, bool)
