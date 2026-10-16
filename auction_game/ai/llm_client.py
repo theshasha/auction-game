@@ -143,6 +143,7 @@ class ModelFactory:
                     model = OpenAIChatModel(self.model, provider=provider, profile={
                         "openai_chat_streaming_requires_finish_reason": True,
                         "openai_chat_supports_max_completion_tokens": False,
+                        **self.model_profile,
                     })
                 else:
                     model = OpenAIResponsesModel(self.model, provider=provider, profile=self.model_profile)

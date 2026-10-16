@@ -10,6 +10,10 @@
 
 `models.yaml` 的 `provider` 引用渠道，`protocol` 必填 `chat` / `responses` / `anthropic`；渠道名不决定协议。OpenAI URL 保留 `/v1`，Anthropic URL 由 SDK 追加 `/v1/messages`。测试替身可以省略角色名，参赛身份必须有名字。
 
+Chat/Responses 模型可用 `reasoning_effort: low | medium | high` 显式覆盖自动选择的推理档位，仅影响该目录模型；删除该字段恢复能力快照策略。`protocol: chat` 使用 OpenAI Chat Completions。覆盖不改写公共能力快照，实际生效设置保存到场次中，下一次启动生效。
+
+渠道可分别设置 `chat_profile.supports_forced_tool_choice: false`、`responses_profile.supports_forced_tool_choice: false`，使对应协议使用 `tool_choice: auto`；工具定义与严格输出校验保留。
+
 比赛启动自动更新根 `RULES.md`，无需先运行生成命令。改规则正文请编辑 `RULES.template.md` 并同步检查代码。根规则显示配置身份，本场规则显示实际参赛名单。
 
 能力快照在 `data/model_capabilities.json`，与模型目录位置分开；启动只读，不联网。免费公共能力同步命令：

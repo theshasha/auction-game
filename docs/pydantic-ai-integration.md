@@ -34,7 +34,7 @@ AIPlayer 持有唯一 `list[ModelMessage]`，初始化放入一次 system。执�
 
 ModelFactory 按显式 protocol 选择 Chat、Responses 或 Anthropic，不猜品牌。Chat profile 保持 `openai_chat_streaming_requires_finish_reason=True` 与 `openai_chat_supports_max_completion_tokens=False`，实际使用 max_tokens；Responses 使用 max_output_tokens；Anthropic 使用 max_tokens。超时进入 HTTP read timeout。输出预算、64000 回退和 high 的单一说明在使用文档。
 
-渠道 `responses_profile.supports_forced_tool_choice` 只接受布尔且仅作用于 Responses。当前 Hub 为 false，使 SDK 发送 auto；Chat 和其他渠道保留默认。覆盖保留框架推断的 context 与加密推理 include，high 与预算不变。普通 model_settings.tool_choice 会被框架输出要求覆盖，使用公开 profile 才能正确兼容。工具与严格校验仍启用，纯文本合法 JSON 出价仍走共享一次纠错并在耗尽后失败。
+渠道 `chat_profile.supports_forced_tool_choice` 与 `responses_profile.supports_forced_tool_choice` 只接受布尔，分别作用于 Chat 与 Responses。当前 Hub 均为 false，使 SDK 发送 auto；未设置的渠道保留默认。覆盖保留框架推断的 context 与加密推理 include，推理档位与预算不变。普通 model_settings.tool_choice 会被框架输出要求覆盖，使用公开 profile 才能正确兼容。工具与严格校验仍启用，纯文本合法 JSON 出价仍走共享一次纠错并在耗尽后失败。
 
 公开能力与渠道 profile 分开保存；本场 `data/run_config.json` 记录生效 profile。历史分析和回放只读本场快照，不依赖今天的配置。
 

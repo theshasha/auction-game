@@ -55,6 +55,11 @@ def effective_capabilities(key: str, model: dict, snapshot: dict) -> dict:
         status, detail = "no_high", "来源未列出 high；保留原始选项，不换算数字预算或擅自开启"
     else:
         status, detail = "unknown", reason or "来源未提供明确推理档位，待核实"
+    if "reasoning_effort" in model:
+        # 显式调用策略不改写公共能力事实；仍由真实渠道验证兼容性。
+        status = model["reasoning_effort"]
+        settings["openai_reasoning_effort"] = status
+        detail = f"模型配置显式指定 {status}；渠道兼容待连通验证"
     return {
         "max_tokens": output or DEFAULT_MAX_TOKENS,
         "model_settings": settings,

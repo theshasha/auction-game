@@ -22,7 +22,8 @@ models:
     # 测试替身没有参赛角色名，不可直接加入 players。
     model: gpt-6-luna
     provider: hub
-    protocol: responses
+    protocol: chat
+    reasoning_effort: low  # 渠道排查用显式覆盖，其他模型继续按能力快照选择。
     models_dev:
       provider: openai
       model: gpt-6-luna

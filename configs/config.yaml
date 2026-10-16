@@ -9,6 +9,8 @@ llm:
     hub:
       base_url: https://hub.oaifree.com/v1
       api_key_env: HUB_API_KEY
-      # Hub Responses 仅接受 auto；保留工具及 Agent 的严格输出校验。
+      # Hub 工具选择使用 auto；保留工具及 Agent 的严格输出校验。
+      chat_profile:
+        supports_forced_tool_choice: false
       responses_profile:
         supports_forced_tool_choice: false

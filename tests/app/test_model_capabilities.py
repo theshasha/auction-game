@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 
 import pytest
+import yaml
 from auction_game.configuration import load_configuration, load_model_catalog
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS, effective_capabilities
 from auction_game.cli.sync_models import build_snapshot, main
@@ -17,6 +18,32 @@ def public_data():
         "source-c": {"id": "source-c", "limit": {"context": 9999, "input": 8000, "output": 1900},
                      "reasoning": True, "reasoning_options": [{"type": "effort", "values": ["high"]}]},
     }}}
+
+
+def test_explicit_reasoning_override_only_changes_selected_model(config_files):
+    path = config_files[2]
+    original = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(original)
+    data["models"]["substitute"].update(protocol="chat", reasoning_effort="low")
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    config, normal = load_configuration(*config_files)
+    _, testing = load_configuration(*config_files, test_model=True)
+    assert all(p["protocol"] == "chat" and p["model_settings"] == {"openai_reasoning_effort": "low"}
+               for p in testing)
+    assert config["models"]["substitute"]["capabilities"]["reasoning_status"] == "low"
+    path.write_text(original, encoding="utf-8")
+    _, unchanged = load_configuration(*config_files)
+    assert normal == unchanged
+
+
+@pytest.mark.parametrize("protocol,effort", [("chat", True), ("responses", "auto"), ("anthropic", "low")])
+def test_invalid_reasoning_override_rejected(config_files, protocol, effort):
+    path = config_files[2]
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["models"]["substitute"].update(protocol=protocol, reasoning_effort=effort)
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        load_configuration(*config_files)
 
 
 def test_sync_preview_write_repeat_and_runtime_offline(config_files, tmp_path, capsys, monkeypatch):

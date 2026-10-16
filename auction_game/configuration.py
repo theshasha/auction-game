@@ -84,12 +84,14 @@ def load_configuration(
         key = channel.get("api_key_env")
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
             raise ConfigurationError(f"{config_path}：{field}.api_key_env 必须是环境变量名")
-        if "responses_profile" in channel:
-            profile = channel["responses_profile"]
+        for profile_key in ("responses_profile", "chat_profile"):
+            if profile_key not in channel:
+                continue
+            profile = channel[profile_key]
             if (not isinstance(profile, dict) or set(profile) - {"supports_forced_tool_choice"}
                     or any(type(value) is not bool for value in profile.values())):
                 raise ConfigurationError(
-                    f"{config_path}：{field}.responses_profile 只支持布尔 supports_forced_tool_choice"
+                    f"{config_path}：{field}.{profile_key} 只支持布尔 supports_forced_tool_choice"
                 )
 
     catalog = load_model_catalog(models_path, snapshot_path=snapshot_path)
@@ -112,8 +114,8 @@ def load_configuration(
 
 
 def channel_model_profile(channel: dict, protocol: str) -> dict:
-    """渠道兼容覆盖只作用于 Responses；与公开模型能力快照分开保存。"""
-    return deepcopy(channel.get("responses_profile", {})) if protocol == "responses" else {}
+    """按协议选择渠道兼容覆盖；与公开模型能力快照分开保存。"""
+    return deepcopy(channel.get(f"{protocol}_profile", {})) if protocol in ("chat", "responses") else {}
 
 
 def load_game_settings(path: str | Path = GAME_PATH) -> GameSettings:
@@ -143,6 +145,10 @@ def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=T
                 raise ConfigurationError(f"{path}：{field}.{prop} 必须是非空字符串")
         if model.get("protocol") not in PROTOCOLS:
             raise ConfigurationError(f"{path}：{field}.protocol 必须是 chat / responses / anthropic")
+        if "reasoning_effort" in model:
+            if (model["protocol"] not in ("chat", "responses")
+                    or model["reasoning_effort"] not in ("low", "medium", "high")):
+                raise ConfigurationError(f"{path}：{field}.reasoning_effort 仅支持 chat/responses 的 low / medium / high")
         if "max_tokens" in model:
             raise ConfigurationError(f"{path}：{field}.max_tokens 请移除，预算由能力快照统一生成")
         source = model.get("models_dev")

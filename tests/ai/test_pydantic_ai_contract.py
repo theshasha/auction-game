@@ -103,3 +103,21 @@ def test_no_tool_exhausts_correction(protocol):
             if protocol == "responses":
                 assert all(body["tool_choice"] == "auto" for _, body in h.requests)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("tool", [True, False])
+def test_chat_auto_profile_preserves_tools_and_validation(tool):
+    async def scenario():
+        h = Harness("chat", [reply(tool=tool, text=json.dumps(GOOD))] * 2)
+        profile = channel_model_profile({"chat_profile": {"supports_forced_tool_choice": False}}, "chat")
+        h.factory = replace(h.factory, model_profile=profile)
+        async with h:
+            if tool:
+                result = await run(make_agent(h.model))
+                assert result.output.bid == GOOD["bid"]
+            else:
+                with pytest.raises(UnexpectedModelBehavior):
+                    await run(make_agent(h.model))
+            assert len(h.requests) == (1 if tool else 2)
+            assert all(body["tool_choice"] == "auto" and body["tools"] for _, body in h.requests)
+    asyncio.run(scenario())

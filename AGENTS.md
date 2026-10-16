@@ -30,8 +30,6 @@ AI、Bot、benchmark、offline 启动在创建日志或请求模型前自动同�
 
 ## 离线验证
 
-使用现有 `C:\Python313\python.exe`，不创建隔离环境。测试不调用真实模型，不读取真实 `.env`。
-
 ```bash
 python -m pytest tests/ -q
 python -m auction_game.game.rules --check
