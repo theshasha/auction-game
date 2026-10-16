@@ -121,8 +121,9 @@ def test_main_rejects_invalid_benchmark_before_dispatch(monkeypatch, capsys, cou
 @pytest.mark.parametrize("error_type", [MissingApiKeyError, ValueError])
 def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, error_type):
     monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"timeout_seconds": 30}},
-        [{"name": name, "provider": "test", "model": "test"} for name in ["甲", "乙"]],
+        {"llm": {"timeout_seconds": 30, "channels": {"test": {}}}},
+        [{"name": name, "provider": "test", "model": "test", "protocol": "chat", "max_tokens": 123}
+         for name in ["甲", "乙"]],
     ))
     monkeypatch.setattr(runners, "load_game_settings", lambda: game)
 
@@ -137,8 +138,9 @@ def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, er
 
 def test_ai_success_returns_zero(monkeypatch, tmp_path, game):
     monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"timeout_seconds": 30}},
-        [dict(name=name, provider="test", model="test", persona_title="测试", persona_text="测试人设")
+        {"llm": {"timeout_seconds": 30, "channels": {"test": {}}}},
+        [dict(name=name, provider="test", model="test", protocol="chat", max_tokens=123,
+              persona_title="测试", persona_text="测试人设")
          for name in ["甲", "乙"]],
     ))
     monkeypatch.setattr(runners, "load_game_settings", lambda: game)

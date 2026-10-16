@@ -27,7 +27,7 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     }
     players = [
         {"name": name, "persona_title": "测试", "persona_text": "测试人设",
-         "provider": "offline", "model": "unused"}
+         "provider": "offline", "model": "unused", "protocol": "chat", "max_tokens": 123}
         for name in ["隔离甲", "隔离乙", "隔离丙"]
     ]
     game_path.write_text(yaml.safe_dump(game), encoding="utf-8")

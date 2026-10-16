@@ -127,6 +127,6 @@ def test_load_game_paths_and_errors(settings_data, tmp_path, monkeypatch):
 def test_load_players_is_independent_and_preserves_contract(tmp_path):
     path = tmp_path / "players.yaml"
     player = dict(name="甲", persona_title="沉稳", persona_text="谨慎出价",
-                  provider="test", model="test", extra="保留")
+                  provider="test", model="test", protocol="chat", max_tokens=123, extra="保留")
     path.write_text(yaml.safe_dump({"players": [player]}), encoding="utf-8")
     assert load_players(path) == [{**player, "predicted_win_rate": 0}]

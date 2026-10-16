@@ -1,61 +1,34 @@
-"""LLM 调用封装：多 provider 分发（gemini/modal/hub/anthropic），密钥走 .env。
+"""Pydantic AI 三协议模型工厂及过渡文本适配器。
 
-provider 与调用方式：
-- gemini：Google 官方 OpenAI 兼容端点，chat completions（当前无玩家使用，代码保留）
-- modal：Modal 托管的 Kimi-K3，OpenAI chat completions（K3 强制推理，不传 thinking 控制参数）
-- hub：oaifree 中转，按玩家 protocol 字段二选一：responses API（默认）或 chat completions
-- anthropic：oaifree 中转，Anthropic SDK
-
-chat_fn 统一签名为 (messages: list[dict]) -> str，只返回正文 content。
-
-全部 provider 走流式（stream）调用并在本地累积正文：非流式请求在模型长时间
-思考期间一个字节都不吐，hub.oaifree.com 前面的 Cloudflare 非流式 Proxy Read
-Timeout 窗口（约 120 秒）会掐断连接（上游记录「已取消」，客户端收到 524）；
-流式下字节持续流动，空闲窗口不触发。只累积正文增量，不采集推理内容
-（chat 的 reasoning_content、responses 的推理事件一律忽略）。
+完整消费流并验证成功结束才交付正文。SDK 与模型层均不重试；过渡期仍由
+AIPlayer 控制失败重试。每次同步调用创建自己的事件循环及客户端。
 """
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 import os
 import re
 from pathlib import Path
 from typing import Callable
 
 from dotenv import load_dotenv
-from openai import OpenAI
+import httpx2 as http
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+from pydantic_ai.messages import (
+    ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart,
+)
+from pydantic_ai.models import CompletedStreamedResponse, ModelRequestParameters
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 
 ENV_PATH = Path(__file__).parent / ".env"
-
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-MODAL_BASE_URL = "https://modal-endpoint.invalid/v1"
-HUB_BASE_URL = "https://hub.oaifree.com/v1"
-HUB_ANTHROPIC_BASE_URL = "https://hub.oaifree.com/anthropic"
-
-# 模型输出上限，数据来源：https://models.dev/api.json 官方 provider 条目（2026-08-28 拉取）
-#   moonshotai | kimi-k3              out=131072
-#   deepseek   | deepseek-v4-pro / deepseek-v4-flash  out=384000
-#   google     | gemini-3.1-pro-preview / gemini-3.7-flash / gemini-flash-latest  out=65536
-#   openai     | gpt-5.6-sol          out=128000
-#   anthropic  | claude-opus-4-6      out=128000
-#   minimax    | MiniMax-M3           out=512000（已下场，条目保留）
-#   zai        | glm-5.3              out=131072
-MODEL_OUTPUT_LIMITS = {
-    "moonshotai/Kimi-K3": 131072,  # modal 渠道的模型 ID（带厂商前缀）
-    "kimi-k3": 131072,             # hub 渠道的模型 ID
-    "deepseek-v4-pro": 384000,
-    "deepseek-v4-flash": 384000,
-    "gemini-3.1-pro-preview": 65536,
-    "gemini-3.7-flash": 65536,
-    "gpt-5.6-sol": 128000,
-    "claude-opus-4-6": 128000,
-    "gemini-flash-latest": 65536,
-    "MiniMax-M3": 512000,
-    "glm-5.3": 131072,
-}
-
-# anthropic 的 max_tokens 是必填参数，未知模型的兜底值
-ANTHROPIC_FALLBACK_MAX_TOKENS = 8192
 
 ChatFn = Callable[[list[dict]], str]
 
@@ -71,28 +44,72 @@ def strip_think_blocks(text: str) -> str:
     return _THINK_UNCLOSED_RE.sub("", _THINK_BLOCK_RE.sub("", text))
 
 
-def collect_chat_stream(chunks) -> str:
-    """累积 chat completions 流式增量的正文（delta.content），忽略推理字段。
+class IncompleteStream(RuntimeError):
+    """输出截断或缺少明确成功状态；不交付部分结果。"""
 
-    流式末尾可能出现 choices 为空的心跳/用量块，需跳过。
+
+class BufferedRequest(WrapperModel):
+    """消费完整 SDK 流，检查结束状态；不做网络重试。
+
+    Anthropic 公开响应可观测 stop_reason，无法单独识别缺失的原始 message_stop。
+    这里沿用已验证的明确成功 finish_reason 边界，不另写 SSE 框架。
     """
-    parts = []
-    for chunk in chunks:
-        if not getattr(chunk, "choices", None):
-            continue
-        content = getattr(chunk.choices[0].delta, "content", None)
-        if content:
-            parts.append(content)
-    return "".join(parts)
+
+    @asynccontextmanager
+    async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
+        async with self.wrapped.request_stream(
+            messages, model_settings, model_request_parameters, run_context
+        ) as stream:
+            async for _ in stream:
+                pass
+            response = stream.get()
+        if response.finish_reason not in ("stop", "tool_call"):
+            raise IncompleteStream(f"finish_reason={response.finish_reason!r}")
+        yield CompletedStreamedResponse(response, model_request_parameters=model_request_parameters)
 
 
-def collect_responses_stream(events) -> str:
-    """累积 responses API 流式事件的正文（response.output_text.delta）。"""
-    parts = []
-    for event in events:
-        if getattr(event, "type", None) == "response.output_text.delta":
-            parts.append(getattr(event, "delta", "") or "")
-    return "".join(parts)
+@dataclass(frozen=True)
+class ModelFactory:
+    """只保存配置；在调用所在的循环内创建及关闭 SDK/HTTP 客户端。
+
+    transport 仅供离线注入。第三步 Agent 可直接复用 open() 及 settings。
+    配置的校验入口是 configuration.load_configuration。
+    """
+
+    protocol: str
+    model: str
+    base_url: str
+    api_key: str = field(repr=False)
+    timeout: float
+    max_tokens: int
+    transport: http.AsyncBaseTransport | None = None
+
+    @property
+    def settings(self) -> dict:
+        return {"timeout": self.timeout, "max_tokens": self.max_tokens}
+
+    @asynccontextmanager
+    async def open(self):
+        async with http.AsyncClient(transport=self.transport) as client:
+            if self.protocol == "anthropic":
+                sdk = AsyncAnthropic(base_url=self.base_url, api_key=self.api_key,
+                                     http_client=client, max_retries=0)
+                model = AnthropicModel(self.model, provider=AnthropicProvider(anthropic_client=sdk))
+            elif self.protocol in ("chat", "responses"):
+                sdk = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key,
+                                  http_client=client, max_retries=0)
+                provider = OpenAIProvider(openai_client=sdk)
+                if self.protocol == "chat":
+                    model = OpenAIChatModel(self.model, provider=provider, profile={
+                        "openai_chat_streaming_requires_finish_reason": True,
+                        "openai_chat_supports_max_completion_tokens": False,
+                    })
+                else:
+                    model = OpenAIResponsesModel(self.model, provider=provider)
+            else:
+                raise ValueError(f"未知 protocol：{self.protocol!r}")
+            # SDK 使用注入的 HTTP 客户端；由外层唯一所有者关闭（也覆盖构造异常）。
+            yield BufferedRequest(model)
 
 
 class MissingApiKeyError(RuntimeError):
@@ -109,128 +126,48 @@ def _require_env(name: str, provider: str) -> str:
     return value
 
 
-def _make_gemini_fn(model: str, timeout: int) -> ChatFn:
-    api_key = _require_env("GEMINI_API_KEY", "gemini")
-    client = OpenAI(base_url=GEMINI_BASE_URL, api_key=api_key)
+def make_model_factory(*, provider: str, channel: dict, model: str, protocol: str,
+                       timeout: float, max_tokens: int) -> ModelFactory:
+    """启动时解析密钥，确保缺密钥在创建比赛日志前暴露。"""
+    return ModelFactory(protocol, model, channel["base_url"],
+                        _require_env(channel["api_key_env"], provider), timeout, max_tokens)
+
+
+def _text_messages(messages: list[dict]) -> list:
+    """无状态转换旧 AIPlayer 历史，保持顺序，不额外追加当前提示。"""
+    converted = []
+    for message in messages:
+        role, content = message["role"], message["content"]
+        if role == "assistant":
+            converted.append(ModelResponse(parts=[TextPart(content)]))
+        elif role in ("system", "user"):
+            part = SystemPromptPart(content) if role == "system" else UserPromptPart(content)
+            converted.append(ModelRequest(parts=[part]))
+        else:
+            raise ValueError(f"文本适配器不支持 role={role!r}")
+    return converted
+
+
+def make_chat_fn(*, provider: str, channel: dict, model: str, protocol: str,
+                 timeout: float, max_tokens: int) -> ChatFn:
+    """薄文本适配器；第三步迁移 Agent 后移除，不持有任何对话状态。"""
+    return text_chat_fn(make_model_factory(provider=provider, channel=channel, model=model,
+                                         protocol=protocol, timeout=timeout, max_tokens=max_tokens))
+
+
+def text_chat_fn(factory: ModelFactory) -> ChatFn:
+    """同步线程边界；工厂可在离线测试中注入 MockTransport。"""
+    async def call(messages):
+        async with factory.open() as model:
+            async with model.request_stream(
+                _text_messages(messages), factory.settings, ModelRequestParameters()
+            ) as stream:
+                async for _ in stream:
+                    pass
+                response = stream.get()
+        return strip_think_blocks("".join(p.content for p in response.parts if isinstance(p, TextPart)))
 
     def chat_fn(messages: list[dict]) -> str:
-        kwargs = {}
-        if model in MODEL_OUTPUT_LIMITS:
-            kwargs["max_tokens"] = MODEL_OUTPUT_LIMITS[model]
-        chunks = client.chat.completions.create(
-            model=model, messages=messages, stream=True, timeout=timeout, **kwargs
-        )
-        return collect_chat_stream(chunks)
-
-    return chat_fn
-
-
-def _make_modal_fn(model: str, timeout: int) -> ChatFn:
-    token_id = _require_env("MODAL_PROXY_TOKEN_ID", "modal")
-    token_secret = _require_env("MODAL_PROXY_TOKEN_SECRET", "modal")
-    client = OpenAI(base_url=MODAL_BASE_URL, api_key=f"{token_id}.{token_secret}")
-
-    def chat_fn(messages: list[dict]) -> str:
-        # Kimi K3 强制推理，传 reasoning_effort=none 会 400，省略 thinking 控制参数
-        kwargs = {}
-        if model in MODEL_OUTPUT_LIMITS:
-            kwargs["max_tokens"] = MODEL_OUTPUT_LIMITS[model]
-        chunks = client.chat.completions.create(
-            model=model, messages=messages, stream=True, timeout=timeout, **kwargs
-        )
-        return collect_chat_stream(chunks)
-
-    return chat_fn
-
-
-def _make_hub_fn(model: str, timeout: int, protocol: str = "responses") -> ChatFn:
-    """oaifree 中转端点，protocol 二选一：
-
-    - responses：OpenAI responses API，input 直接吃 messages 列表，流式累积 output_text 增量
-    - chat：OpenAI chat completions（/v1/chat/completions），流式累积 delta.content
-    """
-    if protocol not in ("responses", "chat"):
-        raise ValueError(f"hub 未知 protocol：{protocol!r}（可选：responses、chat）")
-
-    api_key = _require_env("HUB_API_KEY", "hub")
-    client = OpenAI(base_url=HUB_BASE_URL, api_key=api_key)
-
-    if protocol == "chat":
-
-        def chat_fn(messages: list[dict]) -> str:
-            kwargs = {}
-            if model in MODEL_OUTPUT_LIMITS:
-                kwargs["max_tokens"] = MODEL_OUTPUT_LIMITS[model]
-            chunks = client.chat.completions.create(
-                model=model, messages=messages, stream=True, timeout=timeout, **kwargs
-            )
-            return collect_chat_stream(chunks)
-
-        return chat_fn
-
-    def responses_fn(messages: list[dict]) -> str:
-        kwargs = {}
-        if model in MODEL_OUTPUT_LIMITS:
-            kwargs["max_output_tokens"] = MODEL_OUTPUT_LIMITS[model]
-        events = client.responses.create(
-            model=model, input=messages, stream=True, timeout=timeout, **kwargs
-        )
-        return collect_responses_stream(events)
-
-    return responses_fn
-
-
-def _make_anthropic_fn(model: str, timeout: int) -> ChatFn:
-    """oaifree 中转的 Anthropic 端点：system 需从 messages 中单独提取。"""
-    from anthropic import Anthropic  # 惰性导入，未用 claude 时无需安装
-
-    api_key = _require_env("HUB_API_KEY", "anthropic")
-    client = Anthropic(base_url=HUB_ANTHROPIC_BASE_URL, api_key=api_key)
-
-    def chat_fn(messages: list[dict]) -> str:
-        system_prompt = ""
-        conversation = messages
-        if messages and messages[0].get("role") == "system":
-            system_prompt = messages[0]["content"]
-            conversation = messages[1:]
-        with client.messages.stream(
-            model=model,
-            max_tokens=MODEL_OUTPUT_LIMITS.get(model, ANTHROPIC_FALLBACK_MAX_TOKENS),
-            system=system_prompt,
-            messages=conversation,
-            timeout=timeout,
-        ) as stream:
-            return stream.get_final_text()
-
-    return chat_fn
-
-
-_PROVIDER_FACTORIES = {
-    "gemini": _make_gemini_fn,
-    "modal": _make_modal_fn,
-    "hub": _make_hub_fn,
-    "anthropic": _make_anthropic_fn,
-}
-
-
-def make_chat_fn(
-    provider: str, model: str, timeout: int = 60, protocol: str | None = None
-) -> ChatFn:
-    """按 provider 构建 chat_fn(messages) -> str，供 AIPlayer 注入。
-
-    protocol 仅对 hub 生效（responses/chat），缺省按 responses 处理。
-    AIPlayer 只依赖 chat_fn 签名，测试时用假函数替代，零网络。
-    """
-    factory = _PROVIDER_FACTORIES.get(provider)
-    if factory is None:
-        known = "、".join(sorted(_PROVIDER_FACTORIES))
-        raise ValueError(f"未知 provider：{provider!r}（可选：{known}）")
-    if provider == "hub":
-        raw_fn = _make_hub_fn(model, timeout, protocol or "responses")
-    else:
-        raw_fn = factory(model, timeout)
-
-    def chat_fn(messages: list[dict]) -> str:
-        return strip_think_blocks(raw_fn(messages))
+        return asyncio.run(call(messages))
 
     return chat_fn

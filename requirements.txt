@@ -1,5 +1,6 @@
 pytest>=8.0
-openai>=1.50
-anthropic>=0.40
+pydantic-ai-slim[openai,anthropic]==2.56.0
+openai==3.31.0
+anthropic==1.15.0
 python-dotenv>=1.0
 pyyaml>=6.0

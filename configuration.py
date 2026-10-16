@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -13,6 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT_DIR / "config.yaml"
 PLAYERS_PATH = ROOT_DIR / "players.yaml"
 GAME_PATH = ROOT_DIR / "game.yaml"
+PROTOCOLS = ("chat", "responses", "anthropic")
 
 
 class ConfigurationError(ValueError):
@@ -36,7 +39,7 @@ def load_configuration(
     """返回 (运行设置, 玩家列表)，补入 timeout=60 与预测夺冠率=0 的缺省值。
 
     两个路径均可显式传入；相对路径以本模块所在的项目根目录为基准。
-    provider/协议是否受支持仍由 make_chat_fn 判断。
+    渠道及玩家调用参数在这里统一校验；不读取密钥，不依赖比赛参数。
     """
     config_path = ROOT_DIR / config_path
     players_path = ROOT_DIR / players_path
@@ -55,7 +58,36 @@ def load_configuration(
     ):
         raise ConfigurationError(f"{config_path}：llm.timeout_seconds 必须是正有限数字")
 
-    return config, load_players(players_path)
+    channels = llm.get("channels")
+    if not isinstance(channels, dict) or not channels:
+        raise ConfigurationError(f"{config_path}：llm.channels 必须是非空 mapping（键值配置）")
+    for name, channel in channels.items():
+        field = f"llm.channels.{name}"
+        if not isinstance(name, str) or not name.strip() or not isinstance(channel, dict):
+            raise ConfigurationError(f"{config_path}：{field} 必须是具名 mapping（键值配置）")
+        url = channel.get("base_url")
+        try:
+            parsed = urlsplit(url) if isinstance(url, str) else None
+            valid = (parsed and parsed.scheme in ("http", "https") and parsed.hostname
+                     and not parsed.username and not parsed.password and not parsed.query
+                     and not parsed.fragment and not any(c.isspace() for c in url))
+            if parsed:
+                parsed.port  # 同时检查无效端口。
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ConfigurationError(f"{config_path}：{field}.base_url 必须是无鉴权信息的 HTTP(S) 地址")
+        key = channel.get("api_key_env")
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ConfigurationError(f"{config_path}：{field}.api_key_env 必须是环境变量名")
+
+    players = load_players(players_path)
+    for index, player in enumerate(players):
+        if player["provider"] not in channels:
+            raise ConfigurationError(
+                f"{players_path}：players[{index}].provider 未知渠道：{player['provider']!r}"
+            )
+    return config, players
 
 
 def load_game_settings(path: str | Path = GAME_PATH) -> GameSettings:
@@ -87,8 +119,10 @@ def load_players(path: str | Path = PLAYERS_PATH) -> list[dict]:
         if name in names:
             raise ConfigurationError(f"{players_path}：{field}.name 名字重复：{name!r}")
         names.add(name)
-        protocol = player.get("protocol")
-        if protocol is not None and (not isinstance(protocol, str) or not protocol.strip()):
-            raise ConfigurationError(f"{players_path}：{field}.protocol 必须是非空字符串或 null")
+        if player.get("protocol") not in PROTOCOLS:
+            raise ConfigurationError(f"{players_path}：{field}.protocol 必须是 chat / responses / anthropic")
+        budget = player.get("max_tokens")
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            raise ConfigurationError(f"{players_path}：{field}.max_tokens 必须是正整数")
         player.setdefault("predicted_win_rate", 0)
     return players

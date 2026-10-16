@@ -55,9 +55,11 @@ def run_ai() -> int:
         try:
             chat_fns[pc["name"]] = make_chat_fn(
                 provider=pc["provider"],
+                channel=config["llm"]["channels"][pc["provider"]],
                 model=pc["model"],
                 timeout=timeout,
-                protocol=pc.get("protocol"),
+                protocol=pc["protocol"],
+                max_tokens=pc["max_tokens"],
             )
         except (MissingApiKeyError, ValueError) as exc:
             print(f"错误：玩家 {pc['name']} 的 LLM 配置不可用：{exc}")

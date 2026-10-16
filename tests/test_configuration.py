@@ -10,17 +10,22 @@ import runners
 from configuration import ConfigurationError, load_configuration
 from game_rules import GameSettings
 
+CHANNELS = {
+    "hub": {"base_url": "https://offline.invalid/v1", "api_key_env": "FAKE_KEY"},
+    "anthropic": {"base_url": "https://offline.invalid/anthropic", "api_key_env": "FAKE_KEY"},
+}
+
 
 @pytest.fixture
 def config_files(tmp_path):
     config_path = tmp_path / "config.yaml"
     players_path = tmp_path / "players.yaml"
-    config_path.write_text("{}", encoding="utf-8")
+    config_path.write_text(yaml.safe_dump({"llm": {"channels": CHANNELS}}), encoding="utf-8")
     players = [
         dict(name="甲", persona_title="姐姐", persona_text="沉稳温柔", provider="hub",
-             model="test-model-a", protocol="chat", predicted_win_rate=23),
+              model="test-model-a", protocol="chat", max_tokens=123, predicted_win_rate=23),
         dict(name="乙", persona_title="妹妹", persona_text="活泼好奇", provider="anthropic",
-             model="test-model-b"),
+              model="test-model-b", protocol="anthropic", max_tokens=456),
     ]
     players_path.write_text(yaml.safe_dump({"players": players}), encoding="utf-8")
     return config_path, players_path
@@ -28,9 +33,9 @@ def config_files(tmp_path):
 
 def test_defaults_and_preserved_values(config_files):
     config, players = load_configuration(*config_files)
-    assert config == {"llm": {"timeout_seconds": 60}}
+    assert config == {"llm": {"timeout_seconds": 60, "channels": CHANNELS}}
     assert [player["predicted_win_rate"] for player in players] == [23, 0]
-    assert [p["protocol"] if "protocol" in p else None for p in players] == ["chat", None]
+    assert [p["protocol"] for p in players] == ["chat", "anthropic"]
 
 
 def test_default_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
@@ -73,6 +78,9 @@ def test_invalid_structure(config_files, file_index, text, field):
 @pytest.mark.parametrize("field,value", [
     ("name", " "), ("persona_title", None), ("persona_text", ""),
     ("provider", 12), ("model", None), ("protocol", []), ("protocol", " "),
+    ("protocol", None), ("protocol", "gemini"), ("protocol", "modal"),
+    ("max_tokens", None), ("max_tokens", True), ("max_tokens", 0),
+    ("max_tokens", 2.5), ("max_tokens", "123"),
 ])
 def test_invalid_player_fields(config_files, field, value):
     _, players_path = config_files
@@ -108,7 +116,7 @@ def test_missing_file(tmp_path):
 @pytest.mark.parametrize("entry", [runners, check_llm])
 def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, entry):
     config_path, _ = config_files
-    config_path.write_text("llm:\n  timeout_seconds: 900.5\n", encoding="utf-8")
+    config_path.write_text(yaml.safe_dump({"llm": {"timeout_seconds": 900.5, "channels": CHANNELS}}), encoding="utf-8")
     loaded = []
     factories = []
     chats = []
@@ -162,8 +170,10 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
     assert loaded == [True]
     assert len(chats) == 2
     assert factories == [
-        dict(provider="hub", model="test-model-a", timeout=900.5, protocol="chat"),
-        dict(provider="anthropic", model="test-model-b", timeout=900.5, protocol=None),
+        dict(provider="hub", channel=CHANNELS["hub"], model="test-model-a", timeout=900.5,
+             protocol="chat", max_tokens=123),
+        dict(provider="anthropic", channel=CHANNELS["anthropic"], model="test-model-b", timeout=900.5,
+             protocol="anthropic", max_tokens=456),
     ]
 
 
@@ -182,3 +192,54 @@ def test_entries_report_configuration_errors(config_files, monkeypatch, capsys, 
     assert str(config_path) in output
     assert "llm" in output
     assert "错误" in output
+
+
+@pytest.mark.parametrize("channel,field", [
+    (None, "channels"), ({}, "channels"), ({"hub": None}, "hub"),
+    ({"hub": {"base_url": "ftp://host", "api_key_env": "KEY"}}, "base_url"),
+    ({"hub": {"base_url": "https://user:password@host", "api_key_env": "KEY"}}, "base_url"),
+    ({"hub": {"base_url": "https://host?key=x", "api_key_env": "KEY"}}, "base_url"),
+    ({"hub": {"base_url": "https://host:bad", "api_key_env": "KEY"}}, "base_url"),
+    ({"hub": {"base_url": "https://host", "api_key_env": "bad-name"}}, "api_key_env"),
+    ({"hub": {"base_url": "https://host", "api_key_env": None}}, "api_key_env"),
+])
+def test_invalid_channels(config_files, channel, field):
+    config_path, _ = config_files
+    config_path.write_text(yaml.safe_dump({"llm": {"channels": channel}}), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match=field):
+        load_configuration(*config_files)
+
+
+def test_unknown_channel(config_files):
+    _, path = config_files
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["players"][0]["provider"] = "modal"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match=r"players\[0\].provider.*未知渠道"):
+        load_configuration(*config_files)
+
+
+def test_actual_six_player_routes_and_budgets():
+    config, players = load_configuration()
+    assert [(p["model"], p["provider"], p["protocol"], p["max_tokens"]) for p in players] == [
+        ("kimi-k3", "hub_anthropic", "anthropic", 131072),
+        ("deepseek-v4-pro", "hub", "chat", 384000),
+        ("gemini-3.1-pro-preview", "hub", "responses", 65536),
+        ("gpt-5.6-sol", "hub", "responses", 128000),
+        ("gemini-3.7-flash", "hub", "responses", 65536),
+        ("deepseek-v4-flash", "hub", "chat", 384000),
+    ]
+    assert config["llm"]["channels"] == {
+        "hub": {"base_url": "https://hub.oaifree.com/v1", "api_key_env": "HUB_API_KEY"},
+        "hub_anthropic": {"base_url": "https://hub.oaifree.com/anthropic", "api_key_env": "HUB_API_KEY"},
+    }
+
+
+def test_missing_key_stops_before_logs_without_reading_dotenv(config_files, monkeypatch, capsys):
+    import llm_client
+    monkeypatch.setattr(runners, "load_configuration", lambda: load_configuration(*config_files))
+    monkeypatch.setattr(llm_client, "load_dotenv", lambda path: None)
+    monkeypatch.delenv("FAKE_KEY", raising=False)
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("缺密钥不应创建日志"))
+    assert runners.run_ai() == 1
+    assert "FAKE_KEY" in capsys.readouterr().out

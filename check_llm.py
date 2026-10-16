@@ -34,9 +34,11 @@ def main() -> int:
         try:
             chat_fn = make_chat_fn(
                 provider=player["provider"],
+                channel=config["llm"]["channels"][player["provider"]],
                 model=player["model"],
                 timeout=timeout,
-                protocol=player.get("protocol"),
+                protocol=player["protocol"],
+                max_tokens=player["max_tokens"],
             )
         except (MissingApiKeyError, ValueError) as exc:
             print(f"[配置错误] {label}: {exc}")
