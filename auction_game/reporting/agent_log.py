@@ -106,6 +106,9 @@ def render_markdown_entry(entry: dict, result_renderer: Callable = render_result
     first_title = entry.get("first_title")
     previous_title = entry.get("previous_title")
     lines = [f"## {entry.get('readable_title', _phase_title(entry))}"]
+    if entry.get("tool_definitions"):
+        lines.append(f"任务 `{entry['task_id']}` · 工具定义：" + " / ".join(
+            f"[{key[:12]}](../tools.md#{key})" for key in entry["tool_definitions"]))
     if entry.get("reruns", 0):
         lines.append("补跑后成功。" if success else "补跑仍失败。")
     if first_title:
@@ -155,11 +158,16 @@ class AgentLog:
                      "request_errors": error.request_errors,
                      "error": {"type": type(error).__name__, "message": str(error)}})
 
+    def begin(self, entry):
+        """请求前分配现有任务序号，默认工具引用与最终任务审计共用。"""
+        self._task_number += 1
+        return {"task_id": f"task-{self._task_number:04d}", **entry}
+
     def _write(self, entry: dict) -> None:
         if self.path is None:
             return
-        self._task_number += 1
-        entry = {"task_id": f"task-{self._task_number:04d}", **entry}
+        if "task_id" not in entry:
+            entry = self.begin(entry)
         # 只关联相同输入的连续失败；关联同时写入审计，成功后结束。
         key = (entry["phase"], entry["task"], entry.get("context", ""), tuple(_inputs(entry)))
         first_task, previous_task, reruns = self._failed_tasks.get(key, (None, None, 0))
@@ -191,4 +199,6 @@ class AgentLog:
         with md_path.open("a", encoding="utf-8") as file:
             if is_new:
                 file.write(f"# {self.name} · 私人对话（含私有策略）\n\n")
+                if self.path.parent.name == "players" and self.path.parent.parent.name == "data":
+                    file.write("[本场工具定义与任务引用](../tools.md)；按任务编号对照玩家 JSONL。\n\n")
             file.write(render_markdown_entry(entry, self.result_renderer))

@@ -78,7 +78,7 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
     entry = json.loads(player.log_path.read_text(encoding="utf-8").splitlines()[-1])
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 2
-    assert audit[0].parts[-1].content == "speech"
+    assert audit[0].parts[-1].content.startswith("speech\n\n当前输出要求：调用 `speech`")
 
 
 def test_blank_summary_uses_output_correction_not_infrastructure_retry():

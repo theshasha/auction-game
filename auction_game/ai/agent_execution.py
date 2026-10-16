@@ -11,7 +11,7 @@ import anthropic
 import httpx2 as http
 import openai
 from pydantic_ai import Agent, capture_run_messages
-from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
+from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelResponse
 
 from auction_game.ai.llm_client import RequestCapture, IncompleteStream, ModelFactory
@@ -67,13 +67,13 @@ class AgentExecutor:
                     result = await agent.run(prompt, model=model, message_history=history, deps=deps,
                                              model_settings=self.factory.settings,
                                              event_stream_handler=_drain_events, usage_limits=usage_limits)
-                except (ModelAPIError, UnexpectedModelBehavior, IncompleteStream,
+                except (ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded, IncompleteStream,
                         http.TransportError, openai.APIError, anthropic.APIError) as exc:
                     # 库会合并相邻 request；按本次 run_id 取审计，排除失败流占位响应。
                     run_id = captured[-1].run_id if captured else None
                     audit = [m for m in captured if m.run_id == run_id
                              and not (isinstance(m, ModelResponse) and m.state == "interrupted")]
-                    error_type = OutputFailedError if isinstance(exc, UnexpectedModelBehavior) else CallFailedError
+                    error_type = OutputFailedError if isinstance(exc, (UnexpectedModelBehavior, UsageLimitExceeded)) else CallFailedError
                     raise error_type(f"{type(exc).__name__}: {exc}", messages=audit,
                                       request_errors=model.request_errors,
                                       requests=getattr(model, "requests", ())) from exc

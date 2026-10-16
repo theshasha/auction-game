@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-10-16T07:45:56.809070+00:00",
+  "fetched_at": "2026-10-16T13:01:16.556102+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -221,6 +221,48 @@
             "high",
             "max"
           ]
+        }
+      ],
+      "tool_call": true
+    },
+    "mimo_pro": {
+      "source": {
+        "provider": "xiaomi",
+        "model": "mimo-v2.6-pro"
+      },
+      "status": "matched",
+      "matched_id": "mimo-v2.6-pro",
+      "canonical_model_id": null,
+      "limit": {
+        "context": 1048576,
+        "input": null,
+        "output": 131072
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "tool_call": true
+    },
+    "mimo_flash": {
+      "source": {
+        "provider": "xiaomi",
+        "model": "mimo-v2.6-flash"
+      },
+      "status": "matched",
+      "matched_id": "mimo-v2.6-flash",
+      "canonical_model_id": null,
+      "limit": {
+        "context": 1048576,
+        "input": null,
+        "output": 131072
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
         }
       ],
       "tool_call": true

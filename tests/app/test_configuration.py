@@ -198,7 +198,7 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, c
     if test_model and test_key == "substitute":
         expected = [dict(provider="hub", channel=CHANNELS["hub"], model="test-model-c", timeout=900.5,
                          protocol="responses", max_tokens=789,
-                         model_settings={"openai_reasoning_effort": "high"})] * len(chats)
+                         model_settings={"openai_reasoning_effort": "medium"})] * len(chats)
     elif test_model:
         expected = [expected[0]] * len(chats)
     if entry is check_llm:

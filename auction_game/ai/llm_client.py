@@ -24,6 +24,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from auction_game.configuration import channel_model_profile
 from auction_game.paths import ENV_PATH
+from auction_game.reporting.tool_records import current_request_attempt, current_tool_task, record_http_tools
 
 class IncompleteStream(RuntimeError):
     """输出截断或缺少明确成功状态；不交付部分结果。"""
@@ -74,10 +75,11 @@ class BufferedRequest(WrapperModel):
     这里沿用已验证的明确成功 finish_reason 边界，不另写 SSE 框架。
     """
 
-    def __init__(self, wrapped, *, attempts=2):
+    def __init__(self, wrapped, *, protocol, attempts=2):
         super().__init__(wrapped)
         self.request_errors: list[dict] = []
         self.attempts = attempts
+        self.protocol = protocol
         self._request_number = 0  # 包装器每任务创建；网络重发共用同一请求序号
 
     @asynccontextmanager
@@ -85,6 +87,7 @@ class BufferedRequest(WrapperModel):
         self._request_number += 1
         request_number = self._request_number
         for attempt in range(1, self.attempts + 1):
+            token = current_request_attempt.set((self.protocol, self.wrapped.model_name, request_number, attempt))
             try:
                 async with self.wrapped.request_stream(
                     messages, model_settings, model_request_parameters, run_context
@@ -96,11 +99,17 @@ class BufferedRequest(WrapperModel):
                     raise IncompleteStream(f"finish_reason={response.finish_reason!r}")
                 break
             except Exception as exc:
+                task = current_tool_task.get()
+                if task is not None and task.write_error is not None:
+                    # SDK 会把请求钩子异常包成连接错误；磁盘失败须原样传播且不重发。
+                    raise task.write_error from exc
                 retryable = retryable_request_error(exc)
                 self.request_errors.append({"request": request_number, "attempt": attempt, "type": type(exc).__name__,
                                             "message": str(exc), "retryable": retryable})
                 if attempt == self.attempts or not retryable:
                     raise
+            finally:
+                current_request_attempt.reset(token)
         # yield 在重试范围外：Agent 校验失败不会重新执行已完成的请求。
         yield CompletedStreamedResponse(response, model_request_parameters=model_request_parameters)
 
@@ -130,7 +139,7 @@ class ModelFactory:
 
     @asynccontextmanager
     async def open(self):
-        async with http.AsyncClient(transport=self.transport) as client:
+        async with http.AsyncClient(transport=self.transport, event_hooks={"request": [record_http_tools]}) as client:
             if self.protocol == "anthropic":
                 sdk = AsyncAnthropic(base_url=self.base_url, api_key=self.api_key,
                                      http_client=client, max_retries=0)
@@ -150,7 +159,7 @@ class ModelFactory:
             else:
                 raise ValueError(f"未知 protocol：{self.protocol!r}")
             # SDK 使用注入的 HTTP 客户端；由外层唯一所有者关闭（也覆盖构造异常）。
-            yield BufferedRequest(model, attempts=self.request_attempts)
+            yield BufferedRequest(model, protocol=self.protocol, attempts=self.request_attempts)
 
 
 class MissingApiKeyError(RuntimeError):

@@ -39,20 +39,22 @@ def effective_capabilities(key: str, model: dict, snapshot: dict) -> dict:
     options = entry.get("reasoning_options")
     if not isinstance(options, list):
         options = []
-    has_high = any(isinstance(option, dict) and option.get("type") == "effort"
-                   and isinstance(option.get("values"), list) and "high" in option["values"]
+    has_medium = any(isinstance(option, dict) and option.get("type") == "effort"
+                   and isinstance(option.get("values"), list) and "medium" in option["values"]
                    for option in options)
     settings = {}
-    if has_high and model["protocol"] in ("chat", "responses"):
-        status = "high"
-        detail = "来源明确列出 high；按协议设置 openai_reasoning_effort，渠道兼容待连通验证"
-        settings["openai_reasoning_effort"] = "high"
+    if reason:
+        status, detail = "unknown", reason
+    elif has_medium and model["protocol"] in ("chat", "responses"):
+        status = "medium"
+        detail = "来源明确列出 medium；按协议设置 openai_reasoning_effort，渠道兼容待连通验证"
+        settings["openai_reasoning_effort"] = "medium"
     elif entry.get("reasoning") is False:
         status, detail = "unsupported", "来源明确标记不支持推理"
-    elif has_high:
-        status, detail = "unknown", "来源列出 high，当前协议未配置对应的公开设置"
+    elif has_medium:
+        status, detail = "unknown", "来源列出 medium，当前协议未配置对应的公开设置"
     elif options:
-        status, detail = "no_high", "来源未列出 high；保留原始选项，不换算数字预算或擅自开启"
+        status, detail = "no_medium", "来源未列出 medium；沿用渠道默认，不换算数字预算或擅自开启"
     else:
         status, detail = "unknown", reason or "来源未提供明确推理档位，待核实"
     if "reasoning_effort" in model:

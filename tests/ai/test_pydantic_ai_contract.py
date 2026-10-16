@@ -105,6 +105,41 @@ def test_no_tool_exhausts_correction(protocol):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("first,second", [
+    (reply(tool=False, text=json.dumps(GOOD)), reply(dict(GOOD, super_bid="null"))),
+    (reply(dict(GOOD, super_bid="null")), reply(tool=False, text=json.dumps(GOOD))),
+    (reply(tool_name="plan"), reply(dict(GOOD, bid=99))),
+    (reply(dict(GOOD, bid=99)), reply(tool_name="plan")),
+    (reply(tool=False), reply(tool_name="plan")),
+])
+def test_mixed_corrections_share_two_request_limit(protocol, first, second):
+    from auction_game.ai.agent_tasks import TaskRunner
+    from auction_game.ai.agent_execution import OutputFailedError
+    from tests.support.factories import TEST_GAME
+    h = Harness(protocol, [first, second])
+    with pytest.raises(OutputFailedError):
+        TaskRunner(h.factory)("plan", "plan", [], game=TEST_GAME, coins=6)
+    assert len(h.requests) == 2 and h.closes == 1
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("value", ["null", "None", "3", True])
+def test_super_bid_feedback_preserves_schema_and_explains_json_null(protocol, value):
+    from auction_game.ai.agent_tasks import TaskRunner
+    from tests.support.factories import TEST_GAME
+    h = Harness(protocol, [reply(dict(GOOD, super_bid=value)), reply()])
+    result = TaskRunner(h.factory)("plan", "plan", [], game=TEST_GAME, coins=6)
+    assert result.output.super_bid is None and len(h.requests) == 2
+    body = json.dumps(h.requests[1][1], ensure_ascii=False)
+    assert "整数或不加引号的 JSON null" in body
+    tool = h.requests[0][1]["tools"][0]
+    tool = tool.get("function", tool)
+    schema = tool.get("parameters", tool.get("input_schema"))
+    assert schema["properties"]["super_bid"]["anyOf"] == [{"type": "integer"}, {"type": "null"}]
+    assert "super_bid" in schema["required"]
+
+
 @pytest.mark.parametrize("tool", [True, False])
 def test_chat_auto_profile_preserves_tools_and_validation(tool):
     async def scenario():

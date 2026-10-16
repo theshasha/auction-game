@@ -16,7 +16,7 @@ AI、Bot、benchmark、offline 启动在创建日志或请求模型前自动同�
 
 - 启动与路径：根 `main.py` 保留参数解析及模式分派；`auction_game/paths.py` 集中默认路径，配置在 `configuration.py`，组装在 `runners.py`。
 - 游戏规则、结算、Bot、比赛流程：`auction_game/game/`。
-- 提示词：`auction_game/ai/prompts.py`；schema 与共享纠错：`agent_tasks.py`；历史事务：`ai_player.py`。
+- 自然语言提示：`auction_game/ai/prompts.py`；工具映射、description、schema 与共享纠错：`agent_tasks.py`；历史事务：`ai_player.py`。当场实际工具定义从场次 README 进入 `tools.md`，原始调用及错误查玩家 JSONL。
 - 修改模型调用、历史、重试或协议兼容前，先读 `docs/pydantic-ai-integration.md`。通用执行器、模型工厂与发言编排在 `auction_game/ai/`。
 - 修改暂停与补跑前查 `auction_game/controller.py`，保留两种暂停竞态回归。`RoundTask.participant` 显式接入检查点，已完成结果保留，仅补跑未完成部分。
 - 日志布局、捕获与回放：`auction_game/reporting/`；统计口径先读 `docs/analyze.md`。
@@ -26,7 +26,7 @@ AI、Bot、benchmark、offline 启动在创建日志或请求模型前自动同�
 
 用户授权连通排查后，可执行单次最小对照请求，每次至多一次调用且无自动重试；扩大批量范围须确认。其他收费操作，包括测试赛、正式赛与重跑，均给出命令由用户亲自运行。首次真实比赛由用户运行全测试模型完整赛，检查并确认后再用常规阵容。
 
-比赛最大输出使用能力快照，未知回退 64000；明确列出 high 才按协议使用公开设置，详见使用说明。Hub Responses 的兼容 profile 保留，严格 schema 和一次共享纠错不变。
+比赛最大输出使用能力快照，未知回退 64000；自动推理仅在明确列出 medium 且协议适用时设置 medium，模型目录显式配置优先，详见使用说明。Hub Responses 的兼容 profile 保留，严格 schema 和一次共享纠错不变。
 
 ## 离线验证
 

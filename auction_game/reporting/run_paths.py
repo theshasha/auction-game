@@ -35,6 +35,18 @@ class RunPaths:
     def definitions(self, number):
         return self.data / "replay" / f"{number:03d}_definitions.json"
 
+    @property
+    def tools(self):
+        return self.root / "tools.md"
+
+    @property
+    def tool_definitions(self):
+        return self.data / "tool_definitions.json"
+
+    @property
+    def tool_requests(self):
+        return self.data / "tool_requests.jsonl"
+
     def prepare(self):
         for directory in (self.data / "matches", self.data / "players", self.root / "matches", self.root / "players"):
             directory.mkdir(parents=True, exist_ok=True)

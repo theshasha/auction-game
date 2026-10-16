@@ -9,6 +9,7 @@ import pytest
 
 from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
 from auction_game.ai.agent_tasks import TaskRunner
+from auction_game.ai.prompts import with_output_requirement
 from auction_game.reporting.agent_log import AgentLog, render_markdown_entry
 from tests.support.factories import bid_reply, fake_task_runner, make_ai_obs, make_player
 from tests.support.wire import Harness, reply
@@ -24,7 +25,7 @@ def test_inputs_are_collapsed_losslessly_and_final_fields_appear_once(tmp_path):
     assert "## 开局发言" in markdown and "## opening_speech" not in markdown
     assert "<details><summary>输入原文</summary>" in markdown
     blocks = re.findall(r"<p>(.*?)</p>", markdown)
-    assert [unescape(block.replace("<br>", "\n")).replace("\xa0", " ") for block in blocks] == [prompt]
+    assert [unescape(block.replace("<br>", "\n")).replace("\xa0", " ") for block in blocks] == [with_output_requirement(prompt, "speech", task="speech")]
     assert all("\n" not in block for block in re.findall(r"<details>.*?</details>", markdown, re.S))
     assert markdown.count(strategy) == markdown.count(speech) == 1
     assert "tool-return" not in markdown and "call-1" not in markdown

@@ -11,6 +11,7 @@ from auction_game.ai import prompts
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES, FORMAT_VERSION
+from auction_game.reporting.tool_records import ToolWriter
 
 
 def make_run_dir(mode: str) -> Path:
@@ -69,6 +70,7 @@ def initialize_run(run_dir, snapshot, rules):
                 "players": [{"number": index, **pc} for index, pc in enumerate(snapshot["players"], 1)]}
     paths.config.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (run_dir / "RULES.md").write_text(rules, encoding="utf-8")
+    ToolWriter(paths)  # 即使未发请求也有明确的阅读入口。
     write_readme(paths)
     return paths
 
@@ -77,7 +79,7 @@ def write_readme(paths, standings=None):
     config = paths.read_config()
     lines = ["# 拍卖个人赛", f"运行类型：{RUN_TYPES[config['run_type']]}。",
              "测试模型覆盖身份调用配置。" if config["mode"] == "test_model" else "采用常规身份配置。",
-             "[本场规则](RULES.md)",
+             "[本场规则](RULES.md)", "[本场工具定义](tools.md)",
              "参数与身份见 [本场快照](data/run_config.json)。统计只读取此场次。"]
     for name, title in (("speeches.md", "公开发言"), ("replay.md", "关键节点回放")):
         if (paths.root / name).exists():

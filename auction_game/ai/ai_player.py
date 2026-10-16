@@ -9,6 +9,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart
 from auction_game.ai import prompts
 from auction_game.ai.agent_execution import CallFailedError
 from auction_game.reporting.agent_log import AgentLog
+from auction_game.reporting.tool_records import tool_task
 from auction_game.ai.agent_tasks import TaskRunner, render_task_result
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import Observation
@@ -21,7 +22,8 @@ class AIPlayer(Player):
     def __init__(self, name: str, persona_title: str, persona_text: str,
                  predictions: list[tuple[str, int]], all_names: list[str],
                  task_runner: TaskRunner, log_path: Path | None = None, *, game: GameSettings,
-                 readable_path: Path | None = None, capture_path: Path | None = None):
+                 readable_path: Path | None = None, capture_path: Path | None = None,
+                 tool_writer=None, player_number=None):
         super().__init__(name)
         self.game = game
         self.messages: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(
@@ -32,6 +34,8 @@ class AIPlayer(Player):
         self.log = AgentLog(name, log_path, readable_path=readable_path, capture_path=capture_path,
                             result_renderer=render_task_result)
         self._pending_day1_bid: tuple[int, int | None] | None = None
+        self.tool_writer = tool_writer
+        self.player_number = player_number
 
     def checkpoint(self) -> tuple[int, tuple[int, int | None] | None]:
         """进程内快照；无需复制只增历史的前缀。"""
@@ -42,9 +46,12 @@ class AIPlayer(Player):
         del self.messages[length:]
 
     def _task(self, task, prompt, phase, context="", *, coins=0, commit=True):
-        entry = {"phase": phase, "task": task, "context": context}
+        entry = self.log.begin({"phase": phase, "task": task, "context": context})
+        if self.tool_writer is not None:
+            entry["tool_definitions"] = []
         try:
-            result = self.task_runner(task, prompt, self.messages, game=self.game, coins=coins)
+            with tool_task(self.tool_writer, self.name, self.player_number, entry):
+                result = self.task_runner(task, prompt, self.messages, game=self.game, coins=coins)
         except CallFailedError as exc:
             self.log.failure(entry, exc)
             raise

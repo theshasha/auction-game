@@ -29,7 +29,7 @@ models:
       model: gpt-6-luna
   deepseek_flash:
     name: 鲸鱼妹妹
-    model: deepseek-v4.1-flash
+    model: deepseek-flash
     provider: hub
     protocol: chat
     models_dev:
@@ -46,6 +46,7 @@ models:
       provider: google
       model: gemini-3.8-flash
   glm_pro:
+    # 保留旧模型供切回使用，当前比赛席位由 MIMO 接替。
     name: GLM姐姐
     model: glm-5.3
     provider: hub
@@ -69,3 +70,19 @@ models:
     models_dev:
       provider: deepseek
       model: deepseek-v4-pro
+  mimo_pro:
+    name: MIMO姐姐
+    model: mimo-v2.6-pro
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: xiaomi
+      model: mimo-v2.6-pro
+  mimo_flash:
+    name: MIMO妹妹
+    model: mimo-v2.6-flash
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: xiaomi
+      model: mimo-v2.6-flash

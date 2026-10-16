@@ -55,6 +55,19 @@ def speech_format_hint() -> str:
     )
 
 
+def with_output_requirement(prompt: str, tool_name: str | None, *, task: str) -> str:
+    """任务组装时追加一次；工具名由 agent_tasks 的映射传入。"""
+    if tool_name is None:
+        return prompt
+    requirement = f"当前输出要求：调用 `{tool_name}` 工具提交；不要在正文模拟工具调用。"
+    if task == "speech":
+        requirement += "私有策略填 strategy，公开发言填 speech。"
+    else:
+        requirement += ('super_bid 必须出现：整数不加引号；不使用时填 JSON null，不能填字符串 "null" 或 "None"。'
+                        '类型示例：{"super_bid": null}（仅示意字段类型，完整提交仍须包含全部必填字段）。')
+    return prompt + "\n\n" + requirement
+
+
 def build_system_prompt(
     name: str,
     persona_title: str,

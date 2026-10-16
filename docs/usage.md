@@ -2,6 +2,14 @@
 
 在项目根目录用现有 Python 安装依赖：`python -m pip install -r requirements.txt`。
 
+## 提示词与排查入口
+
+- 改自然语言任务提示：`auction_game/ai/prompts.py`。当前输出工具要求在任务组装时统一追加，进入实际请求及消息日志。
+- 改工具名、description 或字段 schema：`auction_game/ai/agent_tasks.py`。规划业务仍叫 plan，与日常出价共用 `bid` 输出工具；发言使用 `speech`，总结直接返回文本。
+- 看当场工具定义：场次 `README.md` → `tools.md`，无需开启完整请求捕获。
+- 看模型原始工具调用与校验错误：`data/players/<编号>.jsonl`，按工具页的 task_id 对照。
+- 完整请求捕获与回放：见下文“回放与调试”，用于进一步排查消息历史及请求参数。
+
 ## 修改配置
 
 四份手工 YAML 在 `configs/`：`game.yaml` 改比赛参数；`models.yaml` 定义模型、角色名及协议；`players.yaml` 改阵容和人设；`config.yaml` 定义渠道及测试模型。密钥写根 `.env` 中配置指定的环境变量。
@@ -24,7 +32,7 @@ python -m auction_game.cli.sync_models --write
 python -m auction_game.cli.sync_models --input path/to/api.json --write
 ```
 
-默认仅预览；`--write` 原子写入，数据相同不更新。按 models.dev 精确来源匹配，不猜模型别名。比赛输出采用有效最大输出，未知回退 **64000**；独立 input 与 context 只留作元数据，不缩减输出或裁历史。明确列出 **high** 时，Chat/Responses 使用公开 `openai_reasoning_effort=high`；缺档位、toggle 或预算不会猜算成 high，未知状态在启动中报告。渠道拒绝或截断直接报错，不降低预算重发。
+默认仅预览；`--write` 原子写入，数据相同不更新。按 models.dev 精确来源匹配，不猜模型别名。比赛输出采用有效最大输出，未知回退 **64000**；独立 input 与 context 只留作元数据，不缩减输出或裁历史。明确列出 **medium** 时，Chat/Responses 自动使用公开 `openai_reasoning_effort=medium`，模型目录显式设置优先。仅 high、toggle、预算或缺档位均沿用渠道默认，不猜算 medium 或改用 high；未适配协议同样沿用默认。MIMO 当前快照只有 toggle，自动策略不发送 medium。启动提示及本场快照说明实际状态；公共能力原始列表保持不变。渠道拒绝或截断直接报错，不降低预算重发。
 
 ## 运行比赛
 
@@ -45,7 +53,7 @@ python main.py --ai --test-model
 python main.py --ai
 ```
 
-先完成测试模型整场比赛，经检查确认后使用常规阵容。`--test-model` 使用 `configs/config.yaml` 的 `test_model` 目录键；要用现有 GLM Flash，手动设为 `test_model: glm_flash`，无需改阵容或新增命令参数。启动提示显示所选目录键、实际模型 ID 与协议。测试模式整体替换执行模型、能力、预算与推理设置，保留身份、人设及独立历史；原测试模型的 `reasoning_effort: low` 不会带入新选择。
+先完成测试模型整场比赛，经检查确认后使用常规阵容。`--test-model` 使用 `configs/config.yaml` 的 `test_model` 目录键；要切回保留的 GLM Flash，手动设为 `test_model: glm_flash`，无需改阵容或新增命令参数。启动提示显示所选目录键、实际模型 ID 与协议。测试模式整体替换执行模型、能力、预算与推理设置，保留身份、人设及独立历史；原测试模型的 `reasoning_effort: low` 不会带入新选择。
 
 连通检查的 `--model 目录键` 可重复，默认按阵容实际执行配置去重；单目标至多一次流式工具请求，无重试。默认探测预算 2048，可用 `--max-tokens` 调整且不超过比赛预算；探测不依赖 `game.yaml`，不改比赛预算。智能体执行真实探测的授权边界见根 `AGENTS.md`。
 
@@ -57,11 +65,13 @@ Typora 输入折叠采用连续的纯 HTML 块，换行使用 `br`，特殊字�
 
 所有新场次在 `logs/<YYYYMMDD_HHMMSS>_<ai|ai-test|bot|offline>/`；同秒加序号防覆盖。`ai-test` 同样是真实收费比赛。类型同时保存在快照，offline 的常规/替身差异保存在 `mode`。
 
-先打开 `README.md` 查看结果与链接。`RULES.md` 是本场规则；`speeches.md` 为公开发言；`matches/` 为逐局结果；`players/` 是含私有策略的私人对话，分享前注意隐私。文件用本场补零编号，标题显示角色名。
+先打开 `README.md` 查看结果与链接。`tools.md` 展示本场工具定义；`RULES.md` 是本场规则；`speeches.md` 为公开发言；`matches/` 为逐局结果；`players/` 是含私有策略的私人对话，分享前注意隐私。文件用本场补零编号，标题显示角色名。
 
-私人对话按中文比赛阶段展示，输入原文折叠，私有策略及公开发言各保留一次原文。提交出价与实际结算分开；正文不显示任务编号、常规成功状态、网络尝试次数或逐条审计入口，纠错及失败仅显示简短说明。同一任务补跑提示恢复结果并链接首次相同输入与上次记录。完整工具消息、错误及补跑关联保存在 `data/players/` 的机器审计中，历史场次不自动重写。
+私人对话按中文比赛阶段展示，输入原文折叠，私有策略及公开发言各保留一次原文。提交出价与实际结算分开；有工具记录的任务提供 task_id 与定义链接，不显示常规成功状态或网络尝试次数，纠错及失败仅显示简短说明。同一任务补跑提示恢复结果并链接首次相同输入与上次记录。完整工具消息、错误及补跑关联保存在 `data/players/` 的机器审计中，历史场次不自动重写。
 
 机器 JSON/JSONL 全在 `data/`：`run_config.json` 保存版本、类型、玩家编号及实际执行快照，`matches/` 保存结算，`players/` 保存增量任务审计。仅启用请求捕获时才有 `data/replay/`。
+
+默认轻量记录在 `data/tool_definitions.json`（同协议同内容只存一次）与 `data/tool_requests.jsonl`（玩家、业务任务、逻辑请求/重发序号、模型及 SDK 来源）。真实 SDK 在发送前只提取实际存在的 tools、tool_choice、parallel_tool_calls，保留 null 与字段缺失的区别，失败请求也留痕。`tools.md` 标明“发送前实际请求定义”；FunctionModel 离线赛使用生产 SDK 在 MockTransport 中生成定义，标明“离线 SDK 生成”。总结明确标记无输出工具；未发请求时显示尚无记录。此记录独立于完整捕获，不保存鉴权头、完整 body 或重复历史；连通检查不创建场次。旧场次保持原样。
 
 ```bash
 python -m auction_game.reporting.analyze

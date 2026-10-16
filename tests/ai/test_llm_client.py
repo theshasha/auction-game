@@ -145,7 +145,7 @@ def test_non_transport_model_api_error_is_not_retryable():
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_player_task_chain_preserves_tool_history_on_wire(protocol, tmp_path):
     long_summary = "观众总结" * 200
-    h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}),
+    h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}), reply(),
                            reply(tool=False, text=long_summary)])
     player = make_player(TaskRunner(h.factory), tmp_path)
     assert player.plan_strategy("plan", "opening_plan") is None
@@ -153,18 +153,23 @@ def test_player_task_chain_preserves_tool_history_on_wire(protocol, tmp_path):
     assert len(h.requests) == 1
     assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
     assert player.give_speech("speak", "final_speech") == "public"
+    player.plan_strategy("next plan", "match_1_plan")
     before = deepcopy(player.messages)
     assert player.final_summary("original summary request and other players' speeches") == long_summary
-    assert player.messages == before and len(h.requests) == h.closes == 4
+    assert player.messages == before and len(h.requests) == h.closes == 5
     body = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert body.count("【你的身份】") == 1 and "original summary request" in body
     assert "private" in body and "other players' speeches" in body
-    names = ["plan", "bid", "speech"]
+    names = ["bid", "bid", "speech", "bid"]
     for index, (_, request_body) in enumerate(h.requests):
         encoded_body = json.dumps(request_body, ensure_ascii=False)
         assert encoded_body.count("【你的身份】") == 1
         tools = request_body.get("tools", [])
         assert [t.get("function", t)["name"] for t in tools] == names[index:index + 1]
+        if tools:
+            tool = tools[0].get("function", tools[0])
+            assert "提交当前" in tool["description"]
+            assert f"调用 `{names[index]}` 工具提交" in encoded_body
         if protocol == "chat":
             messages = request_body["messages"]
             calls = [(c["id"], c["function"]["name"]) for m in messages for c in m.get("tool_calls", [])]
@@ -179,7 +184,7 @@ def test_player_task_chain_preserves_tool_history_on_wire(protocol, tmp_path):
             returns = [p["tool_use_id"] for p in parts if p["type"] == "tool_result"]
         assert calls == [(f"call_{i + 1}", name) for i, name in enumerate(names[:index])]
         assert returns == [call_id for call_id, _ in calls]
-    assert body.index('"plan"') < body.index("当前是第 1 局第 2 天") < body.index('"speak"')
+    assert body.index("plan\\n") < body.index("当前是第 1 局第 2 天") < body.index("speak\\n")
     assert "public" in body
     parts = [p for m in before for p in m.parts]
     assert [p.tool_call_id for p in parts if isinstance(p, ToolCallPart)] == [
@@ -187,7 +192,7 @@ def test_player_task_chain_preserves_tool_history_on_wire(protocol, tmp_path):
     encoded = ModelMessagesTypeAdapter.dump_json(before)
     assert ModelMessagesTypeAdapter.dump_json(ModelMessagesTypeAdapter.validate_json(encoded)) == encoded
     entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
-    assert [e["task"] for e in entries] == ["plan", "bid", "speech", "summary"]
+    assert [e["task"] for e in entries] == ["plan", "bid", "speech", "plan", "summary"]
     assert entries[-1]["result"] == long_summary
     assert long_summary in player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert all(s.closed for s in h.streams)

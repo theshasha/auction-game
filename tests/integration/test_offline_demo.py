@@ -42,6 +42,13 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     expected_calls = 2 + game.regular_matches * (game.max_days - 1) + 2 * (game.regular_matches - 1) + 2
     assert all(f.opened == f.closed == f.calls == expected_calls for f in factories)
     snapshot = paths.read_config()
+    tool_definitions = json.loads(paths.tool_definitions.read_text(encoding="utf-8"))
+    tool_refs = [json.loads(line) for line in paths.tool_requests.read_text(encoding="utf-8").splitlines()]
+    assert len(tool_definitions) == 3 and len(tool_refs) == expected_calls * len(names)
+    assert all(ref["source"] == "offline_sdk_generated" and ref["definition_id"] in tool_definitions for ref in tool_refs)
+    assert all(ref["versions"]["pydantic-ai-slim"] for ref in tool_refs)
+    assert "离线 SDK 生成" in paths.tools.read_text(encoding="utf-8")
+    assert "[本场工具定义](tools.md)" in (run_dir / "README.md").read_text(encoding="utf-8")
     assert snapshot["run_type"] == "offline"
     assert snapshot["mode"] == "test_model"
     for pc, saved in zip(configs, snapshot["players"]):
@@ -52,7 +59,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
                                                                   "model_settings", "capabilities")}}
         assert pc["identity_model"]["model"] != pc["model"]
     assert all(f.settings["max_tokens"] == configs[0]["max_tokens"] for f in factories)
-    assert all(f.settings["openai_reasoning_effort"] == "high" for f in factories)
+    assert all(f.settings["openai_reasoning_effort"] == "medium" for f in factories)
     assert all(f.model_profile == {"supports_forced_tool_choice": False} for f in factories)
 
     matches = analyze.load_match_logs(run_dir)
@@ -76,6 +83,9 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert all("requests" not in entry for entry in entries)
     load_requests(paths.capture(1), entries)
     assert len(entries) == expected_calls
+    for entry in entries:
+        refs = [ref for ref in tool_refs if ref["number"] == 1 and ref["task_id"] == entry["task_id"]]
+        assert [ref["definition_id"] for ref in refs] == entry["tool_definitions"]
     assert [entry["phase"] for entry in entries[:3]] == ["opening_speech", "opening_plan", "bid"]
     assert entries[2]["context"] == "第1局第2天"
     assert not any(entry["context"].endswith("第1天") for entry in entries if entry["task"] == "bid")
@@ -86,7 +96,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         assert entry["status"] == "success" and not entry["request_errors"]
         assert record["request"] == 1
         assert record["settings"]["max_tokens"] == configs[0]["max_tokens"]
-        assert record["settings"]["openai_reasoning_effort"] == "high"
+        assert record["settings"]["openai_reasoning_effort"] == "medium"
         ModelMessagesTypeAdapter.validate_python(record["messages"])
         ModelMessagesTypeAdapter.validate_python([record["response"]])
         ModelMessagesTypeAdapter.validate_python(entry["messages"])
@@ -95,7 +105,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
                                                if message["kind"] == "response"]
         if entry["task"] != "summary":
             tool = record["parameters"]["output_tools"][0]
-            assert tool["name"] == entry["task"]
+            assert tool["name"] == ("bid" if entry["task"] == "plan" else entry["task"])
             assert tool["parameters_json_schema"]["properties"]["strategy"]["description"].startswith("仅自己可见")
         if entry["task"] == "plan":
             match_index = 1 if entry["phase"] == "opening_plan" else int(entry["phase"].split("_")[1]) + 1
@@ -112,6 +122,8 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         assert not paths.capture(number).exists()
 
     replay = replay_path.read_text(encoding="utf-8")
+    assert "[本场默认工具记录](tools.md)" in replay
+    assert "../tools.md#" in paths.player(1, readable=True).read_text(encoding="utf-8")
     titles = ["比赛开头 · 开局发言", "第一局规划 · 首日缓存", "第一局第二天 · 正常出价",
               "第一局结束 · 局末发言", "第二局规划 · 接收实际反馈", "实际比赛结尾 · 最终感言",
               "实际比赛结尾 · 观众总结"]
@@ -123,7 +135,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert "非 HTTP 报文" in replay and "模拟回复" in replay and "仅 speech 投递" in replay
     assert "SDK 在离线模拟传输中生成的请求定义，未发送到真实中转" in replay
     snapshots = json.loads(paths.definitions(1).read_text(encoding="utf-8"))
-    assert len(snapshots) == 4  # 三种工具 + 文本；完整赛不逐请求重复捕获。
+    assert len(snapshots) == 3  # 共享出价工具、发言与文本；完整赛不逐请求重复捕获。
     definitions = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", replay, re.S)
                    if '"tools"' in block]
     assert definitions == [snapshot["definition"] for snapshot in snapshots.values() if snapshot["definition"].get("tools")]
@@ -288,6 +300,6 @@ def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, 
         assert self._mode == "continuous", "离线失败进入了无人交互闸门"
         return wait(self, label)
     monkeypatch.setattr(offline_demo.Controller, "wait_for_turn", continuous_only)
-    with pytest.raises(RuntimeError, match="离线任务失败：甲 / bid"):
+    with pytest.raises(RuntimeError, match="离线任务失败：甲 / plan"):
         generate_demo(tmp_path / "invalid", test_model=True)
     assert attempts == ["bid", "bid"]  # 共享输出纠错保留，整轮不自动补跑。

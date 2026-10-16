@@ -16,21 +16,22 @@ def public_data():
                      "reasoning": True, "reasoning_options": [{"type": "toggle"}], "tool_call": True},
         "source-b": {"id": "source-b", "limit": {"context": 5000, "output": 0}, "reasoning": False},
         "source-c": {"id": "source-c", "limit": {"context": 9999, "input": 8000, "output": 1900},
-                     "reasoning": True, "reasoning_options": [{"type": "effort", "values": ["high"]}]},
+                     "reasoning": True, "reasoning_options": [{"type": "effort", "values": ["medium", "high"]}]},
     }}}
 
 
-def test_explicit_reasoning_override_only_changes_selected_model(config_files):
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_explicit_reasoning_override_only_changes_selected_model(config_files, effort):
     path = config_files[2]
     original = path.read_text(encoding="utf-8")
     data = yaml.safe_load(original)
-    data["models"]["substitute"].update(protocol="chat", reasoning_effort="low")
+    data["models"]["substitute"].update(protocol="chat", reasoning_effort=effort)
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     config, normal = load_configuration(*config_files)
     _, testing = load_configuration(*config_files, test_model=True)
-    assert all(p["protocol"] == "chat" and p["model_settings"] == {"openai_reasoning_effort": "low"}
+    assert all(p["protocol"] == "chat" and p["model_settings"] == {"openai_reasoning_effort": effort}
                for p in testing)
-    assert config["models"]["substitute"]["capabilities"]["reasoning_status"] == "low"
+    assert config["models"]["substitute"]["capabilities"]["reasoning_status"] == effort
     path.write_text(original, encoding="utf-8")
     _, unchanged = load_configuration(*config_files)
     assert normal == unchanged
@@ -63,11 +64,11 @@ def test_sync_preview_write_repeat_and_runtime_offline(config_files, tmp_path, c
     config, players = load_configuration(*config_files)
     assert [p["max_tokens"] for p in players] == [900, DEFAULT_MAX_TOKENS]
     assert players[0]["capabilities"]["limit"]["input"] is None
-    assert players[0]["capabilities"]["reasoning_status"] == "no_high"
+    assert players[0]["capabilities"]["reasoning_status"] == "no_medium"
     assert players[0]["model_settings"] == {}
     assert players[1]["capabilities"]["output_fallback_reason"]
     _, testing = load_configuration(*config_files, test_model=True)
-    assert all(p["max_tokens"] == 1900 and p["model_settings"] == {"openai_reasoning_effort": "high"}
+    assert all(p["max_tokens"] == 1900 and p["model_settings"] == {"openai_reasoning_effort": "medium"}
                and p["capabilities"] == config["models"]["substitute"]["capabilities"] for p in testing)
 
 
@@ -133,24 +134,24 @@ def test_exact_source_missing_canonical_guard_and_unknown_reasoning(config_files
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
-def test_high_uses_protocol_setting_without_manual_binding(config_files, protocol):
+def test_medium_uses_protocol_setting_without_manual_binding(config_files, protocol):
     catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
     catalog["substitute"]["protocol"] = protocol
     snapshot = build_snapshot(catalog, public_data(), "synthetic")
     effective = effective_capabilities("substitute", catalog["substitute"], snapshot)
-    assert effective["model_settings"] == ({} if protocol == "anthropic" else {"openai_reasoning_effort": "high"})
-    assert effective["capabilities"]["reasoning_status"] == ("unknown" if protocol == "anthropic" else "high")
+    assert effective["model_settings"] == ({} if protocol == "anthropic" else {"openai_reasoning_effort": "medium"})
+    assert effective["capabilities"]["reasoning_status"] == ("unknown" if protocol == "anthropic" else "medium")
 
 
 @pytest.mark.parametrize("options", [[{"type": "toggle"}], [{"type": "budget_tokens", "min": 1, "max": 10000}],
-                                     [{"type": "effort", "values": ["low", "medium"]}]])
-def test_options_without_high_are_reported_without_conversion(config_files, options):
+                                     [{"type": "effort", "values": ["high"]}], []])
+def test_options_without_medium_are_reported_without_conversion(config_files, options):
     catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
     data = public_data()
     data["official"]["models"]["source-c"]["reasoning_options"] = options
     effective = effective_capabilities("substitute", catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
     assert effective["model_settings"] == {}
-    assert effective["capabilities"]["reasoning_status"] == "no_high"
+    assert effective["capabilities"]["reasoning_status"] == ("no_medium" if options else "unknown")
     assert effective["capabilities"]["reasoning_options"] == options
 
 
@@ -160,3 +161,13 @@ def test_output_budget_is_not_reduced_by_input_or_context(config_files):
     data["official"]["models"]["source-c"]["limit"]["output"] = 9000
     effective = effective_capabilities("substitute", catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
     assert effective["max_tokens"] == 9000
+
+
+@pytest.mark.parametrize("status", ["unknown", "unmatched"])
+def test_unmatched_source_never_uses_stale_medium(config_files, status):
+    catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
+    snapshot = build_snapshot(catalog, public_data(), "synthetic")
+    snapshot["models"]["substitute"]["status"] = status
+    effective = effective_capabilities("substitute", catalog["substitute"], snapshot)
+    assert effective["model_settings"] == {}
+    assert effective["capabilities"]["reasoning_status"] == "unknown"

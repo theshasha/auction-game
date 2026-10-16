@@ -6,9 +6,11 @@
 
 `auction_game/ai/agent_execution.py` 的 `AgentExecutor(factory)(agent, prompt, history, deps=...)` 使用公开 `Agent.run(event_stream_handler=...)` 消费所有模型节点，包括纠错。同步线程每任务一次 `asyncio.run()`；客户端在该事件循环内创建并关闭，工厂不持有跨循环 HTTP 客户端。执行器唯一一次深拷贝输入历史，不识别拍卖任务。
 
-`agent_tasks.TaskRunner` 在业务层定义严格输出与 `AuctionDeps(game, coins)`：bid/plan 返回 strategy、bid、必填可空 super_bid；speech 返回私有 strategy 与公开 speech；summary 返回非空文本。`strict=True, extra='forbid'`，拒绝字符串数字、布尔出价与空白策略。发言只由提示限长，不硬截断，内部 thinking 不代替业务策略。提示词集中在 `prompts.py`，规则模板在根目录。
+`agent_tasks.TaskRunner` 在业务层定义严格输出与 `AuctionDeps(game, coins)`：bid/plan 共用 `bid` 工具，返回 strategy、bid、必填可空 super_bid；speech 工具返回私有 strategy 与公开 speech；summary 返回非空文本。业务 plan 阶段及首日缓存不变。工具映射、显式 description 与字段 schema 集中在 `agent_tasks.py`；自然语言集中在 `prompts.py`，TaskRunner 从映射取得当前工具名，统一追加提交要求，进入消息日志。规则模板在根目录。
 
-格式与规则校验共用 `Agent(retries=1)` 的一次纠错。`game_rules.validate_submission` 使用实时余额；只采用最终合法输出。输出耗尽抛 `OutputFailedError`；预期模型/传输故障抛 `CallFailedError` 交控制器处理；程序错误原样抛出。连通工具使用独立最小 Agent 与通用执行器，不依赖比赛参数。
+`strict=True, extra='forbid'`，拒绝字符串数字、布尔出价与空白策略。super_bid 的公开 before 字段校验只报告类型错误，schema 保持 integer/null，必填且不转换字符串；反馈说明整数与不加引号的 JSON null 都合法，不使用时填 null。发言只由提示限长，不硬截断，内部 thinking 不代替业务策略。
+
+格式与规则校验使用 `Agent(retries=1)`，TaskRunner 同时设置公开 `UsageLimits(request_limit=2)`，使文本、未知工具、结构及业务错误混合时也共用一次纠错。SDK 对文本与工具错误存在分别计数的路径，逻辑请求上限防止第三次请求，耗尽同样映射为 `OutputFailedError`。`game_rules.validate_submission` 使用实时余额；只采用最终合法输出。预期模型/传输故障抛 `CallFailedError` 交控制器处理；程序错误原样抛出。连通工具使用独立最小 Agent 与通用执行器，不依赖比赛参数。
 
 ## 历史、隐私与暂停
 
@@ -32,7 +34,7 @@ AIPlayer 持有唯一 `list[ModelMessage]`，初始化放入一次 system。执�
 
 ## 协议兼容
 
-ModelFactory 按显式 protocol 选择 Chat、Responses 或 Anthropic，不猜品牌。Chat profile 保持 `openai_chat_streaming_requires_finish_reason=True` 与 `openai_chat_supports_max_completion_tokens=False`，实际使用 max_tokens；Responses 使用 max_output_tokens；Anthropic 使用 max_tokens。超时进入 HTTP read timeout。输出预算、64000 回退和 high 的单一说明在使用文档。
+ModelFactory 按显式 protocol 选择 Chat、Responses 或 Anthropic，不猜品牌。Chat profile 保持 `openai_chat_streaming_requires_finish_reason=True` 与 `openai_chat_supports_max_completion_tokens=False`，实际使用 max_tokens；Responses 使用 max_output_tokens；Anthropic 使用 max_tokens。超时进入 HTTP read timeout。输出预算、64000 回退和默认 medium 策略见使用文档；显式 reasoning_effort 优先，原始能力列表保持不变。
 
 渠道 `chat_profile.supports_forced_tool_choice` 与 `responses_profile.supports_forced_tool_choice` 只接受布尔，分别作用于 Chat 与 Responses。当前 Hub 均为 false，使 SDK 发送 auto；未设置的渠道保留默认。覆盖保留框架推断的 context 与加密推理 include，推理档位与预算不变。普通 model_settings.tool_choice 会被框架输出要求覆盖，使用公开 profile 才能正确兼容。工具与严格校验仍启用，纯文本合法 JSON 出价仍走共享一次纠错并在耗尽后失败。
 
@@ -43,6 +45,10 @@ ModelFactory 按显式 protocol 选择 Chat、Responses 或 Anthropic，不猜�
 `RunPaths` 是日志、统计和回放的共同布局。format_version、run_type、身份编号合入 run_config，不另建 run.json。旧场次保持原地，新读取器只支持当前格式。玩家 JSONL 存本次新增规范消息、结果与错误；失败审计按 run_id 选取，排除 interrupted 占位响应，避免相邻 request 合并导致漏记。
 
 写入顺序为任务 JSONL、可选捕获、显式私人 Markdown；任一失败向上传播，成功日志完成后才提交内存状态。没有跨文件事务：后续写入失败会留下部分审计，但历史与首日缓存不提交。
+
+默认轻量工具审计先于 HTTP 发送：`llm_client.py` 的公开 HTTP request hook 调用 `tool_records.protocol_tools()`，只提取实际存在的 tools/tool_choice/parallel_tool_calls。AgentLog 在任务开始时分配既有 task_id，通过 ContextVar 关联玩家、业务任务、BufferedRequest 的 request/attempt。每场共享 ToolWriter 在锁内按协议及字段内容哈希去重，定义写 `data/tool_definitions.json`，来源与请求引用写 `data/tool_requests.jsonl`，随后更新 `tools.md`。磁盘异常即使被 SDK 包装成连接错误也原样传播，不消耗网络重发；此时不提交历史或缓存。失败请求的发送前记录保留，无跨文件事务。README 与私人 Markdown 直接链接工具页，任务 JSONL 引用定义 ID。
+
+真实捕获标记 `http_pre_send`（发送前实际请求定义），FunctionModel 用生产 SDK + MockTransport 序列化并标记 `offline_sdk_generated`（离线 SDK 生成）。仅有场次上下文时启用；无请求显示尚无记录，总结记录无输出工具。不保存鉴权头、密钥、完整 body 或历史副本。独立连通检查不创建场次；旧场次不补写。默认轻量审计与下述完整捕获互相独立。
 
 请求捕获默认关闭。开启时 RequestCapture 记录真实逻辑边界 messages/settings/parameters/response，包括失败、纠错、回滚后的分叉和总结；不猜测成功历史。RequestWriter 将 schema/settings 按内容哈希存一次，历史用前次相同消息前缀加变化尾部，尾部和响应优先引用任务审计并保留元数据差异。重建严格比较原值和哈希，保留 null、false 与缺失字段；错误从任务审计索引引用。正常模型输入不改，完整展开只按需导出 debug。
 

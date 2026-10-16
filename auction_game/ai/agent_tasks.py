@@ -5,13 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core import PydanticCustomError
 from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
 from pydantic_ai.messages import ModelMessage
+from pydantic_ai.usage import UsageLimits
 
 from auction_game.ai.agent_execution import AgentExecutor, ExecutionResult
 from auction_game.game.game_rules import GameSettings, validate_submission
 from auction_game.ai.llm_client import ModelFactory
+from auction_game.ai import prompts
 
 Task = Literal["bid", "plan", "speech", "summary"]
 
@@ -19,18 +22,33 @@ Task = Literal["bid", "plan", "speech", "summary"]
 class BidOutput(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
     strategy: str = Field(min_length=1, description="仅自己可见的局势分析与出价策略")
-    bid: int = Field(description="今日正常出价")
-    super_bid: int | None = Field(description="今日超级出价，不使用时必须为 null")
+    bid: int = Field(description="今日正常出价，必须为不加引号的整数")
+    super_bid: int | None = Field(description='必填：今日超级出价，必须为不加引号的整数或 JSON null；不使用时填 null，禁止字符串 "null"、"None"，不能省略')
+
+    @field_validator("super_bid", mode="before")
+    @classmethod
+    def validate_super_bid_type(cls, value):
+        if value is not None and type(value) is not int:
+            raise PydanticCustomError("super_bid_type",
+                                     'super_bid 必须为整数或不加引号的 JSON null；字符串 "null"、"None"、字符串数字及布尔值均无效。不使用时填 null，不能省略字段。')
+        return value
 
 
-class PlanOutput(BidOutput):
-    """局前策略及本局首日提交；一次生成，首日只消费缓存。"""
+PlanOutput = BidOutput  # 业务阶段仍为 plan；与每日出价共用完整输出定义。
 
 
 class SpeechOutput(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
     strategy: str = Field(min_length=1, description="仅自己可见的发言策略")
     speech: str = Field(min_length=1, description="实际向其他玩家公开的完整发言")
+
+
+# 唯一任务到输出工具映射；自然语言提醒也从此取得当前名称。
+OUTPUT_TOOLS = {
+    "bid": ToolOutput(BidOutput, name="bid", description="提交当前规划或每日出价任务：填写私有策略、正常出价及必填的超级出价。"),
+    "speech": ToolOutput(SpeechOutput, name="speech", description="提交当前发言任务：分别填写私有发言策略与向其他玩家公开的发言。"),
+}
+OUTPUT_TOOLS["plan"] = OUTPUT_TOOLS["bid"]
 
 
 @dataclass
@@ -57,9 +75,7 @@ def render_task_result(result: dict | str) -> list[str]:
 
 def make_agent(model, task: Task, *, settings=None):
     """组装个人赛任务；比赛参数与实时余额由业务 deps 提供。"""
-    outputs = {"bid": BidOutput, "plan": PlanOutput, "speech": SpeechOutput, "summary": str}
-    output = outputs[task]
-    agent = Agent(model, output_type=str if output is str else ToolOutput(output, name=task),
+    agent = Agent(model, output_type=str if task == "summary" else OUTPUT_TOOLS[task],
                   deps_type=AuctionDeps, retries=1, model_settings=settings)
 
     @agent.output_validator
@@ -87,4 +103,8 @@ class TaskRunner:
                  game: GameSettings | None = None, coins: int = 0) -> ExecutionResult[BidOutput | SpeechOutput | str]:
         if task in ("bid", "plan") and game is None:
             raise ValueError("出价及规划任务需要比赛参数")
-        return self.executor(make_agent(None, task), prompt, history, deps=AuctionDeps(game, coins))
+        tool = OUTPUT_TOOLS.get(task)
+        prompt = prompts.with_output_requirement(prompt, tool.name if tool else None, task=task)
+        # SDK 的文本与工具校验路径可能分别计数；公开请求上限保证混合纠错也共用一次。
+        return self.executor(make_agent(None, task), prompt, history, deps=AuctionDeps(game, coins),
+                             usage_limits=UsageLimits(request_limit=2))

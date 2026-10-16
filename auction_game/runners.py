@@ -18,6 +18,7 @@ from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.game.players import BOT_NAMES, RandomBot
 from auction_game.game.rules import render_rules, sync_root_rules
 from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_final_result
+from auction_game.reporting.tool_records import ToolWriter
 from auction_game.game.tournament import run_tournament
 
 
@@ -108,6 +109,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         } for pc in player_configs],
     }
     paths = initialize_run(run_dir, snapshot, render_rules(game, all_names))
+    tool_writer = ToolWriter(paths)
     controller = controller if controller is not None else Controller(mode="step")
     # 注入的离线控制器也使用同一份已校验配置，所有轮级任务共用此上限。
     controller.max_concurrency = max_concurrency
@@ -124,6 +126,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             log_path=paths.player(number),
             readable_path=paths.player(number, readable=True),
             capture_path=paths.capture(number) if pc["name"] == record_player else None,
+            tool_writer=tool_writer, player_number=number,
         )
         for number, pc in enumerate(player_configs, 1)
     ]

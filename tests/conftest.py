@@ -35,7 +35,7 @@ def config_files(tmp_path, monkeypatch):
     data = {"official": {"models": {
         f"source-{letter}": {"id": f"source-{letter}", "limit": {"context": 1000, "output": budget},
                               "reasoning": letter == "c", "tool_call": True,
-                              "reasoning_options": [{"type": "effort", "values": ["low", "high"]}] if letter == "c" else []}
+                              "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high"]}] if letter == "c" else []}
         for letter, budget in zip("abc", (123, 456, 789))
     }}}
     (tmp_path / "model_capabilities.json").write_text(

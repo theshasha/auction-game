@@ -19,15 +19,11 @@ from auction_game.ai.llm_client import ModelFactory
 from auction_game.reporting.run_paths import RunPaths
 from auction_game.reporting.request_records import load_requests, digest
 from auction_game.reporting.run_output import write_readme
+from auction_game.reporting.tool_records import protocol_tools, tool_task
 
 
 def _json(value):
     return "```json\n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n```"
-
-
-def protocol_tools(body):
-    """只取 SDK 实际发送的工具及选择字段；保留 null/false，不转换协议。"""
-    return {key: body[key] for key in ("tools", "tool_choice", "parallel_tool_calls") if key in body}
 
 
 async def capture_protocol_definition(factory, record):
@@ -50,7 +46,7 @@ async def capture_protocol_definition(factory, record):
                            model_profile=factory.model_profile)
     messages = ModelMessagesTypeAdapter.validate_python(record["messages"])
     parameters = TypeAdapter(ModelRequestParameters).validate_python(record["parameters"])
-    with override_allow_model_requests(True):
+    with override_allow_model_requests(True), tool_task(None, None, None, None):
         async with offline.open() as model:
             try:
                 async with model.request_stream(messages, record["settings"], parameters):
@@ -142,6 +138,8 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
               f"运行模式：{config['mode']}；身份模型：{pc['identity_model']['model']}；"
               f"实际执行：{pc['execution_model']['protocol']} / {pc['execution_model']['model']}。",
               "参数与名单来自本场 [run_config.json](data/run_config.json)；规则见 [RULES.md](RULES.md)。",
+              *(["[本场默认工具记录](tools.md)保留发送前定义或明确标注的离线 SDK 定义与任务引用。"]
+                if paths.tools.exists() else []),
               f"[增量模型边界捕获]({paths.capture(number).relative_to(run_dir).as_posix()})"
               f"包含框架模型边界参数，非 HTTP 报文。[任务结果与工具应答]({audit.relative_to(run_dir).as_posix()})保留完整审计。",
               f"工具定义来自[SDK 离线捕获]({protocol_path.relative_to(run_dir).as_posix()})：SDK 在离线模拟传输中生成的请求定义，"

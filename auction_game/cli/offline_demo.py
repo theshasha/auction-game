@@ -5,25 +5,61 @@ from __future__ import annotations
 import argparse
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from copy import deepcopy
 import json
 from pathlib import Path
 
 from pydantic_ai.models import override_allow_model_requests
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
-from pydantic_ai.messages import UserPromptPart
+from pydantic_ai.messages import ModelMessagesTypeAdapter, UserPromptPart
+from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_core import to_jsonable_python
 
 from auction_game.configuration import channel_model_profile, load_configuration, load_game_settings
 from auction_game.controller import Controller
 from auction_game.ai.agent_execution import CallFailedError
 from auction_game.ai.agent_tasks import AuctionDeps, TaskRunner
-from auction_game.reporting.replay import export_replay
+from auction_game.reporting.replay import export_replay, capture_protocol_definition
+from auction_game.reporting.tool_records import current_tool_task
+from auction_game.reporting.request_records import digest
+from auction_game.ai.llm_client import ModelFactory
 from auction_game.runners import run_ai
 from auction_game.reporting.run_output import make_run_dir
 from auction_game.game.rules import sync_root_rules
 
 
 _task_deps: ContextVar[AuctionDeps] = ContextVar("offline_auction_deps")
+
+
+class OfflineToolAudit(WrapperModel):
+    """FunctionModel 没有 HTTP；用生产 SDK 离线序列化并明确标注来源。"""
+
+    def __init__(self, wrapped, factory):
+        super().__init__(wrapped)
+        self.factory = factory
+        self.request_errors = []
+        self.request_number = 0
+
+    @asynccontextmanager
+    async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
+        self.request_number += 1
+        task = current_tool_task.get()
+        if task is not None:
+            record = {"messages": ModelMessagesTypeAdapter.dump_python(deepcopy(messages), mode="json"),
+                      "settings": to_jsonable_python(model_settings),
+                      "parameters": to_jsonable_python(asdict(model_request_parameters))}
+            key = digest([record["settings"], record["parameters"]])
+            if key not in self.factory.tool_definitions:
+                sdk_factory = ModelFactory(self.factory.protocol, self.factory.model, self.factory.base_url,
+                                           "offline-not-a-secret", 3, self.factory.settings["max_tokens"],
+                                           model_profile=self.factory.model_profile)
+                snapshot = await capture_protocol_definition(sdk_factory, record)
+                self.factory.tool_definitions[key] = snapshot["definition"]
+            task.record(self.factory.protocol, self.factory.model, self.factory.tool_definitions[key],
+                        request=self.request_number, attempt=1, source="offline_sdk_generated")
+        async with self.wrapped.request_stream(messages, model_settings, model_request_parameters, run_context) as stream:
+            yield stream
 
 
 class OfflineTaskRunner(TaskRunner):
@@ -41,7 +77,7 @@ class OfflineTaskRunner(TaskRunner):
 
 @dataclass
 class DemoFactory:
-    """只替换模型；每任务仍创建、关闭流，不访问 SDK 或环境密钥。"""
+    """只替换模型；每任务创建并关闭流，SDK 仅离线序列化，不读取环境密钥。"""
 
     name: str
     index: int
@@ -52,11 +88,15 @@ class DemoFactory:
     opened: int = 0
     closed: int = 0
     calls: int = 0
+    protocol: str = "chat"
+    model: str = "offline"
+    base_url: str = "https://offline.invalid/v1"
+    tool_definitions: dict = field(default_factory=dict)
 
     async def stream(self, messages, info):
         self.calls += 1
         tool = info.output_tools[0].name if info.output_tools else "summary"
-        if tool in ("bid", "plan"):
+        if tool == "bid":
             deps = _task_deps.get()
             bid = min(3, deps.game.max_bid, deps.coins) if self.index == 0 else 0
             strategy = (
@@ -88,8 +128,7 @@ class DemoFactory:
         self.opened += 1
         try:
             model = FunctionModel(stream_function=self.stream)
-            model.request_errors = []
-            yield model
+            yield OfflineToolAudit(model, self)
         finally:
             self.closed += 1
 
@@ -118,7 +157,9 @@ def generate_demo(output: Path | None = None, player: str | None = None, *, test
         item = DemoFactory(names[index], index, game,
                            {**kwargs["model_settings"], "timeout": kwargs["timeout"],
                              "max_tokens": kwargs["max_tokens"]},
-                           channel_model_profile(kwargs["channel"], kwargs["protocol"]))
+                           channel_model_profile(kwargs["channel"], kwargs["protocol"]),
+                           protocol=kwargs["protocol"], model=kwargs["model"],
+                           base_url=kwargs["channel"]["base_url"])
         factories.append(item)
         return item
 

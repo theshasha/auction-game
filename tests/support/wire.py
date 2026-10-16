@@ -152,6 +152,7 @@ class Harness:
         body = self.requests[-1][1]
         tools = body.get("tools", [])
         tool_name = tools[0].get("function", tools[0])["name"] if tools else "bid"
+        tool_name = options.pop("tool_name", tool_name)
         chunks = sse(self.protocol, data, tool_name=tool_name,
                      tool_id=f"call_{len(self.requests)}", **options)
         if broken and self.protocol == "chat":
