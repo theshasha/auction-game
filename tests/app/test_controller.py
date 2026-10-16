@@ -289,6 +289,66 @@ class TestParallelRound:
             assert outcome.get("result") == {"0": 0, "1": 1, "2": 2}
             assert calls == [1, 2, 1]
 
+    @pytest.mark.parametrize("failures", [1, 2])
+    @pytest.mark.parametrize("paused", [False, True])
+    @pytest.mark.parametrize("command", ["", "c"])
+    def test_failure_notice_accepts_immediate_confirmation(self, failures, paused, command):
+        notices = [threading.Event() for _ in range(failures)]
+        calls = {"success": 0, "retry": 0}
+        notice_count = 0
+
+        def announce(message):
+            nonlocal notice_count
+            if message.startswith("[失败]"):
+                assert calls == {"success": 1, "retry": notice_count + 1}
+                # 确认发生在公告回调内，早于后续单步提示，不靠线程调度猜时序。
+                controller.offer_command(command)
+                notices[notice_count].set()
+                notice_count += 1
+
+        controller = Controller(mode="continuous", max_concurrency=1, announce=announce)
+
+        def success():
+            calls["success"] += 1
+            return "kept"
+
+        def retry():
+            calls["retry"] += 1
+            if calls["retry"] <= failures:
+                if paused:
+                    controller.offer_command("p")
+                    controller.offer_command("c")  # 失败公告前的恢复仍须重新确认。
+                raise CallFailedError("测试失败")
+            return "recovered"
+
+        tasks = [RoundTask("success", success), RoundTask("retry", retry)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "立即确认")) as (thread, outcome):
+            assert all(notice.wait(timeout=5) for notice in notices)
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"success": "kept", "retry": "recovered"}
+            assert calls == {"success": 1, "retry": failures + 1}
+
+    def test_quit_at_failure_notice_does_not_retry(self):
+        notice = threading.Event()
+        calls = []
+
+        def announce(message):
+            if message.startswith("[失败]"):
+                controller.offer_command("q")
+                notice.set()
+
+        controller = Controller(mode="continuous", announce=announce)
+
+        def fail():
+            calls.append(1)
+            raise CallFailedError("测试失败")
+
+        with running(controller, lambda: run_parallel_round([RoundTask("fail", fail)], controller, "中止补跑")) as (thread, outcome):
+            assert notice.wait(timeout=5)
+            thread.join(timeout=5)
+            assert isinstance(outcome.get("error"), TournamentAborted)
+            assert calls == [1]
+
     def test_quit_drains_inflight_rolls_back_and_does_not_dispatch_more(self):
         release = threading.Event()
         started = threading.Event()
@@ -473,7 +533,7 @@ class TestParallelRound:
             RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
         ]
         with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮")) as (thread, outcome):
-            assert gate.wait(timeout=5)  # 等闸门提示，避免失败提示后的回车被清除
+            assert gate.wait(timeout=5)
             assert "result" not in outcome
             assert len(alpha_chat.calls) == 1
             assert len(bravo_chat.calls) == len(failures)

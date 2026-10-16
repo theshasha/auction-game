@@ -23,8 +23,13 @@ import pytest
 
 from tests.support.factories import TEST_GAME, make_day, make_log
 
-from auction_game.reporting.analyze import analyze, collect_player_stats, load_match_logs, recompute_remaining_coins
+from auction_game.reporting.analyze import (
+    analyze, collect_player_stats, load_match_logs, main, recompute_remaining_coins,
+    validate_match, validate_matches,
+)
 from auction_game.reporting.run_output import initialize_run
+
+ANALYZE_GAME = replace(TEST_GAME, daily_pool=(1, 1))
 
 
 def make_match_1() -> dict:
@@ -36,7 +41,7 @@ def make_match_1() -> dict:
                  collision_values=[3], wins_taken=1),
     ]
     wins = {"甲": 0, "乙": 1, "丙": 0, "丁": 0, "戊": 0, "己": 1}
-    return make_log(match_index=1, days=days, wins=wins).to_dict()
+    return make_log(match_index=1, days=days, wins=wins, game=ANALYZE_GAME).to_dict()
 
 
 def make_match_2() -> dict:
@@ -50,7 +55,7 @@ def make_match_2() -> dict:
                  collision_values=[2], wins_taken=1),
     ]
     wins = {"甲": 0, "乙": 1, "丙": 0, "丁": 0, "戊": 1, "己": 0}
-    return make_log(match_index=2, days=days, wins=wins).to_dict()
+    return make_log(match_index=2, days=days, wins=wins, game=ANALYZE_GAME).to_dict()
 
 
 def make_matches() -> list[dict]:
@@ -137,8 +142,8 @@ def write_matches(run_dir, matches):
     first = matches[0]["match"]
     paths = initialize_run(run_dir, {"run_type": "bot", "mode": "regular", "game": first["game"],
                           "players": [{"name": name} for name in first["wins"]]}, "test rules")
-    for index, payload in enumerate(matches, start=1):
-        paths.match(index).write_text(
+    for payload in matches:
+        paths.match(payload["match"]["match_index"]).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
 
@@ -230,6 +235,77 @@ def test_loading_rejects_inconsistent_daily_roster(tmp_path):
         load_match_logs(tmp_path)
 
 
+@pytest.mark.parametrize("day_indices", [[1], [1, 1], [2, 1], [1, 3], [True, 2]])
+@pytest.mark.parametrize("entrypoint", [validate_match, recompute_remaining_coins,
+                                       validate_matches, collect_player_stats])
+def test_public_statistics_reject_incomplete_or_invalid_day_sequence(day_indices, entrypoint):
+    match = make_match_1()
+    match["days"] = match["days"][:len(day_indices)]
+    for day, index in zip(match["days"], day_indices):
+        day["day"] = index
+    data = [{"match": match}] if entrypoint in (validate_matches, collect_player_stats) else match
+    with pytest.raises(ValueError, match=r"第 1 局.*天序.*1.*2"):
+        entrypoint(data)
+
+
+@pytest.mark.parametrize("entrypoint", [validate_matches, collect_player_stats])
+def test_public_statistics_reject_duplicate_match_indices(entrypoint):
+    matches = make_matches()
+    matches[1]["match"]["match_index"] = 1
+    with pytest.raises(ValueError, match="局号.*1.*重复"):
+        entrypoint(matches)
+
+
+@pytest.mark.parametrize("index", [0, -1, True, "1"])
+def test_public_statistics_reject_invalid_match_index(index):
+    match = make_match_1()
+    match["match_index"] = index
+    with pytest.raises(ValueError, match="match_index 必须是正整数"):
+        collect_player_stats([{"match": match}])
+
+
+def test_loading_rejects_duplicate_match_indices_with_filename(tmp_path):
+    matches = make_matches()
+    write_matches(tmp_path, matches)
+    matches[1]["match"]["match_index"] = 1
+    (tmp_path / "data/matches/002.json").write_text(json.dumps(matches[1]), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"002.json.*局号.*1.*重复"):
+        load_match_logs(tmp_path)
+
+
+def test_loading_rejects_mismatched_file_number(tmp_path):
+    write_matches(tmp_path, [{"match": make_match_2()}])
+    (tmp_path / "data/matches/002.json").rename(tmp_path / "data/matches/001.json")
+    with pytest.raises(ValueError, match=r"001.json.*match_index.*2.*不一致"):
+        load_match_logs(tmp_path)
+
+
+def test_cli_rejects_missing_day_with_filename(tmp_path, monkeypatch):
+    match = make_match_1()
+    match["days"].pop()
+    write_matches(tmp_path, [{"match": match}])
+    monkeypatch.setattr("sys.argv", ["analyze", str(tmp_path)])
+    with pytest.raises(SystemExit, match=r"001.json.*第 1 局.*天序"):
+        main()
+
+
+def test_loading_allows_completed_matches_from_unfinished_run(tmp_path, capsys):
+    match = make_match_1()
+    match["game"]["regular_matches"] = 5
+    write_matches(tmp_path, [{"match": match}])
+    assert load_match_logs(tmp_path) == [{"match": match}]
+    analyze(tmp_path)
+    assert "局数：1（正赛 1 + 加赛 0）" in capsys.readouterr().out
+
+
+def test_loading_orders_matches_by_numeric_file_number(tmp_path):
+    matches = make_matches()
+    matches[0]["match"]["match_index"] = 2
+    matches[1]["match"]["match_index"] = 10
+    write_matches(tmp_path, list(reversed(matches)))
+    assert load_match_logs(tmp_path) == matches
+
+
 def test_invalid_game_snapshot_is_rejected():
     match = make_match_1()
     match["game"]["max_bid"] = True
@@ -244,7 +320,8 @@ def test_mean_bids_exclude_void_days_but_include_illegal_zero(tmp_path, capsys):
     ]
     days[1].bids[0].status = "illegal"
     days[1].bids[0].raw_bid = -1
-    match = make_log(days=days, wins={"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 2, "己": 0}).to_dict()
+    match = make_log(days=days, wins={"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 2, "己": 0},
+                     game=ANALYZE_GAME).to_dict()
     rows = rows_by_name(collect_player_stats([{"match": match}]))
     assert rows["甲"]["avg_bid"] == 0
     assert rows["乙"]["avg_bid"] == 3

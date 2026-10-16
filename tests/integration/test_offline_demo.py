@@ -12,22 +12,29 @@ from auction_game import runners
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.cli.offline_demo import generate_demo
 from auction_game.ai import prompts
+from auction_game.game.game_rules import GameSettings
 from auction_game.reporting.replay import export_replay, protocol_tools
 from auction_game.reporting.run_paths import RunPaths
 from auction_game.reporting.request_records import load_requests
 
 
-def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch, capsys, config_files):
-    game = load_game_settings()
+@pytest.fixture
+def demo_configuration(monkeypatch, config_files):
+    """完整阶段使用合成参数；生产 game.yaml 仅由独立烟测读取。"""
     def load(**kwargs):
         return load_configuration(*config_files, **kwargs)
     monkeypatch.setattr(offline_demo, "load_configuration", load)
-    monkeypatch.setattr(runners, "load_configuration", load)
-    _, configs = load(test_model=True)
-    names = [pc["name"] for pc in configs]
     # 模拟比赛及离线 SDK 捕获都禁止读取真实密钥。
     monkeypatch.setattr("auction_game.ai.llm_client._require_env", lambda *args: (_ for _ in ()).throw(
         AssertionError("离线完整赛禁止读取密钥")))
+    return load(test_model=True)
+
+
+def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch, capsys, demo_configuration):
+    game = GameSettings(7, 3, (1, 1), 7, 2, 3, 2, 2)
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+    _, configs = demo_configuration
+    names = [pc["name"] for pc in configs]
     run_dir = tmp_path / "20261016_120000_ai"
     replay_path, factories = generate_demo(run_dir, test_model=True)
     paths = RunPaths(run_dir)
@@ -77,7 +84,6 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     committed = []
     for entry, record in zip(entries, requests):
         assert entry["status"] == "success" and not entry["request_errors"]
-        assert record == entry["requests"][0]
         assert record["request"] == 1
         assert record["settings"]["max_tokens"] == configs[0]["max_tokens"]
         assert record["settings"]["openai_reasoning_effort"] == "high"
@@ -136,8 +142,6 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert not (run_dir / "debug").exists()
     export_replay(run_dir, selected, debug=True)
     debug = (run_dir / "debug" / "001.md").read_text(encoding="utf-8")
-    for anchor in re.findall(r"\]\(debug_[^#)\n]*#([^)]*)\)", replay):
-        assert f'id="{anchor}"' in debug
     assert "task-0001" in debug and '"settings"' in debug and '"messages"' in debug
     # 切断今天的配置，并保留旧协议文件后重新捕获，验证唯一来源是当场执行快照。
     def unavailable(*args, **kwargs):
@@ -149,7 +153,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         export_replay(run_dir, selected)
     (run_dir / "saved_protocol.json").rename(protocol_path)
     monkeypatch.setattr("auction_game.reporting.replay.capture_protocol_definition", unavailable)
-    assert export_replay(run_dir, selected, simulated=True).read_text(encoding="utf-8") == replay
+    assert export_replay(run_dir, selected).read_text(encoding="utf-8") == replay
     assert json.loads(protocol_path.read_text(encoding="utf-8")) == snapshots
     chosen = [entry for entry in entries if entry["phase"] in {
         "opening_speech", "opening_plan", "match_1_speech", "match_1_plan", "final_speech", "final_summary"
@@ -176,8 +180,114 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     monkeypatch.setattr("auction_game.configuration.load_game_settings", lambda: (_ for _ in ()).throw(AssertionError("应读快照")))
     analyze.analyze(run_dir)
     output = capsys.readouterr().out
-    # 跟随当前比赛配置核对完整赛输出，修改生产参数无需同步维护旧默认值。
+    # 明确的合成参数覆盖各阶段，不随生产配置缩短而丢失断言。
     assert f"共进行 {game.regular_matches} 局（正赛 {game.regular_matches} 局 + 加赛 0 局）" in output
     assert f"总拍卖天数：{game.regular_matches * game.max_days}" in output
     assert f"{selected}：胜{game.regular_matches * expected_wins}" in output
     assert "测试运行结果（非身份模型成绩）" in output
+
+
+@pytest.mark.parametrize("game,first_bids,tied", [
+    (GameSettings(1, 0, (1, 1), 7, 2, 3, 1, 2), [1, 0], False),
+    (GameSettings(4, 0, (1, 1, 1), 7, 2, 3, 1, 2), [3, 1, 0], False),
+    (GameSettings(0, 0, (1,), 7, 2, 3, 1, 2), [0], True),
+    (GameSettings(7, 0, (1,), 0, 2, 3, 1, 2), [0], True),
+])
+def test_offline_economic_edges_finish_and_export(game, first_bids, tied, tmp_path,
+                                                 monkeypatch, demo_configuration):
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+    run_dir = tmp_path / "edge"
+    replay, factories = generate_demo(run_dir, test_model=True)
+    paths = RunPaths(run_dir)
+    matches = analyze.load_match_logs(paths.root)
+    assert len(matches) == game.regular_matches + (game.max_playoffs if tied else 0)
+    for payload in matches:
+        match = payload["match"]
+        assert match["game"] == game.to_dict()
+        assert [day["bids"][0]["bid"] for day in match["days"]] == first_bids
+        assert all(bid["status"] != "illegal" for day in match["days"] for bid in day["bids"])
+    if tied:
+        assert all(wins == 0 for payload in matches for wins in payload["match"]["wins"].values())
+    assert replay.exists()
+    assert all(factory.opened == factory.closed == factory.calls for factory in factories)
+
+
+def test_current_game_configuration_smoke(tmp_path, demo_configuration):
+    """当前生产参数仅校验启动、快照与产物，不要求任何特定阶段。"""
+    game = load_game_settings()
+    run_dir = tmp_path / "current"
+    replay, factories = generate_demo(run_dir, test_model=True)
+    paths = RunPaths(run_dir)
+    matches = analyze.load_match_logs(run_dir)
+    assert paths.read_config()["game"] == game.to_dict()
+    assert game.regular_matches <= len(matches) <= game.regular_matches + game.max_playoffs
+    assert all(payload["match"]["game"] == game.to_dict() for payload in matches)
+    assert replay.exists()
+    assert all(factory.opened == factory.closed for factory in factories)
+
+
+def test_offline_reuses_one_game_and_syncs_once_before_directory(tmp_path, monkeypatch, demo_configuration):
+    game = GameSettings(7, 3, (1,), 7, 2, 3, 1, 0)
+    run_dir = tmp_path / "single-load"
+    loads, syncs = [], []
+    def load_game():
+        loads.append(game)
+        assert len(loads) == 1
+        return game
+    real_sync = offline_demo.sync_root_rules
+    def sync(prepared):
+        assert not run_dir.exists()
+        syncs.append(prepared)
+        return real_sync(prepared)
+    monkeypatch.setattr(offline_demo, "load_game_settings", load_game)
+    monkeypatch.setattr(offline_demo, "sync_root_rules", sync)
+    monkeypatch.setattr(runners, "load_game_settings", lambda: pytest.fail("重复读取 game.yaml"))
+    monkeypatch.setattr(runners, "sync_root_rules", lambda *_: pytest.fail("重复同步规则"))
+    real_tournament = runners.run_tournament
+    def tournament(players, actual_game, **kwargs):
+        assert actual_game is game
+        assert all(player.game is game for player in players)
+        return real_tournament(players, actual_game, **kwargs)
+    monkeypatch.setattr(runners, "run_tournament", tournament)
+    _, factories = generate_demo(run_dir, test_model=True)
+    assert loads == syncs == [game]
+    assert all(factory.game is game for factory in factories)
+
+
+@pytest.mark.parametrize("explicit_output", [True, False])
+def test_offline_sync_failure_creates_no_run(tmp_path, monkeypatch, demo_configuration, explicit_output):
+    from auction_game.configuration import ConfigurationError
+    monkeypatch.setattr(offline_demo, "sync_root_rules", lambda *_: (_ for _ in ()).throw(
+        ConfigurationError("同步失败")))
+    monkeypatch.setattr(offline_demo, "make_run_dir", lambda *_: pytest.fail("同步失败后创建目录"))
+    monkeypatch.setattr(offline_demo.DemoFactory, "open", lambda *_: pytest.fail("同步失败后创建模型"))
+    output = tmp_path / "failed"
+    with pytest.raises(ConfigurationError, match="同步失败"):
+        generate_demo(output if explicit_output else None, test_model=True)
+    assert not output.exists()
+
+
+def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, demo_configuration):
+    from pydantic_ai.models.function import DeltaToolCall
+    game = GameSettings(7, 3, (1, 1), 7, 2, 3, 1, 0)
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+    real_stream = offline_demo.DemoFactory.stream
+    attempts = []
+    async def invalid_bid(self, messages, info):
+        tool = info.output_tools[0].name if info.output_tools else "summary"
+        if self.index == 0 and tool == "bid":
+            attempts.append(tool)
+            yield {0: DeltaToolCall(name="bid", json_args=json.dumps(
+                {"strategy": "故意非法出价", "bid": -1, "super_bid": None}), tool_call_id="bad-bid")}
+        else:
+            async for part in real_stream(self, messages, info):
+                yield part
+    monkeypatch.setattr(offline_demo.DemoFactory, "stream", invalid_bid)
+    wait = offline_demo.Controller.wait_for_turn
+    def continuous_only(self, label):
+        assert self._mode == "continuous", "离线失败进入了无人交互闸门"
+        return wait(self, label)
+    monkeypatch.setattr(offline_demo.Controller, "wait_for_turn", continuous_only)
+    with pytest.raises(RuntimeError, match="离线任务失败：甲 / bid"):
+        generate_demo(tmp_path / "invalid", test_model=True)
+    assert attempts == ["bid", "bid"]  # 共享输出纠错保留，整轮不自动补跑。

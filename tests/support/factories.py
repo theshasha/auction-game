@@ -14,17 +14,14 @@ from copy import deepcopy
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 import json
-import pytest
-import yaml
 
 from pydantic_ai.models.function import FunctionModel, DeltaToolCall
 from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.cli.sync_models import build_snapshot
 
 from auction_game.ai.ai_player import AIPlayer
-from auction_game.game.engine import run_match
+from auction_game.game.engine import compute_standings, run_match
 from auction_game.game.game_rules import GameSettings
-from auction_game.game.models import BidRecord, DayResult, MatchLog, Observation, StandingsEntry
+from auction_game.game.models import BidRecord, DayResult, MatchLog, Observation
 from auction_game.game.players import ScriptedPlayer
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
@@ -77,14 +74,8 @@ def make_log(match_index=1, is_playoff=False, days=None, wins=None, game=TEST_GA
 
 
 def make_standings(wins_history: dict[str, list[int]]):
-    entries = [
-        StandingsEntry(player=name, total_wins=sum(per_match), wins_per_match=list(per_match))
-        for name, per_match in wins_history.items()
-    ]
-    entries.sort(key=lambda entry: (-entry.total_wins, entry.player))
-    for index, entry in enumerate(entries):
-        entry.rank = entries[index - 1].rank if index > 0 and entry.total_wins == entries[index - 1].total_wins else index + 1
-    return entries
+    """展示测试复用生产排名；排名算法由独立手写预期验证。"""
+    return compute_standings(wins_history)
 
 
 def history(**overrides):

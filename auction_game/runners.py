@@ -40,18 +40,23 @@ def run_bots(seed) -> int:
 
 
 def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=None,
-           start_reader=True, test_model=False, run_type=None, loaded_configuration=None) -> int:
+           start_reader=True, test_model=False, run_type=None, loaded_configuration=None,
+           prepared_game=None, task_runner_factory=TaskRunner) -> int:
     """生产组装入口；离线演示仅注入模型边界、输出目录及控制器推进方式。
 
     record_player 按需记录单玩家完整逻辑请求，默认不膨胀普通比赛日志。
     loaded_configuration 供离线入口复用本次启动已解析的配置，不再次读取 YAML。
+    prepared_game 是已完成根规则同步的参数对象；离线入口在创建目录前准备一次。
+    task_runner_factory 允许离线入口在任务边界提供显式依赖与无交互失败策略。
     """
     try:
         if loaded_configuration is None:
             loaded_configuration = load_configuration(test_model=True) if test_model else load_configuration()
         config, player_configs = loaded_configuration
-        game = load_game_settings()
-        sync_root_rules(game)
+        game = prepared_game
+        if game is None:
+            game = load_game_settings()
+            sync_root_rules(game)
     except ConfigurationError as exc:
         print(f"错误：配置读取失败：{exc}")
         return 1
@@ -68,7 +73,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
     model_factory = model_factory or make_model_factory
     for pc in player_configs:
         try:
-            task_runners[pc["name"]] = TaskRunner(model_factory(
+            task_runners[pc["name"]] = task_runner_factory(model_factory(
                 provider=pc["provider"],
                 channel=config["llm"]["channels"][pc["provider"]],
                 model=pc["model"],

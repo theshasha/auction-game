@@ -63,7 +63,7 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch)
                      "execution_model": {"protocol": "chat", "model": "fake", "max_tokens": 123,
                                          "base_url": "https://offline.invalid/v1"}}]}), encoding="utf-8")
     monkeypatch.setattr(replay, "load_match_logs", lambda _: [{"standings_after_match": []}])
-    readable = replay.export_replay(tmp_path, "Alpha", simulated=True, capture_definitions=True).read_text(encoding="utf-8")
+    readable = replay.export_replay(tmp_path, "Alpha", capture_definitions=True).read_text(encoding="utf-8")
     assert "第一次回复" in readable and "纠正后回复" in readable
     assert '"bid": "2"' in readable and '"bid": 7' in readable
     assert "渲染后的新增提示全文" in readable and "Input should be a valid integer" in readable

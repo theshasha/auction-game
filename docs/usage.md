@@ -31,7 +31,7 @@ python -m auction_game.cli.offline_demo
 python -m auction_game.cli.offline_demo --test-model
 ```
 
-Bot 固定种子便于复现。benchmark 两组各 N 场，共 2N 场，不写日志；策略组每天出 `min(出价上限, 当前余额)`，不使用超级出价，对比均值取第二组。offline 使用生产完整比赛流程，仅模型边界换成确定性假模型，零真实服务调用；`--player 角色名` 选择捕获与回放玩家，默认阵容第一位。`--output 全新目录` 仅用于显式指定输出，不覆盖已有目录。
+Bot 固定种子便于复现。benchmark 两组各 N 场，共 2N 场，不写日志；策略组每天出 `min(出价上限, 当前余额)`，不使用超级出价，对比均值取第二组。offline 使用生产完整比赛流程，仅模型边界换成确定性假模型，零真实服务调用；假模型按实时余额提交合法出价，无交互任务失败时直接报错退出，不等待回车。`--player 角色名` 选择捕获与回放玩家，默认阵容第一位。`--output 全新目录` 仅用于显式指定输出，不覆盖已有目录。
 
 以下命令调用真实服务并可能收费，由用户亲自运行：
 
@@ -65,6 +65,8 @@ python -m auction_game.reporting.analyze logs/<场次目录>
 ## 回放与调试
 
 offline 自动生成 `replay.md`。真实比赛的完整请求捕获默认关闭；程序调用 `run_ai(record_player=角色名)` 可仅为指定玩家开启。捕获来自实际模型边界，包含失败与纠错；原内存输入不改，磁盘采用前次相同前缀加变化尾部，引用任务响应并校验重建。
+
+回放的模拟标识只读取本场快照，无需也不接受 `--simulated` 开关。
 
 ```bash
 python -m auction_game.reporting.replay logs/<场次目录> 角色名

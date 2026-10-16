@@ -11,16 +11,15 @@ import json
 
 import pytest
 
-import httpx2 as http
 
 from pydantic_ai.exceptions import UnexpectedModelBehavior
-from pydantic_ai.messages import ToolCallPart, ToolReturnPart, ModelRequest, SystemPromptPart
+from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
-from tests.support.factories import CHANNELS, TEST_GAME
+from tests.support.factories import CHANNELS
 from auction_game.configuration import channel_model_profile
-from auction_game.ai.llm_client import ModelFactory, RequestCapture
+from auction_game.ai.llm_client import RequestCapture
 from auction_game.reporting.replay import capture_protocol_definition, protocol_tools
-from auction_game.ai.agent_tasks import AuctionDeps, BidOutput as Bid, make_agent as production_agent
+from auction_game.ai.agent_tasks import BidOutput as Bid
 from tests.support.wire import PROTOCOLS, MODEL, SYSTEM, GOOD, Harness, reply, run, make_agent
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

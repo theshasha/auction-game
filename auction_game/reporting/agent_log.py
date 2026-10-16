@@ -147,7 +147,6 @@ class AgentLog:
         self.name = name
         self.path = path
         self.readable_path = readable_path
-        self.capture_path = capture_path
         self.capture = RequestWriter(capture_path)
         self.result_renderer = result_renderer
         self._task_number = 0

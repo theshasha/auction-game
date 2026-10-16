@@ -1,6 +1,7 @@
 """共用场次布局、目录冲突与默认分析类型边界。"""
 
 import json
+from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -8,7 +9,7 @@ import pytest
 
 from auction_game.reporting import analyze, run_output
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.factories import make_log
+from tests.support.factories import TEST_GAME, make_log
 
 
 def test_collision_and_default_analysis_only_valid_ai(tmp_path, monkeypatch):
@@ -20,7 +21,7 @@ def test_collision_and_default_analysis_only_valid_ai(tmp_path, monkeypatch):
     sentinel.write_text("keep", encoding="utf-8")
     second = run_output.make_run_dir("ai")
     assert second.name == first.name + "_2" and sentinel.read_text() == "keep"
-    log = make_log()
+    log = make_log(game=replace(TEST_GAME, daily_pool=(1,)))
     for kind in ("offline", "ai-test", "bot"):
         path = run_output.make_run_dir(kind)
         paths = run_output.initialize_run(path, {"run_type": kind, "mode": "regular", "game": log.game.to_dict(),

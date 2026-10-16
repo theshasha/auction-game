@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 DEFAULT_MAX_TOKENS = 64000
-SNAPSHOT_NAME = "model_capabilities.json"
 
 
 def positive_integer(value):

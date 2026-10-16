@@ -81,15 +81,3 @@ class ScriptedPlayer(Player):
     @classmethod
     def constant(cls, name: str, bid: int) -> "ScriptedPlayer":
         return cls(name, lambda obs: bid)
-
-    @classmethod
-    def from_bid_list(cls, name: str, bids: list[int], fallback: int = 0) -> "ScriptedPlayer":
-        """按列表顺序依次出价（跨天、跨局连续消耗），用完后出 fallback。"""
-        remaining = list(bids)
-
-        def strategy(obs: Observation) -> int:
-            if remaining:
-                return remaining.pop(0)
-            return fallback
-
-        return cls(name, strategy)

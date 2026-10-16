@@ -9,7 +9,7 @@ import tempfile
 
 from auction_game.configuration import ConfigurationError, load_game_settings, load_players
 from auction_game.game.game_rules import GameSettings
-from auction_game.paths import ROOT_DIR, TEMPLATE_PATH, RULES_PATH
+from auction_game.paths import TEMPLATE_PATH, RULES_PATH
 GENERATED_NOTE = "<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动预览：python -m auction_game.game.rules -->\n"
 
 

@@ -101,14 +101,11 @@ def run_match(
         pool = game.daily_pool[day - 1] + rollover
 
         # 昨日各玩家的自我结算结果（正常出价/扣款/撞车/被狙/非法/超级出价命中），
-        # 从昨日 DayResult 复算。my_last_deduction 只含正常出价的扣款（获胜或撞车）；
+        # 复用昨日 DayResult 结算。my_last_deduction 只含正常出价的扣款（获胜或撞车）；
         # 超级出价的成本与悬赏在「昨日你的结果」行单独表述。
         my_last_by_player: dict[str, tuple[int, int, bool, bool, bool, Optional[int], bool]] = {}
         if log.days:
             yesterday_result = log.days[-1]
-            yesterday_normal_counts = Counter(
-                record.bid for record in yesterday_result.bids if not record.is_super
-            )
             yesterday_sniped_values = {
                 use["value"] for use in yesterday_result.super_uses if use["hit"]
             }
@@ -119,7 +116,7 @@ def run_match(
                 if record.is_super:
                     continue
                 sniped = record.bid in yesterday_sniped_values
-                collided = yesterday_normal_counts[record.bid] >= 2 or sniped
+                collided = record.bid in yesterday_result.collision_values
                 won_with_normal = (
                     record.player == yesterday_result.winner
                     and record.bid == yesterday_result.winning_bid

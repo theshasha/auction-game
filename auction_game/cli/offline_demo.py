@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -14,10 +15,28 @@ from pydantic_ai.messages import UserPromptPart
 
 from auction_game.configuration import channel_model_profile, load_configuration, load_game_settings
 from auction_game.controller import Controller
+from auction_game.ai.agent_execution import CallFailedError
+from auction_game.ai.agent_tasks import AuctionDeps, TaskRunner
 from auction_game.reporting.replay import export_replay
 from auction_game.runners import run_ai
 from auction_game.reporting.run_output import make_run_dir
 from auction_game.game.rules import sync_root_rules
+
+
+_task_deps: ContextVar[AuctionDeps] = ContextVar("offline_auction_deps")
+
+
+class OfflineTaskRunner(TaskRunner):
+    """仅离线使用：显式转交实时任务依赖，失败直接退出，禁止等待无人确认。"""
+
+    def __call__(self, task, prompt, history, *, game=None, coins=0):
+        token = _task_deps.set(AuctionDeps(game, coins))
+        try:
+            return super().__call__(task, prompt, history, game=game, coins=coins)
+        except CallFailedError as exc:
+            raise RuntimeError(f"离线任务失败：{self.executor.factory.name} / {task}：{exc}") from exc
+        finally:
+            _task_deps.reset(token)
 
 
 @dataclass
@@ -38,7 +57,8 @@ class DemoFactory:
         self.calls += 1
         tool = info.output_tools[0].name if info.output_tools else "summary"
         if tool in ("bid", "plan"):
-            bid = min(3, self.game.max_bid) if self.index == 0 else 0
+            deps = _task_deps.get()
+            bid = min(3, deps.game.max_bid, deps.coins) if self.index == 0 else 0
             strategy = (
                 f"模拟策略：以 {bid} 枚金币争取唯一最高价，保留工资支撑后续出价；"
                 "本演示的其他玩家固定零出价，可据昨日公开结果核对。"
@@ -106,11 +126,12 @@ def generate_demo(output: Path | None = None, player: str | None = None, *, test
     controller.offer_command("c")
     with override_allow_model_requests(False):
         status = run_ai(model_factory=factory, run_dir=output, controller=controller,
-                         record_player=player, start_reader=False, test_model=test_model, run_type="offline",
-                         loaded_configuration=loaded_configuration)
+                          record_player=player, start_reader=False, test_model=test_model, run_type="offline",
+                          loaded_configuration=loaded_configuration, prepared_game=game,
+                          task_runner_factory=OfflineTaskRunner)
     if status:
         raise RuntimeError(f"离线比赛启动失败：{status}")
-    replay = export_replay(output, player, simulated=True, capture_definitions=True)
+    replay = export_replay(output, player, capture_definitions=True)
     return replay, factories
 
 

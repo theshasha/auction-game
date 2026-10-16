@@ -31,6 +31,8 @@ def _require_fields(record: dict, fields: tuple[str, ...], context: str) -> None
 def validate_match(match: dict) -> tuple[GameSettings, list[str]]:
     """只接受含完整参数快照及当前结算明细的日志。"""
     _require_fields(match, ("game", "match_index", "is_playoff", "wins", "days"), "match")
+    if type(match["match_index"]) is not int or match["match_index"] < 1:
+        raise ValueError(f"日志局号无效：match_index 必须是正整数，实际为 {match['match_index']!r}")
     try:
         game = GameSettings.from_dict(match["game"])
     except ValueError as exc:
@@ -38,11 +40,13 @@ def validate_match(match: dict) -> tuple[GameSettings, list[str]]:
     if not isinstance(match["wins"], dict):
         raise ValueError("日志格式不受支持：match.wins 必须是对象")
     if not isinstance(match["days"], list) or not match["days"]:
-        raise ValueError("日志数据缺失：match.days 必须包含至少一天")
+        raise ValueError(f"第 {match['match_index']} 局日志数据缺失：match.days 必须包含至少一天")
     player_names = None
+    day_indices = []
     for day in match["days"]:
         _require_fields(day, ("day", "bids", "pool", "winner", "winning_bid", "wins_taken",
                               "is_void", "collision_values", "super_uses"), "day")
+        day_indices.append(day["day"])
         if not all(isinstance(day[field], list) for field in ("bids", "collision_values", "super_uses")):
             raise ValueError("日志格式不受支持：bids、collision_values、super_uses 必须是列表")
         for bid in day["bids"]:
@@ -59,21 +63,43 @@ def validate_match(match: dict) -> tuple[GameSettings, list[str]]:
             _require_fields(use, ("player", "value", "hit"), "super_uses 条目")
         if any(record["player"] not in player_names for record in day["bids"] + day["super_uses"]):
             raise ValueError("日志参赛名单不一致：出价或超级出价含未知玩家")
+    if (any(type(index) is not int for index in day_indices)
+            or day_indices != list(range(1, game.max_days + 1))):
+        raise ValueError(f"第 {match['match_index']} 局天序不完整：必须依次为 1..{game.max_days}，"
+                         f"实际为 {day_indices}")
     return game, player_names
 
 
 def validate_matches(matches: list[dict]) -> tuple[GameSettings, list[str]]:
+    """独立调用时检查每局结构及跨局一致性。"""
+    return _validate_matches(matches)
+
+
+def _validate_matches(matches: list[dict], files: list[Path] | None = None) -> tuple[GameSettings, list[str]]:
+    """每局只校验一次；文件来源仅用于核对编号及定位错误。"""
     if not matches:
         raise ValueError("日志数据缺失：没有比赛")
     first_game = None
     first_names = None
-    for payload in matches:
-        _require_fields(payload, ("match",), "场次记录")
-        game, names = validate_match(payload["match"])
-        if first_game is None:
-            first_game, first_names = game, names
-        elif game != first_game or set(names) != set(first_names):
-            raise ValueError("场次日志不一致：各局 game 参数与参赛名单必须一致，请检查是否混入其他比赛")
+    seen_indices = set()
+    for position, payload in enumerate(matches):
+        context = files[position].name if files is not None else f"第 {position + 1} 条场次记录"
+        try:
+            _require_fields(payload, ("match",), "场次记录")
+            match = payload["match"]
+            game, names = validate_match(match)
+            index = match["match_index"]
+            if index in seen_indices:
+                raise ValueError(f"局号 {index} 重复")
+            seen_indices.add(index)
+            if files is not None and int(files[position].stem) != index:
+                raise ValueError(f"文件编号与 match_index {index} 不一致")
+            if first_game is None:
+                first_game, first_names = game, names
+            elif game != first_game or set(names) != set(first_names):
+                raise ValueError(f"第 {index} 局场次日志不一致：各局 game 参数与参赛名单必须一致，请检查是否混入其他比赛")
+        except ValueError as exc:
+            raise ValueError(f"{context}：{exc}") from exc
     return first_game, first_names
 
 
@@ -95,29 +121,42 @@ def find_latest_ai_run() -> Path:
 
 
 def load_match_logs(run_dir: Path) -> list[dict]:
+    """读取并完整校验场次；允许只有已完成局的未完赛场次。"""
+    matches, _, _, _ = _load_match_logs(run_dir)
+    return matches
+
+
+def _load_match_logs(run_dir: Path) -> tuple[list[dict], dict, GameSettings, list[str]]:
     paths = RunPaths(run_dir)
     config = paths.read_config()
-    match_files = sorted((paths.data / "matches").glob("*.json"), key=lambda p: int(p.stem))
+    match_files = list((paths.data / "matches").glob("*.json"))
+    for path in match_files:
+        if not path.stem.isascii() or not path.stem.isdecimal():
+            raise ValueError(f"{path.name}：日志文件编号必须是整数")
+    match_files.sort(key=lambda p: int(p.stem))
     if not match_files:
         raise ValueError(f"{run_dir} 下没有 data/matches/*.json")
     matches = []
     for path in match_files:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            _require_fields(payload, ("match",), "场次记录")
-            validate_match(payload["match"])
             matches.append(payload)
         except ValueError as exc:
             raise ValueError(f"{path.name}：日志格式不受支持或数据缺失：{exc}") from exc
-    game, names = validate_matches(matches)
+    game, names = _validate_matches(matches, match_files)
     if config.get("game") != game.to_dict() or {pc["name"] for pc in config["players"]} != set(names):
         raise ValueError("场次执行快照与比赛参数或名单不一致")
-    return matches
+    return matches, config, game, names
 
 
 def recompute_remaining_coins(match: dict) -> dict[str, int]:
     """按本局 game 快照重放金币：工资、正常价扣款、超级成本及命中悬赏。"""
     game, player_names = validate_match(match)
+    return _recompute_remaining_coins(match, game, player_names)
+
+
+def _recompute_remaining_coins(match: dict, game: GameSettings, player_names: list[str]) -> dict[str, int]:
+    """仅供已校验的统计路径复用，避免再次扫描日志结构。"""
     days = match["days"]
     coins = dict.fromkeys(player_names, game.initial_coins)
     for day in days:
@@ -143,7 +182,12 @@ def collect_player_stats(matches: list[dict]) -> dict:
 
     返回 {"match_labels", "win_matrix", "rows"}；rows 按总胜场降序（同胜场按名字）。
     """
-    _, player_names = validate_matches(matches)
+    game, player_names = validate_matches(matches)
+    return _collect_player_stats(matches, game, player_names)
+
+
+def _collect_player_stats(matches: list[dict], game: GameSettings, player_names: list[str]) -> dict:
+    """已校验场次的玩家统计，局末余额在此统一重放。"""
     match_labels: list[str] = []
     win_matrix: dict[str, list[int]] = {name: [] for name in player_names}
     match_champions = {name: 0.0 for name in player_names}  # 第一名并列按 1/n 计
@@ -158,7 +202,6 @@ def collect_player_stats(matches: list[dict]) -> dict:
     for payload in matches:
         match = payload["match"]
         days = match["days"]
-        game = GameSettings.from_dict(match["game"])
         if match["is_playoff"]:
             match_labels.append(f"加{match['match_index'] - game.regular_matches}")
         else:
@@ -189,7 +232,7 @@ def collect_player_stats(matches: list[dict]) -> dict:
                 super_uses_count[use["player"]] += 1
                 if use["hit"]:
                     super_hits[use["player"]] += 1
-        remaining = recompute_remaining_coins(match)
+        remaining = _recompute_remaining_coins(match, game, player_names)
         for name in player_names:
             end_coins[name].append(remaining[name])
 
@@ -236,20 +279,15 @@ def print_player_stats(stats: dict) -> None:
 
 
 def analyze(run_dir: Path) -> None:
-    matches = load_match_logs(run_dir)
-    game, player_names = validate_matches(matches)
-    snapshot_path = RunPaths(run_dir).config
-    if snapshot_path.exists():
-        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-        print(f"运行类型：{RUN_TYPES[snapshot['run_type']]}")
-        if set(pc["name"] for pc in snapshot["players"]) != set(player_names) or snapshot["game"] != game.to_dict():
-            raise ValueError("场次执行快照与比赛参数或名单不一致")
-        print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
-        for pc in snapshot["players"]:
-            if "execution_model" not in pc:
-                continue
-            print(f"  {pc['name']}：身份 {pc['identity_model']['model']} → 实际 "
-                  f"{pc['execution_model']['protocol']} / {pc['execution_model']['model']}")
+    matches, snapshot, game, player_names = _load_match_logs(run_dir)
+    player_stats = _collect_player_stats(matches, game, player_names)
+    print(f"运行类型：{RUN_TYPES[snapshot['run_type']]}")
+    print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
+    for pc in snapshot["players"]:
+        if "execution_model" not in pc:
+            continue
+        print(f"  {pc['name']}：身份 {pc['identity_model']['model']} → 实际 "
+              f"{pc['execution_model']['protocol']} / {pc['execution_model']['model']}")
 
     total_days = 0
     void_days = 0
@@ -257,22 +295,21 @@ def analyze(run_dir: Path) -> None:
     bids_by_day_index: dict[int, list[int]] = {}
     pools_by_day_index: dict[int, list[int]] = {}
     winning_bids: list[int] = []
-    remaining_coins_all: list[int] = []
+    remaining_coins_all = [coins for row in player_stats["rows"] for coins in row["end_coins"]]
     multi_win_matches: list[tuple[int, str, int]] = []  # (局号, 玩家, 胜场)
-    illegal_bids = 0
+    illegal_bids = sum(row["illegal"] for row in player_stats["rows"])
     zero_bids = 0
     zero_bid_wins = 0
-    collision_burn = 0   # 因撞车被没收的金币总数（只算正常出价；超级出价成本另计）
-    super_uses = 0          # 超级出价使用总次数
-    super_hits = 0          # 超级出价命中次数
-    super_bounty_minted = 0  # 命中悬赏印发的金币总数
-    super_cost_spent = 0    # 超级出价固定成本消耗的金币总数
+    collision_burn = sum(row["collision_burn"] for row in player_stats["rows"])
+    super_uses = sum(row["super_uses"] for row in player_stats["rows"])
+    super_hits = sum(row["super_hits"] for row in player_stats["rows"])
+    super_bounty_minted = super_hits * game.super_bounty
+    super_cost_spent = super_uses * game.super_cost
     cap_wins = 0            # 获胜价=出价上限（极点）的天数
     cap_bid = game.max_bid
 
     for payload in matches:
         match = payload["match"]
-        game = GameSettings.from_dict(match["game"])
         wins = match["wins"]
         for name, win_count in wins.items():
             if win_count >= 3:  # 固定统计口径，不随本局计划总胜场改变
@@ -281,20 +318,9 @@ def analyze(run_dir: Path) -> None:
         for day in match["days"]:
             total_days += 1
             pools_by_day_index.setdefault(day["day"], []).append(day["pool"])
-            burned_values = set(day["collision_values"])
             for bid in day["bids"]:
-                if bid["status"] == "illegal":
-                    illegal_bids += 1
                 if bid["bid"] == 0:
                     zero_bids += 1
-                if not bid["is_super"] and bid["bid"] in burned_values:
-                    collision_burn += bid["bid"]
-            for use in day["super_uses"]:
-                super_uses += 1
-                super_cost_spent += game.super_cost
-                if use["hit"]:
-                    super_hits += 1
-                    super_bounty_minted += game.super_bounty
             if day["is_void"]:
                 void_days += 1
                 continue
@@ -304,7 +330,6 @@ def analyze(run_dir: Path) -> None:
                 cap_wins += 1
             if day["winning_bid"] == 0:
                 zero_bid_wins += 1
-        remaining_coins_all.extend(recompute_remaining_coins(match).values())
 
     print(f"场次目录：{run_dir.name}")
     print(f"玩家：{'、'.join(player_names)}")
@@ -339,7 +364,7 @@ def analyze(run_dir: Path) -> None:
           f"成本消耗 {super_cost_spent} 金币，悬赏印发 {super_bounty_minted} 金币")
     print()
 
-    print_player_stats(collect_player_stats(matches))
+    print_player_stats(player_stats)
     print()
 
     print(f"单局 ≥3 胜场的玩家-局次数：{len(multi_win_matches)}"

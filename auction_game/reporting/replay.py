@@ -111,7 +111,7 @@ def _response_lines(response):
     return lines
 
 
-def export_replay(run_dir: Path, player: str, *, simulated=False, capture_definitions=False, debug=False) -> Path:
+def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debug=False) -> Path:
     """读取实际日志；模拟标签取场次类型，重新导出复用原 SDK 定义。"""
     paths = RunPaths(run_dir)
     config = paths.read_config()
@@ -247,9 +247,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("player")
-    parser.add_argument("--simulated", action="store_true")
     parser.add_argument("--capture-definitions", action="store_true", help="缺定义时显式离线补捕获")
     parser.add_argument("--debug", action="store_true", help="按需导出完整调试 Markdown")
     args = parser.parse_args()
-    print(export_replay(args.directory, args.player, simulated=args.simulated,
+    print(export_replay(args.directory, args.player,
                         capture_definitions=args.capture_definitions, debug=args.debug))

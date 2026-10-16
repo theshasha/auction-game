@@ -12,9 +12,7 @@ def test_bot_run_publishes_rules_and_replayable_statistics(tmp_path, monkeypatch
     game = GameSettings(20, 4, (2, 4, 3), 9, 1, 5, 2, 3)
     log_dir = tmp_path / "logs"
     monkeypatch.setattr(runners, "load_game_settings", lambda: game)
-    monkeypatch.setattr(run_output, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(run_output, "LOG_DIR", log_dir)
-    monkeypatch.setattr(analyze, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(analyze, "LOG_DIR", log_dir)
 
     runners.run_bots(seed=4)

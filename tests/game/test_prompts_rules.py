@@ -1,7 +1,6 @@
 """规则模板生成、参数贯通与局末重申。共享工厂见 conftest.py。"""
 
 from dataclasses import replace
-from pathlib import Path
 import subprocess
 import sys
 import os
@@ -13,6 +12,7 @@ from auction_game.game import rules
 from auction_game.configuration import load_game_settings, load_players
 from tests.support.factories import NAMES, TEST_GAME, make_log, make_standings
 from auction_game.game.rules import render_rules
+from auction_game.paths import ROOT_DIR
 
 
 class TestRulesReminder:
@@ -45,11 +45,13 @@ class TestRulesReminder:
 class TestRulesText:
     """规则正文源于模板，生成文档与 system 使用相同渲染函数。"""
 
-    def test_generated_rules_matches_configuration(self):
+    def test_generated_rules_matches_configuration(self, tmp_path, monkeypatch):
         names = [player["name"] for player in load_players()]
         text = render_rules(load_game_settings(), names)
-        from auction_game.paths import RULES_PATH
-        assert RULES_PATH.read_text(encoding="utf-8") == text
+        document = tmp_path / "RULES.md"
+        monkeypatch.setattr(rules, "RULES_PATH", document)
+        rules.sync_root_rules()
+        assert document.read_text(encoding="utf-8") == text
         system = prompts.build_system_prompt(names[0], "人设", "正文", [], names, load_game_settings())
         assert system.startswith(text)
 
@@ -140,15 +142,19 @@ class TestRulesText:
         assert system.startswith(text)
 
     def test_check_command_works_outside_project_without_writing(self, tmp_path):
-        from auction_game.paths import RULES_PATH
-        before = RULES_PATH.read_bytes()
+        document = tmp_path / "RULES.md"
+        document.write_text(render_rules(load_game_settings(), [p["name"] for p in load_players()]), encoding="utf-8")
+        before = document.read_bytes()
+        # 子进程从外部目录调用真实 CLI main，只把生成物位置隔离到临时目录。
+        script = ("from pathlib import Path; from auction_game.game import rules; "
+                  f"rules.RULES_PATH = Path({str(document)!r}); raise SystemExit(rules.main())")
         result = subprocess.run(
-            [sys.executable, "-B", "-m", "auction_game.game.rules", "--check"],
+            [sys.executable, "-B", "-c", script, "--check"],
             cwd=tmp_path, capture_output=True,
-            env={**os.environ, "PYTHONPATH": str(rules.ROOT_DIR)},
+            env={**os.environ, "PYTHONPATH": str(ROOT_DIR)},
         )
         assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
-        assert RULES_PATH.read_bytes() == before
+        assert document.read_bytes() == before
 
     def test_check_command_rejects_stale_document_without_writing(self, tmp_path, monkeypatch):
         document = tmp_path / "RULES.md"

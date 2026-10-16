@@ -96,18 +96,29 @@ class Controller:
         self._reader_thread = threading.Thread(target=read_loop, daemon=True)
         self._reader_thread.start()
 
-    def wait_for_turn(self, label: str) -> None:
-        """单步闸门；仅暂停中的快速恢复有效，普通执行期间误按回车不预放行。"""
+    def wait_for_turn(self, label: str, *, notices: tuple[str, ...] = (),
+                      require_confirmation: bool = False) -> None:
+        """先准备闸门再公告，保留公告后的输入；执行期间误按回车不预放行。"""
         with self._lock:
             if self._quit_requested:
                 raise TournamentAborted
+            if require_confirmation:
+                # 未知失败发生前的快速恢复不替代失败后的重试确认。
+                self._mode = "step"
+                self._resume_requested = False
+            wait = True
             if self._pause_requested and self._resume_requested:
                 self._pause_requested = self._resume_requested = False
                 self._gate.clear()
-                return
-            if self._mode == "continuous" and not self._pause_requested:
-                return
-            self._gate.clear()
+                wait = False
+            elif self._mode == "continuous" and not self._pause_requested:
+                wait = False
+            else:
+                self._gate.clear()
+        for message in notices:
+            self._announce(message)
+        if not wait:
+            return
         self._announce(f"[单步] 下一步：{label}（回车执行 / c=连续 / p=暂停 / q=中止）")
         while True:
             self._gate.wait()
@@ -190,23 +201,20 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
                 if controller._quit_requested:
                     raise TournamentAborted
                 paused = controller._pause_requested
-                if failed:
-                    # 未知失败发生前的快速恢复不替代失败后的重试确认。
-                    controller._mode = "step"
-                    controller._resume_requested = False
-                    controller._gate.clear()
                 if not paused and not pending:
                     return results  # 提交与暂停共享同步边界。
+            notices = []
             if paused:
-                controller._announce(f"[暂停] 已暂停：成功 {len(results)}、失败 {len(failed)}、"
-                                     f"未启动 {len(unstarted)}")
+                notices.append(f"[暂停] 已暂停：成功 {len(results)}、失败 {len(failed)}、"
+                               f"未启动 {len(unstarted)}")
             if failed:
-                controller._announce(f"[失败] {'、'.join(failed)}（回车仅重试失败项并执行未启动项 / q=中止比赛）")
+                notices.append(f"[失败] {'、'.join(failed)}（回车仅重试失败项并执行未启动项 / q=中止比赛）")
                 for detail in failed.values():
-                    controller._announce(f"  {detail}")
+                    notices.append(f"  {detail}")
             gate_label = (f"{label}（补跑 {len(pending)} 项）" if pending
                           else f"{label}（全部成功，继续本轮）")
-            controller.wait_for_turn(gate_label)
+            controller.wait_for_turn(gate_label, notices=tuple(notices),
+                                     require_confirmation=bool(failed))
     except TournamentAborted:
         for task in tasks:
             rollback(task)
