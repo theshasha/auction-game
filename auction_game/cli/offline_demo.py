@@ -106,6 +106,9 @@ class DemoFactory:
                 "模拟策略：固定零出价保存金币；这可能与其他零价玩家撞车，本例用于展示合法结算。"
             )
             result = {"strategy": strategy, "bid": bid, "super_bid": None}
+        elif tool == "save_memory":
+            result = {"memory": f"我是{self.name}。观察：首位玩家持续正价，其余固定零价；局末大家公开表示谨慎。"
+                                "推测：固定零价会继续撞车，需后续验证。下一局复核公开结果，避免机械照搬。"}
         elif tool == "speech":
             prompt = next(part.content for message in reversed(messages) for part in reversed(message.parts)
                           if isinstance(part, UserPromptPart))

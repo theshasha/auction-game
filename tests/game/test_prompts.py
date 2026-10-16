@@ -94,7 +94,7 @@ class TestPlanBidMerge:
         assert 'super_bid' in text
         # 提交合法性约束（同值、合计余额——违反即整单作废）放模板防无谓非法提交；
         # 策略规则细节（命中判定、悬赏、不能获胜等）不在每日消息复述，
-        # 由 system 的实时渲染规则与局末重申兜底
+        # 由 system 的实时渲染规则兜底
         assert "不得与正常出价同值" in text
         assert "2 金币成本不得超过余额" in text
         assert "super_bid 明确为 null" in text
@@ -104,16 +104,20 @@ class TestPlanBidMerge:
         "build, speech_kind, strategy, bid_task",
         [
             (prompts.opening_plan_request, "开局发言", "规划你第一局的初步策略", "第 1 局第 1 天的出价"),
-            (prompts.next_match_plan_request, "局末发言", "规划你下一局的初步策略", "下一局第 1 天的出价"),
+            (prompts.next_match_plan_request, "最新累计成绩", "规划第 2 局的初步策略", "第 2 局第 1 天的出价"),
         ],
         ids=["opening", "next-match"],
     )
     def test_plans_use_custom_first_day_values(self, build, speech_kind, strategy, bid_task):
         game = replace(TEST_GAME, initial_coins=11, daily_pool=(2, 1, 3), max_bid=9, super_cost=3)
-        text = build({"甲": "发言A", "乙": "发言B"}, game)
+        opening = build is prompts.opening_plan_request
+        text = build({"甲": "发言A", "乙": "发言B"}, game) if opening else build([], game, 2)
         assert speech_kind in text
         assert strategy in text and bid_task in text
-        assert "【甲】发言A" in text and "【乙】发言B" in text
+        if opening:
+            assert "【甲】发言A" in text and "【乙】发言B" in text
+        else:
+            assert "局末发言" not in text and "累计私有记忆" in text
         assert "你的金币 11，本局已获胜场 0，今日奖池 2 个胜场，出价上限 9" in text
         assert '0 到 9 的整数' in text
         assert 'strategy' in text

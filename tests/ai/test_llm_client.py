@@ -68,7 +68,7 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     if succeeds:
         assert player.decide_bid(make_ai_obs()) == (2, None)
         parts = [p for m in player.messages for p in m.parts]
-        assert sum(isinstance(p, ToolCallPart) for p in parts) == 2
+        assert not any(isinstance(p, ToolCallPart) for p in parts)
     else:
         with pytest.raises(OutputFailedError):
             player.decide_bid(make_ai_obs())
@@ -77,6 +77,8 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     assert h.requests[0][1] == h.requests[1][1] and h.requests[2][1] == h.requests[3][1]
     assert h.requests[0][1] != h.requests[2][1]
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    if succeeds:
+        assert sum(p["part_kind"] == "tool-call" for m in entry["messages"] for p in m["parts"]) == 2
     assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(1, 1), (2, 1)]
     from auction_game.reporting.request_records import load_requests
     assert "requests" not in entry
@@ -143,7 +145,7 @@ def test_non_transport_model_api_error_is_not_retryable():
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_player_task_chain_preserves_tool_history_on_wire(protocol, tmp_path):
+def test_player_task_chain_replays_business_results_without_tool_ids_on_wire(protocol, tmp_path):
     long_summary = "观众总结" * 200
     h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}), reply(),
                            reply(tool=False, text=long_summary)])
@@ -182,8 +184,8 @@ def test_player_task_chain_preserves_tool_history_on_wire(protocol, tmp_path):
             parts = [p for m in request_body["messages"] for p in m["content"] if isinstance(p, dict)]
             calls = [(p["id"], p["name"]) for p in parts if p["type"] == "tool_use"]
             returns = [p["tool_use_id"] for p in parts if p["type"] == "tool_result"]
-        assert calls == [(f"call_{i + 1}", name) for i, name in enumerate(names[:index])]
-        assert returns == [call_id for call_id, _ in calls]
+        assert calls == returns == []
+        assert encoded_body.count("已完成任务的有效结果") == index
     assert body.index("plan\\n") < body.index("当前是第 1 局第 2 天") < body.index("speak\\n")
     assert "public" in body
     parts = [p for m in before for p in m.parts]

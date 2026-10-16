@@ -125,6 +125,7 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
     selected = {"opening_speech": "比赛开头 · 开局发言",
                 "opening_plan": "第一局规划 · 首日缓存",
                 "match_1_speech": "第一局结束 · 局末发言",
+                "match_1_memory": "第一局结束 · 累计私有记忆",
                 "match_1_plan": "第二局规划 · 接收实际反馈",
                 "final_speech": "实际比赛结尾 · 最终感言",
                 "final_summary": "实际比赛结尾 · 观众总结"}
@@ -166,10 +167,11 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
         if phase == "final_speech":
             lines.append("\n> 跳转：省略第二局其余日常出价及中间各局，直接到实际最后一局结束。")
         has_history = any(message["kind"] == "response" for message in entry["requests"][0]["messages"])
-        history = ("沿用系统规则与人设，以及本次实际请求携带的历史提示、回复与工具应答（含跳过部分；回滚内容按实际请求为准）。"
-                   if has_history else "此时只有系统规则与人设，没有先前任务历史。")
+        history = ("沿用系统规则与人设，以及本次实际请求携带的任务提示与有效业务结果；已完成任务的内部 thinking 只留审计。"
+                   if has_history else "沿用系统规则与人设；跨局重置后仅保留最新累计记忆，成绩由本次提示提供。")
         purpose = {"speech": "根据当前比赛阶段生成私有策略与公开发言。", "plan": "读取本局信息，规划并给出首日出价。",
-                   "bid": "读取昨日结果与当前余额，生成当天出价。", "summary": "读取完整比赛历史，为观众生成总结。"}[entry["task"]]
+                    "bid": "读取昨日结果与当前余额，生成当天出价。", "memory": "读取全部已公布局末发言，整理累计私有记忆。",
+                    "summary": "读取全场去 thinking 回顾，为观众生成总结。"}[entry["task"]]
         lines.extend([f"## {title}", purpose + history])
         for record in entry["requests"]:
             if len(entry["requests"]) > 1:
@@ -189,7 +191,7 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
                 if schema:
                     lines.append(_json(schema))
             elif key not in schemas:
-                label = {"speech": "发言", "plan": "规划", "bid": "出价"}[entry["task"]]
+                label = {"speech": "发言", "plan": "规划", "bid": "出价", "memory": "记忆"}[entry["task"]]
                 schema_title = f"{label}工具定义（{snapshot['protocol']}）"
                 schema_anchor = f"工具定义-{len(schemas) + 1}"
                 schemas[key] = (schema_title, schema_anchor)
@@ -222,10 +224,12 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
             lines.append(f"按实时余额校验后交给结算：获胜者 {day['winner']}，赢得 {day['wins_taken']} 胜场。")
         elif entry["task"] == "summary":
             lines.append("总结只写日志并给观众看，请求与回复不追加玩家历史。")
+        elif entry["task"] == "memory":
+            lines.append(f"日志成功后整体替换累计私有记忆（{entry['memory_chars']} 字符，非 token），清除历局对话；记忆仅本人可见。")
         else:
             lines.append("私有 strategy 保留在自身历史；仅 speech 投递给其他玩家。")
             if phase == "match_1_speech":
-                lines.append("本节点的局日志与排名就是实际反馈；随后收集他人的公开局末发言进行第二局规划，无独立反馈请求。")
+                lines.append("本节点的局日志与排名就是实际反馈；全部发言公布后独立整理累计记忆，再带最新成绩进行第二局规划。")
             if phase == "final_speech":
                 lines.append("最后一局跳过普通局末发言，直接进行本次最终感言；随后只有观众总结。")
     standings = matches[-1]["standings_after_match"]

@@ -20,9 +20,9 @@ def test_director_passes_game_to_both_plans(monkeypatch, tmp_path):
     director = ai_speech.AISpeechDirector(players, None, tmp_path, game=game)
     plans = []
 
-    def request(others, actual_game):
+    def request(others, actual_game, *index):
         assert actual_game is game
-        plans.append(others)
+        plans.append((others, index))
         return "规划"
 
     monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", request)
@@ -32,7 +32,7 @@ def test_director_passes_game_to_both_plans(monkeypatch, tmp_path):
     monkeypatch.setattr(director, "_publish_speeches", lambda *args: None)
     director.on_opening()
     director.on_match_end(SimpleNamespace(match_index=1), [], True)
-    assert plans == [{"乙": "发言乙"}, {"甲": "发言甲"}] * 2
+    assert plans == [({"乙": "发言乙"}, ()), ({"甲": "发言甲"}, ()), ([], (2,)), ([], (2,))]
     director.on_match_end(SimpleNamespace(match_index=2), [], False)
     assert len(plans) == 4
 

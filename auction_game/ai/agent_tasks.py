@@ -16,7 +16,7 @@ from auction_game.game.game_rules import GameSettings, validate_submission
 from auction_game.ai.llm_client import ModelFactory
 from auction_game.ai import prompts
 
-Task = Literal["bid", "plan", "speech", "summary"]
+Task = Literal["bid", "plan", "speech", "memory", "summary"]
 
 
 class BidOutput(BaseModel):
@@ -43,10 +43,16 @@ class SpeechOutput(BaseModel):
     speech: str = Field(min_length=1, description="实际向其他玩家公开的完整发言")
 
 
+class MemoryOutput(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
+    memory: str = Field(min_length=1, description="仅自己可见、整体替换旧记忆的累计笔记；篇幅为软目标")
+
+
 # 唯一任务到输出工具映射；自然语言提醒也从此取得当前名称。
 OUTPUT_TOOLS = {
     "bid": ToolOutput(BidOutput, name="bid", description="提交当前规划或每日出价任务：填写私有策略、正常出价及必填的超级出价。"),
     "speech": ToolOutput(SpeechOutput, name="speech", description="提交当前发言任务：分别填写私有发言策略与向其他玩家公开的发言。"),
+    "memory": ToolOutput(MemoryOutput, name="save_memory", description="保存累计私有记忆，综合旧记忆、本局经历及全部已公布局末发言；新笔记整体替换旧笔记。"),
 }
 OUTPUT_TOOLS["plan"] = OUTPUT_TOOLS["bid"]
 
@@ -64,6 +70,8 @@ def render_task_result(result: dict | str) -> list[str]:
     lines = []
     if "strategy" in result:
         lines.append(f"### 私有策略\n\n{result['strategy']}")
+    if "memory" in result:
+        lines.append(f"### 累计私有记忆（{len(result['memory'])} 字符，非 token）\n\n{result['memory']}")
     if "speech" in result:
         lines.append(f"### 公开发言\n\n{result['speech']}")
     elif "bid" in result:
@@ -100,7 +108,7 @@ class TaskRunner:
         self.executor = AgentExecutor(factory, capture_requests=capture_requests)
 
     def __call__(self, task: Task, prompt: str, history: list[ModelMessage], *,
-                 game: GameSettings | None = None, coins: int = 0) -> ExecutionResult[BidOutput | SpeechOutput | str]:
+                 game: GameSettings | None = None, coins: int = 0) -> ExecutionResult[BidOutput | SpeechOutput | MemoryOutput | str]:
         if task in ("bid", "plan") and game is None:
             raise ValueError("出价及规划任务需要比赛参数")
         tool = OUTPUT_TOOLS.get(task)

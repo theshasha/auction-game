@@ -12,30 +12,6 @@ from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
 
-# 局末展示出价日志前的精简规则重申：结算三步是模型复盘局日志时的框架，
-# 实证错误（如「自己撞车推成退款」）都源于复盘时没套用这三步。
-# 只放局末发言请求（局日志唯一展示处），不重发全文。
-def rules_reminder(game: GameSettings) -> str:
-    """使用本局参数重申结算、成本约束与末日流局例外。"""
-    return (
-        "【规则要点重申】每日结算按三步：① 某数值出现两笔及以上正常出价即撞车；"
-        "此外，被超级出价命中的数值（其上至少有 1 笔正常出价、且有超级出价指向它），"
-        "该数值上的所有正常出价也全部撞车——撞车的正常出价全部扣除且不能获胜；"
-        "② 未撞车的正常出价中最高的一笔获胜、其主人获得当天全部奖池"
-        "（0 是合法价位），当天正常出价全部撞车则流局、奖池并入次日"
-        f"（第 {game.max_days} 天流局时奖池作废，不延长比赛）；"
-        "③ 获胜与撞车的正常出价全额扣除，其余正常出价全额退还；"
-        f"超级出价每次提交固定扣除 {game.super_cost} 金币（无论是否命中），"
-        f"命中的狙击者获得系统印发的 {game.super_bounty} 金币悬赏"
-        "（多人命中同一数值时每人各得一份）。"
-        f"超级出价不限次数（每天最多 1 笔）、0~{game.max_bid}、不能等于当天正常出价、"
-        f"当天正常出价加固定成本 {game.super_cost} 金币不得超过你的余额，"
-        "超级出价数值不计入支付金额，不能预支悬赏、只狙击不能获胜；"
-        "命中 = 其数值上至少有 1 笔正常出价。"
-        "第 2 天起每天开始时公布昨日完整出价明细（含各人的超级出价数值）"
-        "与全场每人的当前金币余额。"
-    )
-
 
 def bid_format_hint(game: GameSettings) -> str:
     """业务要求；输出格式由任务 schema 唯一声明。"""
@@ -62,6 +38,8 @@ def with_output_requirement(prompt: str, tool_name: str | None, *, task: str) ->
     requirement = f"当前输出要求：调用 `{tool_name}` 工具提交；不要在正文模拟工具调用。"
     if task == "speech":
         requirement += "私有策略填 strategy，公开发言填 speech。"
+    elif task == "memory":
+        requirement += "只填写非空 memory；这是私有累计笔记，不向其他玩家公开。"
     else:
         requirement += ('super_bid 必须出现：整数不加引号；不使用时填 JSON null，不能填字符串 "null" 或 "None"。'
                         '类型示例：{"super_bid": null}（仅示意字段类型，完整提交仍须包含全部必填字段）。')
@@ -227,12 +205,7 @@ def bid_request(obs: Observation) -> str:
 
 
 def render_match_log(log: MatchLog) -> str:
-    """整局出价日志渲染为 markdown 表格：玩家列顺序取首日正常出价顺序（即玩家名单顺序）。
-
-    出价单元格含超级出价时写作「5+超6」，命中再加注「中」（如「4+超6中」）；
-    超级出价不能获胜，结果列的获胜者必定凭正常出价。
-    撞车价位列给具体数值（只含正常出价被扣款的价位）。
-    """
+    """直接展示引擎结算字段；玩家单元格标注正常款项及超级出价结果。"""
     if not log.days:
         return "  （本局未进行任何拍卖）"
     player_names = [record.player for record in log.days[0].bids if not record.is_super]
@@ -249,10 +222,18 @@ def render_match_log(log: MatchLog) -> str:
                 None,
             )
             cell = str(normal.bid)
+            if name == day.winner:
+                cell += f"（获胜，扣{normal.bid}）"
+            elif normal.bid in day.collision_values:
+                cell += f"（撞车，扣{normal.bid}）"
+            else:
+                cell += "（退款）"
             if super_record is not None:
                 cell += f"+超{super_record.bid}"
                 if name in hit_by_player:
-                    cell += "中"
+                    cell += f"（命中，成本{log.game.super_cost}，悬赏{log.game.super_bounty}）"
+                else:
+                    cell += f"（落空，成本{log.game.super_cost}）"
             cells.append(cell)
         if day.is_void:
             outcome = "流局（奖池作废）" if day.day == log.game.max_days else "流局（奖池并入次日）"
@@ -290,9 +271,6 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], wil
     kind = "加赛局" if log.is_playoff else "正赛局"
     lines = [
         f"第 {log.match_index} 局（{kind}）结束。",
-        # 局日志是模型复盘他人出价的唯一材料，复盘前先重申结算框架（实证错误
-        # 多因复盘时不套用结算步骤，而非遗忘条款）
-        rules_reminder(log.game),
         f"本局完整出价日志：\n{render_match_log(log)}",
         f"截至当前的累计排名与胜场明细：\n{render_standings(standings)}",
     ]
@@ -304,11 +282,23 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], wil
     return "\n\n".join(lines)
 
 
-def next_match_plan_request(others_speeches: dict[str, str], game: GameSettings) -> str:
+def memory_request(speeches: dict[str, str]) -> str:
     return (
-        "以下是其他玩家的局末发言：\n"
-        + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
-        + "\n请结合他们的发言，规划你下一局的初步策略，并直接给出下一局第 1 天的出价"
+        "本局全部公开发言已经公布（含你本人）：\n"
+        + "\n".join(f"【{name}】{text}" for name, text in speeches.items())
+        + "\n\n请用 save_memory 整理一份累计私有记忆，综合旧记忆、本局经历及上述全部公开发言。"
+        "新记忆会整体替换旧记忆；下一局看不到历局原始对话与原始公开发言。"
+        "保留仍有用的早期经验，更新失效判断，区分已观察事实与待验证猜测。"
+        "优先记下影响未来决策的对手规律、自身策略修正和有用的公开信号，避免逐日流水账。"
+        "规则与最新成绩由程序可靠提供，无需抄写。篇幅以一页简短笔记为软目标，"
+        "无需精确计算字数或填满栏目，没有有用信息可明确说明。只填写 memory，不生成额外策略或公开发言。"
+    )
+
+
+def next_match_plan_request(standings: list[StandingsEntry], game: GameSettings, match_index: int) -> str:
+    return (
+        f"截至当前的最新累计成绩：\n{render_standings(standings)}\n\n"
+        f"请结合累计私有记忆，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价"
         + _day1_constant_info(game)
         + "。\n\n"
         + bid_format_hint(game)

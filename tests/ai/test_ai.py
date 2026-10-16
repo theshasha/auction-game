@@ -26,7 +26,8 @@ def test_invalid_output_uses_one_shared_correction(invalid):
     player = make_player(runner)
     assert player.decide_bid(make_ai_obs(coins=4)) == (2, None)
     assert len(runner.calls) == 2
-    assert any(isinstance(p, RetryPromptPart) for m in player.messages for p in m.parts)
+    assert any(isinstance(p, RetryPromptPart) for m in runner.calls[-1] for p in m.parts)
+    assert not any(isinstance(p, RetryPromptPart) for m in player.messages for p in m.parts)
 
 
 def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch):
@@ -78,11 +79,11 @@ def test_custom_game_and_realtime_balance_use_shared_rules():
     assert player.decide_bid(make_ai_obs(coins=4, game=game)) == (1, 9)
     assert player.decide_bid(make_ai_obs(day=2, coins=10, game=game)) == (7, 9)
     assert len(runner.calls) == 4
-    encoded = ModelMessagesTypeAdapter.dump_json(player.messages).decode()
-    assert "超过当前余额 4" in encoded and "合计超过当前余额 10" in encoded
+    assert "超过当前余额 4" in ModelMessagesTypeAdapter.dump_json(runner.calls[1]).decode()
+    assert "合计超过当前余额 10" in ModelMessagesTypeAdapter.dump_json(runner.calls[3]).decode()
 
 
-def test_history_is_append_only_and_tool_pairs_survive_rollback(tmp_path):
+def test_business_history_and_original_audit_survive_rollback(tmp_path):
     player = make_player(fake_task_runner([bid_reply(1), bid_reply(2)]), tmp_path)
     prefix = deepcopy(player.messages)
     player.decide_bid(make_ai_obs())
@@ -94,11 +95,15 @@ def test_history_is_append_only_and_tool_pairs_survive_rollback(tmp_path):
     player.rollback(checkpoint)
     assert player.messages == middle
     parts = [p for m in player.messages for p in m.parts]
-    assert [p.tool_call_id for p in parts if isinstance(p, ToolCallPart)] == [
-        p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
+    assert not any(isinstance(p, (ToolCallPart, ToolReturnPart)) for p in parts)
     entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
     assert entries[0]["result"] == bid_reply(1)
-    assert ModelMessagesTypeAdapter.validate_python(entries[0]["messages"]) == middle[len(prefix):]
+    audit = ModelMessagesTypeAdapter.validate_python(entries[0]["messages"])
+    calls = [p for m in audit for p in m.parts if isinstance(p, ToolCallPart)]
+    returns = [p for m in audit for p in m.parts if isinstance(p, ToolReturnPart)]
+    assert calls[0].args_as_dict() == bid_reply(1)
+    assert calls[0].tool_call_id == returns[0].tool_call_id
+    assert "我的私有分析" in ModelMessagesTypeAdapter.dump_json(middle).decode()
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert md.startswith("# Alpha · 私人对话") and "tool-return" not in md and "私有策略" in md
 

@@ -39,12 +39,12 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     replay_path, factories = generate_demo(run_dir, test_model=True)
     paths = RunPaths(run_dir)
     assert len(factories) == len(names)
-    expected_calls = 2 + game.regular_matches * (game.max_days - 1) + 2 * (game.regular_matches - 1) + 2
+    expected_calls = 2 + game.regular_matches * (game.max_days - 1) + 3 * (game.regular_matches - 1) + 2
     assert all(f.opened == f.closed == f.calls == expected_calls for f in factories)
     snapshot = paths.read_config()
     tool_definitions = json.loads(paths.tool_definitions.read_text(encoding="utf-8"))
     tool_refs = [json.loads(line) for line in paths.tool_requests.read_text(encoding="utf-8").splitlines()]
-    assert len(tool_definitions) == 3 and len(tool_refs) == expected_calls * len(names)
+    assert len(tool_definitions) == 4 and len(tool_refs) == expected_calls * len(names)
     assert all(ref["source"] == "offline_sdk_generated" and ref["definition_id"] in tool_definitions for ref in tool_refs)
     assert all(ref["versions"]["pydantic-ai-slim"] for ref in tool_refs)
     assert "离线 SDK 生成" in paths.tools.read_text(encoding="utf-8")
@@ -91,7 +91,6 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert not any(entry["context"].endswith("第1天") for entry in entries if entry["task"] == "bid")
     requests = [entry["requests"][0] for entry in entries]
     assert len(requests) == expected_calls
-    committed = []
     for entry, record in zip(entries, requests):
         assert entry["status"] == "success" and not entry["request_errors"]
         assert record["request"] == 1
@@ -105,16 +104,26 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
                                                if message["kind"] == "response"]
         if entry["task"] != "summary":
             tool = record["parameters"]["output_tools"][0]
-            assert tool["name"] == ("bid" if entry["task"] == "plan" else entry["task"])
-            assert tool["parameters_json_schema"]["properties"]["strategy"]["description"].startswith("仅自己可见")
+            assert tool["name"] == {"plan": "bid", "memory": "save_memory"}.get(entry["task"], entry["task"])
+            properties = tool["parameters_json_schema"]["properties"]
+            field = "memory" if entry["task"] == "memory" else "strategy"
+            assert properties[field]["description"].startswith("仅自己可见")
+            if entry["task"] == "memory":
+                assert set(properties) == {"memory"} and entry["memory_chars"] == len(entry["result"]["memory"])
         if entry["task"] == "plan":
             match_index = 1 if entry["phase"] == "opening_plan" else int(entry["phase"].split("_")[1]) + 1
             actual = matches[match_index - 1]["match"]["days"][0]["bids"][0]
             assert (entry["result"]["bid"], entry["result"]["super_bid"]) == (actual["bid"], None)
         if entry["phase"] == "final_summary":
-            # 总结看到此前所有任务，但请求与回复并不产生后续玩家状态。
-            assert all(message in record["messages"] for message in committed if message["kind"] == "response")
-        committed.extend(entry["messages"])
+            # 总结看到此前所有任务的提示与有效业务结果，无原始工具/推理元数据。
+            review = json.dumps(record["messages"], ensure_ascii=False)
+            for prior in entries[:-1]:
+                for message in prior["messages"]:
+                    for part in message["parts"]:
+                        if part["part_kind"] == "user-prompt":
+                            assert part["content"] in [p["content"] for m in record["messages"] for p in m["parts"]
+                                                        if p["part_kind"] == "user-prompt"]
+            assert '"part_kind": "thinking"' not in review and '"part_kind": "tool-call"' not in review
     # 非选中玩家正常日志不保存重复请求。
     for number, name in enumerate(names[1:], 2):
         assert all("requests" not in json.loads(line) for line in
@@ -125,7 +134,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert "[本场默认工具记录](tools.md)" in replay
     assert "../tools.md#" in paths.player(1, readable=True).read_text(encoding="utf-8")
     titles = ["比赛开头 · 开局发言", "第一局规划 · 首日缓存", "第一局第二天 · 正常出价",
-              "第一局结束 · 局末发言", "第二局规划 · 接收实际反馈", "实际比赛结尾 · 最终感言",
+              "第一局结束 · 局末发言", "第一局结束 · 累计私有记忆", "第二局规划 · 接收实际反馈", "实际比赛结尾 · 最终感言",
               "实际比赛结尾 · 观众总结"]
     positions = [replay.index("## " + title) for title in titles]
     assert positions == sorted(positions)
@@ -135,7 +144,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert "非 HTTP 报文" in replay and "模拟回复" in replay and "仅 speech 投递" in replay
     assert "SDK 在离线模拟传输中生成的请求定义，未发送到真实中转" in replay
     snapshots = json.loads(paths.definitions(1).read_text(encoding="utf-8"))
-    assert len(snapshots) == 3  # 共享出价工具、发言与文本；完整赛不逐请求重复捕获。
+    assert len(snapshots) == 4  # 共享出价工具、发言、记忆与文本；完整赛不逐请求重复捕获。
     definitions = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", replay, re.S)
                    if '"tools"' in block]
     assert definitions == [snapshot["definition"] for snapshot in snapshots.values() if snapshot["definition"].get("tools")]
@@ -168,7 +177,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert export_replay(run_dir, selected).read_text(encoding="utf-8") == replay
     assert json.loads(protocol_path.read_text(encoding="utf-8")) == snapshots
     chosen = [entry for entry in entries if entry["phase"] in {
-        "opening_speech", "opening_plan", "match_1_speech", "match_1_plan", "final_speech", "final_summary"
+        "opening_speech", "opening_plan", "match_1_speech", "match_1_memory", "match_1_plan", "final_speech", "final_summary"
     } or entry["context"] == "第1局第2天"]
     for entry in chosen:
         for message in entry["messages"]:

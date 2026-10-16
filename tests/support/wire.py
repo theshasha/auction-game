@@ -28,7 +28,7 @@ def make_agent(model):
     return production_agent(model, "bid", settings={"timeout": 3.0, "max_tokens": 123})
 
 
-def sse(protocol, data=GOOD, *, ending="ok", tool=True, tool_name="bid", tool_id="call_1", text="no tool"):
+def sse(protocol, data=GOOD, *, ending="ok", tool=True, tool_name="bid", tool_id="call_1", text="no tool", thinking=None):
     """Small wire fixtures, split JSON arguments across genuine SSE deltas."""
     args = json.dumps(data)
     halves = (args[:len(args) // 2], args[len(args) // 2:])
@@ -37,6 +37,8 @@ def sse(protocol, data=GOOD, *, ending="ok", tool=True, tool_name="bid", tool_id
         def chunk(delta, finish=None):
             return {"id": "chat_1", "object": "chat.completion.chunk", "created": 1,
                     "model": MODEL, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        if thinking:
+            events.append(chunk({"role": "assistant", "reasoning_content": thinking}))
         if tool:
             events.append(chunk({"role": "assistant", "tool_calls": [{"index": 0, "id": tool_id,
                            "type": "function", "function": {"name": tool_name, "arguments": halves[0]}}]}))
@@ -51,6 +53,14 @@ def sse(protocol, data=GOOD, *, ending="ok", tool=True, tool_name="bid", tool_id
                     "status": "in_progress", "output": [], "error": None, "incomplete_details": None,
                     "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5}}
         events.append({"type": "response.created", "response": response})
+        reasoning = {"type": "reasoning", "id": "rs_old", "summary": [{"type": "summary_text", "text": thinking}],
+                     "encrypted_content": "encrypted_old_reasoning"}
+        if thinking:
+            events.append({"type": "response.output_item.added", "output_index": 1,
+                           "item": dict(reasoning, summary=[], encrypted_content=None)})
+            events.append({"type": "response.reasoning_summary_text.delta", "item_id": "rs_old",
+                           "output_index": 1, "summary_index": 0, "delta": thinking})
+            events.append({"type": "response.output_item.done", "output_index": 1, "item": reasoning})
         item = {"type": "function_call", "id": "fc_1", "call_id": tool_id, "name": tool_name,
                 "arguments": "", "status": "in_progress"}
         if tool:
@@ -75,13 +85,22 @@ def sse(protocol, data=GOOD, *, ending="ok", tool=True, tool_name="bid", tool_id
             events.append({"type": "response.output_item.done", "output_index": 0, "item": item})
         if ending != "missing":
             status = "incomplete" if ending == "limit" else "completed"
-            final = dict(response, status=status, output=[item],
+            final = dict(response, status=status, output=([reasoning] if thinking else []) + [item],
                          incomplete_details={"reason": "max_output_tokens"} if ending == "limit" else None)
             events.append({"type": "response." + status, "response": final})
     else:
         events.append({"type": "message_start", "message": {"id": "msg_1", "type": "message",
                        "role": "assistant", "model": MODEL, "content": [], "stop_reason": None,
                        "stop_sequence": None, "usage": {"input_tokens": 2, "output_tokens": 0}}})
+        if thinking:
+            events.extend([
+                {"type": "content_block_start", "index": 1, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "thinking_delta", "thinking": thinking}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "signature_delta", "signature": "signed_old_reasoning"}},
+                {"type": "content_block_stop", "index": 1},
+                {"type": "content_block_start", "index": 2, "content_block": {"type": "redacted_thinking", "data": "redacted_old_reasoning"}},
+                {"type": "content_block_stop", "index": 2},
+            ])
         if tool:
             events.append({"type": "content_block_start", "index": 0, "content_block": {
                            "type": "tool_use", "id": tool_id, "name": tool_name, "input": {}}})

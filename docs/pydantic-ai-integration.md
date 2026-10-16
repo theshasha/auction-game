@@ -6,7 +6,7 @@
 
 `auction_game/ai/agent_execution.py` 的 `AgentExecutor(factory)(agent, prompt, history, deps=...)` 使用公开 `Agent.run(event_stream_handler=...)` 消费所有模型节点，包括纠错。同步线程每任务一次 `asyncio.run()`；客户端在该事件循环内创建并关闭，工厂不持有跨循环 HTTP 客户端。执行器唯一一次深拷贝输入历史，不识别拍卖任务。
 
-`agent_tasks.TaskRunner` 在业务层定义严格输出与 `AuctionDeps(game, coins)`：bid/plan 共用 `bid` 工具，返回 strategy、bid、必填可空 super_bid；speech 工具返回私有 strategy 与公开 speech；summary 返回非空文本。业务 plan 阶段及首日缓存不变。工具映射、显式 description 与字段 schema 集中在 `agent_tasks.py`；自然语言集中在 `prompts.py`，TaskRunner 从映射取得当前工具名，统一追加提交要求，进入消息日志。规则模板在根目录。
+`agent_tasks.TaskRunner` 在业务层定义严格输出与 `AuctionDeps(game, coins)`：bid/plan 共用 `bid` 工具，返回 strategy、bid、必填可空 super_bid；speech 工具返回私有 strategy 与公开 speech；memory 使用 `save_memory`，仅返回非空 memory；summary 返回非空文本。业务 plan 阶段及首日缓存不变。工具映射、显式 description 与字段 schema 集中在 `agent_tasks.py`；自然语言集中在 `prompts.py`，TaskRunner 从映射取得当前工具名，统一追加提交要求，进入消息日志。规则模板在根目录。
 
 `strict=True, extra='forbid'`，拒绝字符串数字、布尔出价与空白策略。super_bid 的公开 before 字段校验只报告类型错误，schema 保持 integer/null，必填且不转换字符串；反馈说明整数与不加引号的 JSON null 都合法，不使用时填 null。发言只由提示限长，不硬截断，内部 thinking 不代替业务策略。
 
@@ -14,15 +14,17 @@
 
 ## 历史、隐私与暂停
 
-AIPlayer 持有唯一 `list[ModelMessage]`，初始化放入一次 system。执行成功且日志全部写入成功后追加 `new_messages()`，保留工具调用及配对工具应答。成功规划更新首日缓存；首日消费一次且不请求模型。失败不提交历史或缓存。
+AIPlayer 的游戏上下文 `messages` 与全场回顾 `review_messages` 初始化各含一次 system。执行成功且日志全部写入成功后，把本次实际 user 提示与最终合法业务结果投影为普通 user/assistant 对话，保留显式 strategy；不重放原始 response/tool，因此 thinking、加密推理、签名及 provider response ID 均不跨独立任务回传。原始 `new_messages()` 完整留在磁盘审计，不原地改写。当前任务内部纠错仍由 SDK 原样管理，保留协议要求的 thinking 与工具配对。三协议 MockTransport 测试检查真实序列化。成功规划更新首日缓存；首日消费一次且不请求模型。失败不提交历史或缓存。
 
-检查点保存消息长度与缓存；控制器只原样保存和交还不透明快照，支持 `None`。`RoundTask.participant` 显式接入检查点参与者。暂停停止新派发，等待在途任务结束并读取所有 future，业务校验成功的结果、历史与首日缓存均保留；恢复仅补跑失败或未启动项。全部成功也要在整轮提交前等待确认。快速回车/c 记录恢复意图，先收集再继续；失败重试另等确认。q 排空在途后回滚整轮并退出；程序异常原样传播。两种暂停竞态测试必须保留。
+需继续的局末按 speech 全员完成并公布 → memory 全员完成 → 下一局 plan 执行，每玩家新增一次正常记忆请求，仍共用一次纠错预算。记忆整合旧笔记、本局经历与所有局末公开发言（含本人），整体替换旧记忆。一页笔记是软目标，只有结构与非空校验，无长度纠错或截断。记忆日志成功后，游戏上下文重置为 system 与最新记忆；下一局规划由程序传入最新累计成绩和新局首日状态，不再回塞上一局原始发言。最后一局跳过记忆，加赛按 will_continue 使用同一流程。
+
+检查点保存当前上下文列表、全场回顾列表、累计记忆与首日缓存；消息仅追加或整体替换，快照无需深拷贝消息对象。控制器只原样保存和交还不透明快照，支持 `None`。`RoundTask.participant` 显式接入检查点参与者。暂停停止新派发，等待在途任务结束并读取所有 future，业务校验成功的结果、历史与首日缓存均保留；恢复仅补跑失败或未启动项。全部成功也要在整轮提交前等待确认。快速回车/c 记录恢复意图，先收集再继续；失败重试另等确认。q 排空在途后回滚整轮并退出；程序异常原样传播。两种暂停竞态测试必须保留。
 
 `llm.max_concurrency` 统一解析为正整数，默认 10，拒绝布尔值；1 为串行。生产 AI 与完整离线赛的所有轮级任务共用控制器上限，一次启动读取一次，启动显示并写入本场快照。派发与暂停使用同一同步边界，最多提交上限个任务，每轮输入仍由调用方统一固定。暂停等待期间，任务内部已有的有限网络重试及一次输出纠错可能继续，不增加预算。
 
 失败后的等待闸门必须在公布可操作提示前建立：执行期间旧回车不预放行，失败公告后收到的确认不能再次清空。连续失败每次重新等待确认，离线无人交互入口遇到任务失败则直接退出。
 
-对手只看到 speech，strategy 留在自身历史与私人日志。观众总结读取完整历史快照与原总结提示，回复只给观众和日志，不回写玩家历史。最后一局直接最终感言，跳过普通局末发言。
+对手只看到 speech，strategy 与 memory 留在自身上下文及私人日志。观众总结读取全场去 thinking 的业务回顾与原总结提示，回复只给观众和日志，不回写玩家历史；这个终局请求仍可能较长。最后一局直接最终感言，跳过普通局末发言及记忆请求。局末出价表直接使用引擎的获胜者、撞车价位和超级命中字段标注款项，不重复结算算法。
 
 ## 完整流与重试预算
 
@@ -44,7 +46,7 @@ ModelFactory 按显式 protocol 选择 Chat、Responses 或 Anthropic，不猜�
 
 `RunPaths` 是日志、统计和回放的共同布局。format_version、run_type、身份编号合入 run_config，不另建 run.json。旧场次保持原地，新读取器只支持当前格式。玩家 JSONL 存本次新增规范消息、结果与错误；失败审计按 run_id 选取，排除 interrupted 占位响应，避免相邻 request 合并导致漏记。
 
-写入顺序为任务 JSONL、可选捕获、显式私人 Markdown；任一失败向上传播，成功日志完成后才提交内存状态。没有跨文件事务：后续写入失败会留下部分审计，但历史与首日缓存不提交。
+写入顺序为任务 JSONL、可选捕获、显式私人 Markdown；任一失败向上传播，成功日志完成后才提交内存状态。没有跨文件事务：后续写入失败会留下部分审计，但上下文、记忆与首日缓存不提交。记忆任务记录 `memory_chars`（Python 字符长度，非 token），私人 Markdown 展示完整笔记及长度，仅用于观察。
 
 默认轻量工具审计先于 HTTP 发送：`llm_client.py` 的公开 HTTP request hook 调用 `tool_records.protocol_tools()`，只提取实际存在的 tools/tool_choice/parallel_tool_calls。AgentLog 在任务开始时分配既有 task_id，通过 ContextVar 关联玩家、业务任务、BufferedRequest 的 request/attempt。每场共享 ToolWriter 在锁内按协议及字段内容哈希去重，定义写 `data/tool_definitions.json`，来源与请求引用写 `data/tool_requests.jsonl`，随后更新 `tools.md`。磁盘异常即使被 SDK 包装成连接错误也原样传播，不消耗网络重发；此时不提交历史或缓存。失败请求的发送前记录保留，无跨文件事务。README 与私人 Markdown 直接链接工具页，任务 JSONL 引用定义 ID。
 

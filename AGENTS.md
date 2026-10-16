@@ -16,7 +16,7 @@ AI、Bot、benchmark、offline 启动在创建日志或请求模型前自动同�
 
 - 启动与路径：根 `main.py` 保留参数解析及模式分派；`auction_game/paths.py` 集中默认路径，配置在 `configuration.py`，组装在 `runners.py`。
 - 游戏规则、结算、Bot、比赛流程：`auction_game/game/`。
-- 自然语言提示：`auction_game/ai/prompts.py`；工具映射、description、schema 与共享纠错：`agent_tasks.py`；历史事务：`ai_player.py`。当场实际工具定义从场次 README 进入 `tools.md`，原始调用及错误查玩家 JSONL。
+- 自然语言提示：`auction_game/ai/prompts.py`；工具映射、description、schema 与共享纠错：`agent_tasks.py`；历史事务：`ai_player.py`。已完成任务仅回传提示与有效业务结果，原始 thinking 留审计。需继续的局末全员发言公布后独立 `save_memory`，日志成功才累计替换记忆并重置游戏上下文；下一局成绩由程序提供。观众总结单独读全场业务回顾。当场实际工具定义从场次 README 进入 `tools.md`，原始调用及错误查玩家 JSONL。
 - 修改模型调用、历史、重试或协议兼容前，先读 `docs/pydantic-ai-integration.md`。通用执行器、模型工厂与发言编排在 `auction_game/ai/`。
 - 修改暂停与补跑前查 `auction_game/controller.py`，保留两种暂停竞态回归。`RoundTask.participant` 显式接入检查点，已完成结果保留，仅补跑未完成部分。
 - 日志布局、捕获与回放：`auction_game/reporting/`；统计口径先读 `docs/analyze.md`。

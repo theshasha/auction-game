@@ -26,9 +26,11 @@ def _phase_title(entry: dict) -> str:
     phase = entry["phase"]
     if phase == "bid":
         return f"{entry.get('context', '')} · 每日出价".strip(" ·")
-    match = re.fullmatch(r"match_(\d+)_(speech|plan)", phase)
+    match = re.fullmatch(r"match_(\d+)_(speech|plan|memory)", phase)
     if match:
         index, task = match.groups()
+        if task == "memory":
+            return f"第{index}局累计私有记忆"
         return f"第{index}局局末发言" if task == "speech" else f"第{int(index) + 1}局策略规划（含首日出价）"
     return {"opening_speech": "开局发言", "opening_plan": "第1局策略规划（含首日出价）",
             "final_speech": "最终感言", "final_summary": "观众总结（不回喂）"}.get(
@@ -147,10 +149,12 @@ class AgentLog:
         self._title_counts: dict[str, int] = {}
 
     def success(self, entry: dict, result: ExecutionResult) -> None:
+        output = result.output.model_dump() if isinstance(result.output, BaseModel) else result.output
         self._write({**entry, **({"requests": result.requests} if result.requests else {}), "status": "success",
+                     **({"memory_chars": len(output["memory"])} if isinstance(output, dict) and "memory" in output else {}),
                      "messages": ModelMessagesTypeAdapter.dump_python(result.messages, mode="json"),
                      "request_errors": result.request_errors,
-                     "result": result.output.model_dump() if isinstance(result.output, BaseModel) else result.output})
+                     "result": output})
 
     def failure(self, entry: dict, error: CallFailedError) -> None:
         self._write({**entry, **({"requests": error.requests} if error.requests else {}), "status": "failed",

@@ -17,20 +17,20 @@ class TestRenderMatchLog:
         lines = text.splitlines()
 
         assert lines[0] == "| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 |"
-        assert lines[2] == "| 1 | 1 | 5 | 4 | 3 | 2 | 1 | 0 | 甲 以 5 获胜 | — |"
-        assert lines[3] == "| 2 | 1 | 3 | 3 | 2 | 2 | 2 | 0 | 己 以 0 获胜 | 2、3 |"
+        assert lines[2] == "| 1 | 1 | 5（获胜，扣5） | 4（退款） | 3（退款） | 2（退款） | 1（退款） | 0（退款） | 甲 以 5 获胜 | — |"
+        assert lines[3] == "| 2 | 1 | 3（撞车，扣3） | 3（撞车，扣3） | 2（撞车，扣2） | 2（撞车，扣2） | 2（撞车，扣2） | 0（获胜，扣0） | 己 以 0 获胜 | 2、3 |"
         assert "本局胜场：" in text
 
     def test_super_hit_and_miss_shown_in_cells(self):
-        # 使用超级出价的玩家在出价列写作「正常价+超N」，命中再加注「中」
+        # 超级出价直接展示引擎命中结果、固定成本及悬赏。
         # （首日场景：乙超 6 命中甲的唯一 6，丙 5 捡漏获胜）
         log = make_log(days=[
             make_day(1, [6, 4, 5, 3, 3, 2], 1, "丙", 5, [3, 6], 1, super_bids={"乙": (6, True)}),
             make_day(2, [3, 4, 5, 3, 2, 1], 1, "丙", 5, [3], 1, super_bids={"甲": 6}),
         ])
         text = prompts.render_match_log(log)
-        assert "| 1 | 1 | 6 | 4+超6中 | 5 | 3 | 3 | 2 | 丙 以 5 获胜 | 3、6 |" in text
-        assert "| 2 | 1 | 3+超6 | 4 | 5 | 3 | 2 | 1 | 丙 以 5 获胜 | 3 |" in text
+        assert "6（撞车，扣6） | 4（退款）+超6（命中，成本2，悬赏3） | 5（获胜，扣5）" in text
+        assert "3（撞车，扣3）+超6（落空，成本2） | 4（退款）" in text
 
     def test_empty_log(self):
         log = make_log(days=[])
@@ -45,8 +45,9 @@ class TestRenderMatchLog:
             game=replace(TEST_GAME, daily_pool=(2, 1, 3)),
         )
         text = prompts.render_match_log(log)
-        assert "| 2 | 3 | 2 | 2 | 2 | 1 | 1 | 1 | 流局（奖池并入次日） | 1、2 |" in text
-        assert "| 3 | 6 | 2 | 2 | 2 | 1 | 1 | 1 | 流局（奖池作废） | 1、2 |" in text
+        assert "流局（奖池并入次日） | 1、2 |" in text
+        assert "流局（奖池作废） | 1、2 |" in text
+        assert "2（撞车，扣2）" in text and "1（撞车，扣1）" in text
 
 
 class TestRenderStandings:

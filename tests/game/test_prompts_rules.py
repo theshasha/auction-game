@@ -1,4 +1,4 @@
-"""规则模板生成、参数贯通与局末重申。共享工厂见 conftest.py。"""
+"""规则模板生成、参数贯通与局末事实展示。共享工厂见 conftest.py。"""
 
 from dataclasses import replace
 import subprocess
@@ -15,31 +15,21 @@ from auction_game.game.rules import render_rules
 from auction_game.paths import ROOT_DIR
 
 
-class TestRulesReminder:
-    """局末发言请求在展示局日志前重申结算三步（精简版）。"""
+class TestSettlementFacts:
+    """固定规则只在 system；局末展示实际结果，不再重复结算算法。"""
 
-    def test_match_end_speech_contains_reminder_before_log(self):
+    def test_match_end_speech_contains_results_without_reminder(self):
         text = prompts.match_end_speech_request(
             make_log(), make_standings({n: [0] for n in NAMES}), True
         )
-        reminder = prompts.rules_reminder(TEST_GAME)
-        assert reminder in text
-        assert text.index(reminder) < text.index("本局完整出价日志")
+        assert "规则要点重申" not in text
+        assert "本局完整出价日志" in text and "5（获胜，扣5）" in text and "4（退款）" in text
 
-    def test_reminder_covers_three_steps_and_super_bid(self):
-        reminder = prompts.rules_reminder(TEST_GAME)
-        assert "两笔及以上正常出价即撞车" in reminder
-        assert "未撞车的正常出价中最高的一笔获胜" in reminder
-        assert "全额退还" in reminder
-        # 超级出价要点（收费狙击制）：不限次数、每次固定扣 2 金币、只狙击不能获胜、
-        # 命中（≥1 笔正常出价）+3 悬赏、出价明细与全场余额每日公布
-        assert "超级出价不限次数（每天最多 1 笔）" in reminder
-        assert "固定扣除 2 金币" in reminder
-        assert "不能获胜" in reminder
-        assert "3 金币悬赏" in reminder
-        assert "至少有 1 笔正常出价" in reminder
-        assert "昨日完整出价明细" in reminder
-        assert "全场每人的当前金币余额" in reminder
+    def test_memory_prompt_covers_cumulative_notes_and_all_speeches(self):
+        text = prompts.memory_request({"甲": "本人发言", "乙": "他人发言"})
+        assert "本人发言" in text and "他人发言" in text
+        assert "整体替换" in text and "旧记忆" in text and "软目标" in text
+        assert "规则与最新成绩由程序可靠提供" in text
 
 
 class TestRulesText:
@@ -116,10 +106,6 @@ class TestRulesText:
         system = prompts.build_system_prompt("甲", "人设", "正文", [], names, game)
         assert system.startswith(text)
         assert "其他 2 位玩家是：乙、丙" in system
-        reminder = prompts.rules_reminder(game)
-        assert "固定扣除 3 金币" in reminder and "5 金币悬赏" in reminder
-        assert "第 3 天流局时奖池作废" in reminder
-        assert "当天正常出价加固定成本 3 金币不得超过你的余额" in reminder
 
     @pytest.mark.parametrize("names", [[], ["甲"], ["甲", "甲"], ["甲", " "]])
     def test_invalid_actual_names_rejected(self, names):

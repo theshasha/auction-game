@@ -52,6 +52,41 @@ def make_named_player(name, task_runner):
     return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, task_runner, game=TEST_GAME)
 
 
+@pytest.mark.parametrize("command", ["", "q"], ids=["resume-only-failed-memory", "abort-restores-context"])
+def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command):
+    gate = threading.Event()
+
+    def announce(message):
+        if message.startswith("[单步]"):
+            gate.set()
+
+    controller = Controller(mode="continuous", announce=announce)
+    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1), {"memory": "alpha cumulative"}]))
+    bravo = make_named_player("Bravo", fake_task_runner([bid_reply(2), ModelAPIError("offline", "unavailable"),
+                                                        {"memory": "bravo cumulative"}]))
+    players = [alpha, bravo]
+    for player in players:
+        player.plan_strategy("prior match context", "opening_plan")
+    before = [p.checkpoint() for p in players]
+    tasks = [RoundTask(key=p.name, participant=p,
+                       fn=lambda p=p: p.save_memory("all published speeches", "match_1_memory")) for p in players]
+    with running(controller, lambda: run_parallel_round(tasks, controller, "累计记忆")) as (thread, outcome):
+        assert gate.wait(timeout=5)
+        assert alpha.memory == "alpha cumulative" and len(alpha.messages) == 2
+        assert bravo.checkpoint() == before[1]
+        successful = alpha.checkpoint()
+        controller.offer_command(command)
+        thread.join(timeout=5)
+        if command == "q":
+            assert isinstance(outcome.get("error"), TournamentAborted)
+            assert [p.checkpoint() for p in players] == before
+        else:
+            assert outcome.get("result") == {"Alpha": None, "Bravo": None}
+            assert alpha.checkpoint() == successful and bravo.memory == "bravo cumulative"
+            assert len(alpha.task_runner.calls) == 2 and len(bravo.task_runner.calls) == 3
+            assert alpha._pending_day1_bid is None and bravo._pending_day1_bid is None
+
+
 class TestController:
     def test_step_mode_gates_each_call(self):
         gate = threading.Event()
@@ -551,10 +586,9 @@ class TestParallelRound:
             assert alpha.messages == alpha_snapshot
             assert bravo.messages[:len(bravo_prefix)] == bravo_prefix
             parts = [p for m in bravo.messages for p in m.parts]
-            calls = [p for p in parts if isinstance(p, ToolCallPart)]
-            assert len(calls) == 1 and calls[0].args_as_dict()["bid"] == 2
-            assert [p.tool_call_id for p in calls] == [
-                p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
+            assert not any(isinstance(p, ToolCallPart) for p in parts)
+            assert '"bid": 2' in bravo.messages[-1].parts[0].content
+            assert not any(isinstance(p, ToolReturnPart) for p in parts)
 
     def test_step_mode_gates_once_and_runs_concurrently(self):
         announcements = []
@@ -647,7 +681,6 @@ class TestParallelRound:
             assert alpha.messages == alpha_snapshot
             assert bravo.messages == bravo_snapshot
             parts = [p for m in bravo.messages for p in m.parts]
-            calls = [p for p in parts if isinstance(p, ToolCallPart)]
-            assert len(calls) == 1 and calls[0].args_as_dict()["bid"] == 2
-            assert [p.tool_call_id for p in calls] == [
-                p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
+            assert not any(isinstance(p, ToolCallPart) for p in parts)
+            assert '"bid": 2' in bravo.messages[-1].parts[0].content
+            assert not any(isinstance(p, ToolReturnPart) for p in parts)
