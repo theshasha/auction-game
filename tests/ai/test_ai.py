@@ -18,7 +18,7 @@ from auction_game.reporting.request_records import load_requests
 
 @pytest.mark.parametrize("invalid", [
     {"strategy": "s", "bid": 2}, bid_reply("2"), bid_reply(True), bid_reply(2.0),
-    bid_reply(2, True), bid_reply(2, 2.0), bid_reply(2, "null"), bid_reply(2, "None"), bid_reply(2, "3"),
+    bid_reply(2, True), bid_reply(2, 2.0), bid_reply(2, "None"), bid_reply(2, "3"),
     bid_reply(2, strategy="  "), bid_reply(2, strategy=True), dict(bid_reply(2), extra=1),
 ])
 def test_invalid_output_uses_one_shared_correction(invalid):

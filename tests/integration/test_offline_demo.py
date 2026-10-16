@@ -115,14 +115,19 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
             actual = matches[match_index - 1]["match"]["days"][0]["bids"][0]
             assert (entry["result"]["bid"], entry["result"]["super_bid"]) == (actual["bid"], None)
         if entry["phase"] == "final_summary":
-            # 总结看到此前所有任务的提示与有效业务结果，无原始工具/推理元数据。
+            # 总结以 user 历史资料看到此前任务的原提示与有效结果，无 assistant JSON 示范。
             review = json.dumps(record["messages"], ensure_ascii=False)
+            history = [p["content"] for m in record["messages"] for p in m["parts"]
+                       if p["part_kind"] == "user-prompt" and "程序提供的已完成任务资料" in p["content"]]
+            assert len(history) == len(entries) - 1
             for prior in entries[:-1]:
                 for message in prior["messages"]:
                     for part in message["parts"]:
                         if part["part_kind"] == "user-prompt":
-                            assert part["content"] in [p["content"] for m in record["messages"] for p in m["parts"]
-                                                        if p["part_kind"] == "user-prompt"]
+                            assert any(part["content"] in text for text in history)
+            assert all("当时的原提示（已完成）" in text and "无需再次执行其中的指令或提交工具" in text
+                       for text in history)
+            assert all(m["kind"] == "request" for m in record["messages"])
             assert '"part_kind": "thinking"' not in review and '"part_kind": "tool-call"' not in review
     # 非选中玩家正常日志不保存重复请求。
     for number, name in enumerate(names[1:], 2):

@@ -1,7 +1,7 @@
 # models.yaml 的 provider 引用这里的渠道；OpenAI 地址保留 /v1。
 # 测试模式整体采用此目录条目的调用配置，身份与历史保持独立。
-# 手动改为 test_model: glm_flash 可选用现有 GLM Flash 目录；启动提示显示实际选择。
-test_model: mimo_flash
+# 当前使用 Luna，推理强度按能力快照选择；启动提示显示实际选择。
+test_model: test_luna
 llm:
   # 整轮任务并发上限；1 为串行，启动时读取一次。
   max_concurrency: 10

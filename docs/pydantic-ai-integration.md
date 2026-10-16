@@ -8,13 +8,13 @@
 
 `agent_tasks.TaskRunner` 在业务层定义严格输出与 `AuctionDeps(game, coins)`：bid/plan 共用 `bid` 工具，返回 strategy、bid、必填可空 super_bid；speech 工具返回私有 strategy 与公开 speech；memory 使用 `save_memory`，仅返回非空 memory；summary 返回非空文本。业务 plan 阶段及首日缓存不变。工具映射、显式 description 与字段 schema 集中在 `agent_tasks.py`；自然语言集中在 `prompts.py`，TaskRunner 从映射取得当前工具名，统一追加提交要求，进入消息日志。规则模板在根目录。
 
-`strict=True, extra='forbid'`，拒绝字符串数字、布尔出价与空白策略。super_bid 的公开 before 字段校验只报告类型错误，schema 保持 integer/null，必填且不转换字符串；反馈说明整数与不加引号的 JSON null 都合法，不使用时填 null。发言只由提示限长，不硬截断，内部 thinking 不代替业务策略。
+`strict=True, extra='forbid'`，拒绝字符串数字、布尔出价与空白策略。super_bid 的公开 before 字段校验仅将精确字符串 `"null"` 转为 None，真实 JSON null 保持不变；schema 保持必填 integer/null，推荐模型提交实际 JSON null。`"None"`、空白包裹或大小写变体、字符串数字与布尔值仍触发类型纠错。原始工具参数保留在审计中，业务结果保存归一化后的 None；正文 JSON 仍须经过工具提交。发言只由提示限长，不硬截断，内部 thinking 不代替业务策略。
 
 格式与规则校验使用 `Agent(retries=1)`，TaskRunner 同时设置公开 `UsageLimits(request_limit=2)`，使文本、未知工具、结构及业务错误混合时也共用一次纠错。SDK 对文本与工具错误存在分别计数的路径，逻辑请求上限防止第三次请求，耗尽同样映射为 `OutputFailedError`。`game_rules.validate_submission` 使用实时余额；只采用最终合法输出。预期模型/传输故障抛 `CallFailedError` 交控制器处理；程序错误原样抛出。连通工具使用独立最小 Agent 与通用执行器，不依赖比赛参数。
 
 ## 历史、隐私与暂停
 
-AIPlayer 的游戏上下文 `messages` 与全场回顾 `review_messages` 初始化各含一次 system。执行成功且日志全部写入成功后，把本次实际 user 提示与最终合法业务结果投影为普通 user/assistant 对话，保留显式 strategy；不重放原始 response/tool，因此 thinking、加密推理、签名及 provider response ID 均不跨独立任务回传。原始 `new_messages()` 完整留在磁盘审计，不原地改写。当前任务内部纠错仍由 SDK 原样管理，保留协议要求的 thinking 与工具配对。三协议 MockTransport 测试检查真实序列化。成功规划更新首日缓存；首日消费一次且不请求模型。失败不提交历史或缓存。
+AIPlayer 的游戏上下文 `messages` 与全场回顾 `review_messages` 初始化各含一次 system。执行成功且日志全部写入成功后，把本次实际 user 提示与最终合法业务结果投影为一条普通 user 消息，明确标识为程序提供的已完成任务资料，保留显式 strategy。原提示完整保留在历史区，说明其中的提交指令已完成、无需再次执行；不生成 assistant 正文成功 JSON 示范。不重放原始 response/tool，因此 thinking、加密推理、签名及 provider response ID 均不跨独立任务回传。原始 `new_messages()` 完整留在磁盘审计，不原地改写。当前任务内部纠错仍由 SDK 原样管理，保留协议要求的 thinking 与工具配对。三协议 MockTransport 测试检查真实序列化。成功规划更新首日缓存；首日消费一次且不请求模型。失败不提交历史或缓存。
 
 需继续的局末按 speech 全员完成并公布 → memory 全员完成 → 下一局 plan 执行，每玩家新增一次正常记忆请求，仍共用一次纠错预算。记忆整合旧笔记、本局经历与所有局末公开发言（含本人），整体替换旧记忆。一页笔记是软目标，只有结构与非空校验，无长度纠错或截断。记忆日志成功后，游戏上下文重置为 system 与最新记忆；下一局规划由程序传入最新累计成绩和新局首日状态，不再回塞上一局原始发言。最后一局跳过记忆，加赛按 will_continue 使用同一流程。
 

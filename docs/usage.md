@@ -53,7 +53,7 @@ python main.py --ai --test-model
 python main.py --ai
 ```
 
-先完成测试模型整场比赛，经检查确认后使用常规阵容。`--test-model` 使用 `configs/config.yaml` 的 `test_model` 目录键；要切回保留的 GLM Flash，手动设为 `test_model: glm_flash`，无需改阵容或新增命令参数。启动提示显示所选目录键、实际模型 ID 与协议。测试模式整体替换执行模型、能力、预算与推理设置，保留身份、人设及独立历史；原测试模型的 `reasoning_effort: low` 不会带入新选择。
+先完成测试模型整场比赛，经检查确认后使用常规阵容。`--test-model` 使用 `configs/config.yaml` 的 `test_model` 目录键；要切回保留的 GLM Flash，手动设为 `test_model: glm_flash`，无需改阵容或新增命令参数。启动提示显示所选目录键、实际模型 ID 与协议。测试模式整体替换执行模型、能力、预算与推理设置，保留身份、人设及独立历史；Luna 已移除 `low` 显式覆盖，推理强度按能力快照和通用策略选择。
 
 连通检查的 `--model 目录键` 可重复，默认按阵容实际执行配置去重；单目标至多一次流式工具请求，无重试。默认探测预算 2048，可用 `--max-tokens` 调整且不超过比赛预算；探测不依赖 `game.yaml`，不改比赛预算。智能体执行真实探测的授权边界见根 `AGENTS.md`。
 

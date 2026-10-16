@@ -91,10 +91,11 @@ def test_one_shared_correction_budget(protocol, replies, succeeds):
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_no_tool_exhausts_correction(protocol):
+@pytest.mark.parametrize("super_bid", [None, "null"])
+def test_no_tool_exhausts_correction(protocol, super_bid):
     async def scenario():
         # 即使文本是合法出价 JSON，也必须调用输出工具；auto 保留共享一次纠错。
-        h = Harness(protocol, [reply(tool=False, text=json.dumps(GOOD))] * 2)
+        h = Harness(protocol, [reply(tool=False, text=json.dumps(dict(GOOD, super_bid=super_bid)))] * 2)
         h.factory = replace(h.factory, model_profile=channel_model_profile(CHANNELS["hub"], protocol))
         async with h:
             with pytest.raises(UnexpectedModelBehavior):
@@ -107,8 +108,8 @@ def test_no_tool_exhausts_correction(protocol):
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("first,second", [
-    (reply(tool=False, text=json.dumps(GOOD)), reply(dict(GOOD, super_bid="null"))),
-    (reply(dict(GOOD, super_bid="null")), reply(tool=False, text=json.dumps(GOOD))),
+    (reply(tool=False, text=json.dumps(GOOD)), reply(dict(GOOD, super_bid="None"))),
+    (reply(dict(GOOD, super_bid="None")), reply(tool=False, text=json.dumps(GOOD))),
     (reply(tool_name="plan"), reply(dict(GOOD, bid=99))),
     (reply(dict(GOOD, bid=99)), reply(tool_name="plan")),
     (reply(tool=False), reply(tool_name="plan")),
@@ -124,7 +125,7 @@ def test_mixed_corrections_share_two_request_limit(protocol, first, second):
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("value", ["null", "None", "3", True])
+@pytest.mark.parametrize("value", ["None", "3", True, False, 2.0, " null", "null ", "NULL", "Null", ""])
 def test_super_bid_feedback_preserves_schema_and_explains_json_null(protocol, value):
     from auction_game.ai.agent_tasks import TaskRunner
     from tests.support.factories import TEST_GAME
@@ -138,6 +139,27 @@ def test_super_bid_feedback_preserves_schema_and_explains_json_null(protocol, va
     schema = tool.get("parameters", tool.get("input_schema"))
     assert schema["properties"]["super_bid"]["anyOf"] == [{"type": "integer"}, {"type": "null"}]
     assert "super_bid" in schema["required"]
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("value", [None, "null"])
+def test_super_bid_null_compatibility_preserves_raw_audit(protocol, value, tmp_path):
+    from pydantic_ai.messages import ModelMessagesTypeAdapter, UserPromptPart
+    from auction_game.ai.agent_tasks import TaskRunner
+    from tests.support.factories import make_ai_obs, make_player
+
+    h = Harness(protocol, [reply(dict(GOOD, super_bid=value))])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert len(h.requests) == h.closes == 1
+    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    assert entry["result"]["super_bid"] is None
+    audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
+    call = next(p for m in audit for p in m.parts if isinstance(p, ToolCallPart))
+    assert call.args_as_dict()["super_bid"] == value
+    history = next(p.content for m in player.messages for p in m.parts if isinstance(p, UserPromptPart))
+    business_json = history.split("【已完成任务的有效结果】\n")[1].split("\n【历史任务资料结束】")[0]
+    assert json.loads(business_json) == entry["result"]
 
 
 @pytest.mark.parametrize("tool", [True, False])

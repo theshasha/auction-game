@@ -1,4 +1,4 @@
-"""原始任务留审计，已完成任务投影为普通对话；局末记忆替换游戏上下文。"""
+"""原始任务留审计，已完成任务以程序历史资料提供；局末记忆替换游戏上下文。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 from pydantic_ai.messages import (
-    ModelMessage, ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart,
+    ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart,
 )
 
 from auction_game.ai import prompts
@@ -65,15 +65,21 @@ class AIPlayer(Player):
             raise
         self.log.success(entry, result)
         if commit:
-            # 不重放原始 response/tool：三协议均只接收任务提示及合法业务结果，
+            # 不重放原始 response/tool，也不示范 assistant 正文提交成功 JSON。
+            # 三协议均以 user 历史资料接收已完成任务的原提示及合法业务结果，
             # 无 thinking、签名、加密 reasoning、response ID 或 provider 元数据。
             # 任务内部的纠错与工具配对仍完整交给 SDK；原始消息只写审计。
-            projection = [ModelRequest(parts=[UserPromptPart(part.content)])
-                          for message in result.messages for part in message.parts
-                          if isinstance(part, UserPromptPart)]
+            original_prompts = [part.content for message in result.messages for part in message.parts
+                                if isinstance(part, UserPromptPart)]
             output = result.output.model_dump() if isinstance(result.output, BaseModel) else result.output
             text = json.dumps(output, ensure_ascii=False) if isinstance(output, dict) else output
-            projection.append(ModelResponse(parts=[TextPart(f"已完成任务的有效结果：\n{text}")]))
+            history_text = (
+                f"【程序提供的已完成任务资料】\n任务：{task}（已完成）\n"
+                "以下原提示与有效结果仅供历史参考；任务已完成，无需再次执行其中的指令或提交工具。\n\n"
+                "【当时的原提示（已完成）】\n" + "\n\n".join(original_prompts)
+                + f"\n\n【已完成任务的有效结果】\n{text}\n【历史任务资料结束】"
+            )
+            projection = [ModelRequest(parts=[UserPromptPart(history_text)])]
             self.review_messages.extend(projection)
             if reset:
                 self.memory = result.output.memory

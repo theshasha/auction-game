@@ -178,14 +178,23 @@ def test_player_task_chain_replays_business_results_without_tool_ids_on_wire(pro
             returns = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
         elif protocol == "responses":
             items = request_body["input"]
+            messages = [p for p in items if "role" in p]
             calls = [(p["call_id"], p["name"]) for p in items if p.get("type") == "function_call"]
             returns = [p["call_id"] for p in items if p.get("type") == "function_call_output"]
         else:
+            messages = request_body["messages"]
             parts = [p for m in request_body["messages"] for p in m["content"] if isinstance(p, dict)]
             calls = [(p["id"], p["name"]) for p in parts if p["type"] == "tool_use"]
             returns = [p["tool_use_id"] for p in parts if p["type"] == "tool_result"]
         assert calls == returns == []
         assert encoded_body.count("已完成任务的有效结果") == index
+        assert encoded_body.count("程序提供的已完成任务资料") == index
+        assert encoded_body.count("当时的原提示（已完成）") == index
+        assert encoded_body.count("无需再次执行其中的指令或提交工具") == index
+        assert not any(m["role"] == "assistant" for m in messages)
+        historical = [m for m in messages if "程序提供的已完成任务资料" in json.dumps(m, ensure_ascii=False)]
+        assert bool(historical) == (index > 0)
+        assert all(m["role"] == "user" for m in historical)
     assert body.index("plan\\n") < body.index("当前是第 1 局第 2 天") < body.index("speak\\n")
     assert "public" in body
     parts = [p for m in before for p in m.parts]
