@@ -32,12 +32,8 @@ class TestSystemPrompt:
         assert "乙、丙、丁、戊、己" in system  # 其他五位玩家名单
 
 
-class TestSpeechBlockFormat:
-    """公开发言：先规划策略、末尾定界符块【公开发言】…【发言结束】，附发言免责句；观众总结不动。
-
-    定界符取代裸 JSON：发言是自由文本，JSON 字符串要求转义双引号，
-    实证模型在发言内嵌未转义的 " 导致解析失败（旧 JSON 格式解析仍兼容，见 ai_player）。
-    """
+class TestSpeechFields:
+    """公开字段边界及发言免责句；观众总结提示信息不变。"""
 
     def test_public_speech_requests_ask_for_speech_block(self):
         standings = make_standings({n: [0] for n in NAMES})
@@ -46,8 +42,8 @@ class TestSpeechBlockFormat:
             prompts.match_end_speech_request(make_log(), standings, True),
             prompts.final_speech_request(standings, make_log(match_index=5)),
         ):
-            assert "【公开发言】" in text
-            assert "【发言结束】" in text
+            assert "strategy" in text and "speech" in text
+            assert "只有 speech 会给其他玩家看" in text
             assert "不构成对你后续出价的任何约束" in text
 
     def test_final_summary_is_private_and_includes_speeches(self):
@@ -56,12 +52,6 @@ class TestSpeechBlockFormat:
         assert "【乙】感言B" in text
         assert "只给观众看的总结发言" in text
         assert "不会给其他玩家看到" in text
-
-    def test_retry_speech_request(self):
-        text = prompts.retry_speech_request()
-        assert "缺少合法的发言块" in text
-        assert "【公开发言】" in text and "【发言结束】" in text
-
 
 class TestPlayoffNotice:
     """加赛预告只在正赛打完（或加赛后）且第一名仍并列时出现。"""
@@ -97,17 +87,17 @@ class TestPlayoffNotice:
 
 
 class TestPlanBidMerge:
-    """规划请求与下一局第 1 天出价合并：附恒定首日状态与 JSON 出价格式（含超级出价）。"""
+    """规划请求保留恒定首日状态与策略要求；schema 定义格式。"""
 
     def test_bid_format_hint_covers_super_bid(self):
         text = prompts.bid_format_hint(TEST_GAME)
-        assert '"super_bid"' in text
+        assert 'super_bid' in text
         # 提交合法性约束（同值、合计余额——违反即整单作废）放模板防无谓非法提交；
         # 策略规则细节（命中判定、悬赏、不能获胜等）不在每日消息复述，
         # 由 system 的实时渲染规则与局末重申兜底
         assert "不得与正常出价同值" in text
-        assert "2 金币成本不得超过你的余额" in text
-        assert "不使用超级出价就不要包含 super_bid 字段" in text
+        assert "2 金币成本不得超过余额" in text
+        assert "super_bid 明确为 null" in text
         assert "```json" not in text
 
     @pytest.mark.parametrize(
@@ -125,17 +115,7 @@ class TestPlanBidMerge:
         assert strategy in text and bid_task in text
         assert "【甲】发言A" in text and "【乙】发言B" in text
         assert "你的金币 11，本局已获胜场 0，今日奖池 2 个胜场，出价上限 9" in text
-        assert '{"bid": <0到9的整数，不得超过你的余额>}' in text
-        assert '{"bid": <正常出价>, "super_bid": <0到9的整数>}' in text
+        assert '0 到 9 的整数' in text
+        assert 'strategy' in text
         assert "加 3 金币成本" in text
         assert "```json" not in text
-
-
-class TestInvalidBidRetry:
-    """数值非法（解析成功但违反出价规则）的提醒重试：写清具体违规原因。"""
-
-    def test_includes_reason_and_format_hint(self):
-        text = prompts.invalid_bid_retry_request("你的出价 6 超过当前余额 4", TEST_GAME)
-        assert "你的出价 6 超过当前余额 4" in text
-        assert "请重新出价" in text
-        assert '{"bid":' in text  # 附出价格式提示

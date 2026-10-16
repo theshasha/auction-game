@@ -7,12 +7,14 @@ from copy import deepcopy
 import pytest
 
 from ai_player import AIPlayer
+from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from conftest import (
     ALL_NAMES,
     TEST_GAME,
     TEST_PREDICTIONS,
     bid_reply,
-    fake_chat_fn,
+    fake_task_runner,
     make_ai_obs,
 )
 from controller import Controller, RoundTask, TournamentAborted, run_parallel_round
@@ -45,8 +47,8 @@ def running(controller, fn, *release_events):
             raise error
 
 
-def make_named_player(name, chat_fn):
-    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, chat_fn, game=TEST_GAME)
+def make_named_player(name, task_runner):
+    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, task_runner, game=TEST_GAME)
 
 
 class TestController:
@@ -146,6 +148,63 @@ class TestController:
 
 
 class TestParallelRound:
+    def test_non_player_participant_rolls_back_while_stateless_result_is_kept(self, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+        stateless_collected = threading.Event()
+        gate = threading.Event()
+        controller = Controller(mode="continuous", announce=lambda msg: gate.set() if msg.startswith("[单步]") else None)
+
+        class Counter:
+            def __init__(self):
+                self.value = 0
+                self.calls = 0
+                self.restored = []
+
+            def checkpoint(self):
+                # None 也是有效的不透明快照，控制器必须原样交还。
+                return None
+
+            def rollback(self, checkpoint):
+                self.restored.append(checkpoint)
+                self.value = 0
+
+            def run(self):
+                self.calls += 1
+                self.value += 1
+                started.set()
+                assert release.wait(timeout=5)
+                return self.value
+
+        counter = Counter()
+        stateless_calls = []
+
+        def stateless():
+            stateless_calls.append(1)
+            return "ready"
+
+        original_as_completed = controller_module.as_completed
+
+        def track_collection(futures):
+            for future in original_as_completed(futures):
+                yield future
+                if future.result() == "ready":
+                    stateless_collected.set()
+
+        monkeypatch.setattr(controller_module, "as_completed", track_collection)
+        tasks = [RoundTask("counter", counter.run, participant=counter), RoundTask("stateless", stateless)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "通用任务"), release) as (thread, outcome):
+            assert started.wait(timeout=5) and stateless_collected.wait(timeout=5)
+            controller.offer_command("p")
+            release.set()
+            assert gate.wait(timeout=5)
+            assert counter.value == 0 and counter.restored == [None]
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert outcome.get("result") == {"stateless": "ready", "counter": 1}
+            assert counter.calls == 2 and stateless_calls == [1]
+
     def test_pause_restores_consumed_plan_before_result_collection(self, monkeypatch):
         ready = threading.Event()
         release_collection = threading.Event()
@@ -154,8 +213,8 @@ class TestParallelRound:
             mode="continuous",
             announce=lambda msg: gate.set() if msg.startswith("[单步]") else None,
         )
-        chat_fn = fake_chat_fn(['{"bid": 2, "super_bid": 6}'])
-        player = make_named_player("Alpha", chat_fn)
+        task_runner = fake_task_runner([bid_reply(2, 6)])
+        player = make_named_player("Alpha", task_runner)
         player.plan_strategy("请规划", "opening_plan")
         original_as_completed = controller_module.as_completed
         first_pass = True
@@ -171,7 +230,7 @@ class TestParallelRound:
                 yield future
 
         monkeypatch.setattr(controller_module, "as_completed", hold_first_collection)
-        tasks = [RoundTask("Alpha", player, lambda: player.decide_bid(make_ai_obs(day=1)))]
+        tasks = [RoundTask("Alpha", lambda: player.decide_bid(make_ai_obs(day=1)), participant=player)]
         with running(controller, lambda: run_parallel_round(tasks, controller, "首日"),
                      release_collection) as (thread, outcome):
             assert ready.wait(timeout=5)
@@ -183,13 +242,12 @@ class TestParallelRound:
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"Alpha": (2, 6)}
-            assert len(chat_fn.calls) == 1
+            assert len(task_runner.calls) == 1
 
     @pytest.mark.parametrize("failures, reason", [
-        ([RuntimeError("超时"), RuntimeError("余额不足")], "余额不足"),
-        (["没有块", "还是没有"], "连续两次解析失败"),
-        ([bid_reply(9), bid_reply(8)], "连续两次非法"),
-    ], ids=["call", "parse", "invalid-bid"])
+        ([ModelAPIError("offline", "service unavailable")], "service unavailable"),
+        (["没有工具", "还是没有"], "retries"),
+    ], ids=["service", "output"])
     def test_failure_reruns_only_failed_player(self, failures, reason):
         gate = threading.Event()
         announcements = []
@@ -200,20 +258,21 @@ class TestParallelRound:
                 gate.set()
 
         controller = Controller(mode="continuous", announce=announce)
-        alpha_chat = fake_chat_fn([bid_reply(1)])
+        alpha_chat = fake_task_runner([bid_reply(1)])
         alpha = make_named_player("Alpha", alpha_chat)
-        bravo_chat = fake_chat_fn([*failures, bid_reply(2)])
+        bravo_chat = fake_task_runner([*failures, bid_reply(2)])
         bravo = make_named_player("Bravo", bravo_chat)
         tasks = [
-            RoundTask(key="Alpha", player=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
-            RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
+            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
+            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
         ]
         with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮")) as (thread, outcome):
             assert gate.wait(timeout=5)  # 等闸门提示，避免失败提示后的回车被清除
             assert "result" not in outcome
             assert len(alpha_chat.calls) == 1
-            assert len(bravo_chat.calls) == 2
-            assert [m["role"] for m in bravo.messages] == ["system"]
+            assert len(bravo_chat.calls) == len(failures)
+            assert len(bravo.messages) == 1
+            bravo_prefix = deepcopy(bravo.messages)
             alpha_snapshot = deepcopy(alpha.messages)
             assert any(msg.startswith("[失败]") and "Bravo" in msg for msg in announcements)
             assert any(reason in msg for msg in announcements)
@@ -221,19 +280,15 @@ class TestParallelRound:
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"Alpha": (1, None), "Bravo": (2, None)}
-            assert len(bravo_chat.calls) == 3
+            assert len(bravo_chat.calls) == len(failures) + 1
             assert len(alpha_chat.calls) == 1
             assert alpha.messages == alpha_snapshot
-            assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]
-
-    def test_completed_round_returns_all_results(self):
-        controller = Controller(mode="continuous", announce=lambda msg: None)
-        tasks = [
-            RoundTask(key=str(i), player=None, fn=lambda i=i: i * 10)
-            for i in range(6)
-        ]
-        results = run_parallel_round(tasks, controller, label="测试轮")
-        assert results == {str(i): i * 10 for i in range(6)}
+            assert bravo.messages[:len(bravo_prefix)] == bravo_prefix
+            parts = [p for m in bravo.messages for p in m.parts]
+            calls = [p for p in parts if isinstance(p, ToolCallPart)]
+            assert len(calls) == 1 and calls[0].args_as_dict()["bid"] == 2
+            assert [p.tool_call_id for p in calls] == [
+                p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
 
     def test_step_mode_gates_once_and_runs_concurrently(self):
         announcements = []
@@ -247,7 +302,7 @@ class TestParallelRound:
         controller = Controller(mode="step", announce=announce)
         barrier = threading.Barrier(6)  # 若被串行执行将超时破碎，以此证明并发
         players = [
-            make_named_player(f"P{i}", fake_chat_fn([bid_reply(i)]))
+            make_named_player(f"P{i}", fake_task_runner([bid_reply(i)]))
             for i in range(6)
         ]
 
@@ -257,7 +312,7 @@ class TestParallelRound:
                 return player.decide_bid(make_ai_obs())
             return fn
 
-        tasks = [RoundTask(key=player.name, player=player, fn=make_fn(player)) for player in players]
+        tasks = [RoundTask(key=player.name, participant=player, fn=make_fn(player)) for player in players]
         with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮")) as (thread, outcome):
             assert gate.wait(timeout=5)
             assert "result" not in outcome
@@ -277,7 +332,7 @@ class TestParallelRound:
 
         controller = Controller(mode="continuous", announce=announce)
         alpha_collected = threading.Event()
-        alpha_chat = fake_chat_fn([bid_reply(1)])
+        alpha_chat = fake_task_runner([bid_reply(1)])
         alpha = make_named_player("Alpha", alpha_chat)
 
         original_as_completed = controller_module.as_completed
@@ -301,10 +356,10 @@ class TestParallelRound:
             assert release_bravo.wait(timeout=5)
             return bid_reply(2)
 
-        bravo = make_named_player("Bravo", bravo_chat)
+        bravo = make_named_player("Bravo", fake_task_runner([bravo_chat, bravo_chat]))
         tasks = [
-            RoundTask(key="Alpha", player=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
-            RoundTask(key="Bravo", player=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
+            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
+            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
         ]
         with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮"),
                      release_bravo) as (thread, outcome):
@@ -315,13 +370,19 @@ class TestParallelRound:
             assert gate_announced.wait(timeout=5)
             assert "result" not in outcome
             alpha_snapshot = deepcopy(alpha.messages)
-            assert [m["role"] for m in bravo.messages] == ["system"]
+            assert len(bravo.messages) == 1
+            bravo_prefix = deepcopy(bravo.messages)
 
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"Alpha": (1, None), "Bravo": (2, None)}
             assert len(alpha_chat.calls) == 1
             assert len(bravo_calls) == 2
-            assert bravo_calls[0] == bravo_calls[1]
+            assert [p.content for m in bravo_calls[0] for p in m.parts] == [p.content for m in bravo_calls[1] for p in m.parts]
             assert alpha.messages == alpha_snapshot
-            assert [m["role"] for m in bravo.messages] == ["system", "user", "assistant"]
+            assert bravo.messages[:len(bravo_prefix)] == bravo_prefix
+            parts = [p for m in bravo.messages for p in m.parts]
+            calls = [p for p in parts if isinstance(p, ToolCallPart)]
+            assert len(calls) == 1 and calls[0].args_as_dict()["bid"] == 2
+            assert [p.tool_call_id for p in calls] == [
+                p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]

@@ -13,7 +13,8 @@ from controller import (
     TournamentAborted,
     run_parallel_round,
 )
-from llm_client import MissingApiKeyError, make_chat_fn
+from llm_client import MissingApiKeyError, make_model_factory
+from agent_tasks import TaskRunner
 from players import BOT_NAMES, RandomBot
 from rules import render_rules
 from run_output import make_publish, make_run_dir, print_final_result
@@ -50,17 +51,17 @@ def run_ai() -> int:
     all_names = [pc["name"] for pc in player_configs]
     predictions = [(pc["name"], pc.get("predicted_win_rate", 0)) for pc in player_configs]
 
-    chat_fns = {}
+    task_runners = {}
     for pc in player_configs:
         try:
-            chat_fns[pc["name"]] = make_chat_fn(
+            task_runners[pc["name"]] = TaskRunner(make_model_factory(
                 provider=pc["provider"],
                 channel=config["llm"]["channels"][pc["provider"]],
                 model=pc["model"],
                 timeout=timeout,
                 protocol=pc["protocol"],
                 max_tokens=pc["max_tokens"],
-            )
+            ))
         except (MissingApiKeyError, ValueError) as exc:
             print(f"错误：玩家 {pc['name']} 的 LLM 配置不可用：{exc}")
             return 1
@@ -76,7 +77,7 @@ def run_ai() -> int:
             persona_text=pc["persona_text"],
             predictions=predictions,
             all_names=all_names,
-            chat_fn=chat_fns[pc["name"]],
+            task_runner=task_runners[pc["name"]],
             game=game,
             log_path=run_dir / f"ai_{pc['name']}.jsonl",
         )
@@ -94,7 +95,7 @@ def run_ai() -> int:
         tasks = [
             RoundTask(
                 key=player.name,
-                player=player,
+                participant=player,
                 fn=lambda player=player, obs=obs: player.decide_bid(obs),
             )
             for player, obs in observations

@@ -11,12 +11,22 @@ import sys
 import time
 
 from configuration import ConfigurationError, load_configuration
-from llm_client import MissingApiKeyError, make_chat_fn
+from llm_client import MissingApiKeyError, make_model_factory
+from agent_execution import AgentExecutor
+from pydantic_ai import Agent, ModelRetry
+from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
-PING_MESSAGES = [
-    {"role": "system", "content": "你是一个简洁的助手。"},
-    {"role": "user", "content": "用一句话介绍你自己。"},
-]
+PING_HISTORY = [ModelRequest(parts=[SystemPromptPart("你是一个简洁的助手。")])]
+PING_PROMPT = "用一句话介绍你自己。"
+
+PING_AGENT = Agent(output_type=str, retries=1)
+
+
+@PING_AGENT.output_validator
+def validate_ping(result: str) -> str:
+    if not result.strip():
+        raise ModelRetry("回复不能为空白，请重新生成。")
+    return result.strip()
 
 
 def main() -> int:
@@ -32,14 +42,14 @@ def main() -> int:
         protocol_suffix = f" / {player['protocol']}" if player.get("protocol") else ""
         label = f"{player['name']}（{player['provider']}{protocol_suffix} / {player['model']}）"
         try:
-            chat_fn = make_chat_fn(
+            executor = AgentExecutor(make_model_factory(
                 provider=player["provider"],
                 channel=config["llm"]["channels"][player["provider"]],
                 model=player["model"],
                 timeout=timeout,
                 protocol=player["protocol"],
                 max_tokens=player["max_tokens"],
-            )
+            ))
         except (MissingApiKeyError, ValueError) as exc:
             print(f"[配置错误] {label}: {exc}")
             failures += 1
@@ -47,7 +57,7 @@ def main() -> int:
 
         started = time.monotonic()
         try:
-            reply = chat_fn(PING_MESSAGES)
+            reply = executor(PING_AGENT, PING_PROMPT, PING_HISTORY).output
         except Exception as exc:
             print(f"[调用失败] {label}: {type(exc).__name__}: {exc}")
             failures += 1

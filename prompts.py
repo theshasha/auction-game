@@ -37,49 +37,20 @@ def rules_reminder(game: GameSettings) -> str:
 
 
 def bid_format_hint(game: GameSettings) -> str:
-    """出价格式提示：示例保持无围栏裸 JSON（实证围栏示例会诱导模型包代码块）。
-
-    super_bid 为可选字段：不使用就不要包含该字段；使用时两笔出价放在一个
-    JSON 对象里一次提交。规则细节（命中判定、悬赏、不能获胜等）不在此每日
-    复述——规则有 system 的实时渲染规则与局末重申兜底，每日复述实证是诱导弱
-    模型跳读的冗余（20260829_230755 场次：超级规则一天出现 3 遍约 155 字符，
-    误解仍集中在不读上下文的模型身上，复述并未起到防误解作用）。
-    例外是提交合法性约束（同值、合计余额——违反即整单作废）：
-    这不是策略规则，放在模板里防止无谓的非法提交。
-    """
+    """业务要求；输出格式由任务 schema 唯一声明。"""
     return (
-        "请先回复你对当前局势的简要分析，然后在回复末尾用如下 JSON 给出今日出价：\n"
-        f'{{"bid": <0到{game.max_bid}的整数，不得超过你的余额>}}\n'
-        f"若要同时使用超级出价（不得与正常出价同值，"
-        f"且正常出价加 {game.super_cost} 金币成本不得超过你的余额），格式为：\n"
-        f'{{"bid": <正常出价>, "super_bid": <0到{game.max_bid}的整数>}}\n'
-        "不使用超级出价就不要包含 super_bid 字段。"
+        "请在 strategy 中保留对当前局势的简要分析及策略，提交今日出价。"
+        f"正常出价与超级出价须为 0 到 {game.max_bid} 的整数；正常出价不得超过余额。"
+        f"超级出价不得与正常出价同值，正常出价加 {game.super_cost} 金币成本不得超过余额。"
+        "不使用超级出价时 super_bid 明确为 null。"
     )
 
 
 def speech_format_hint() -> str:
-    """发言格式提示：先规划发言策略，末尾用定界符给出实际公开发言。
-
-    定界符格式（【公开发言】…【发言结束】）取代裸 JSON：发言是自由文本，
-    JSON 字符串要求转义双引号，实证模型在发言内嵌未转义的 " 导致解析失败；
-    定界符之间是纯文本，引号与换行均不受限。
-    免责句把「发言」与「后续出价」显式解耦：避免模型把公开发言当成自己
-    接下来要做的事（说出去的话泼出去的水效应）。
-    """
+    """保持私有策略与公开信号的业务边界。"""
     return (
-        "请先给出你的发言策略，"
-        "然后在回复末尾按如下格式给出你实际要公开的发言：\n"
-        "【公开发言】\n"
-        "<你实际要公开的发言，可自由使用引号与换行>\n"
-        "【发言结束】\n"
+        "请在 strategy 中保留私有发言策略，在 speech 中给出实际公开发言。只有 speech 会给其他玩家看。"
         "注意：公开发言只是对其他玩家释放的信号，不构成对你后续出价的任何约束。"
-    )
-
-
-def retry_speech_request() -> str:
-    return (
-        "你的上一条回复缺少合法的发言块（【公开发言】…【发言结束】），请重新发言。\n\n"
-        + speech_format_hint()
     )
 
 
@@ -239,17 +210,6 @@ def bid_request(obs: Observation) -> str:
         lines.append(my_last_line)
     lines.append(status_line)
     return "\n".join(lines) + "\n\n" + bid_format_hint(obs.game)
-
-
-def retry_bid_request(game: GameSettings) -> str:
-    return (
-        "你的上一条回复缺少合法的 JSON 出价块，请重新出价。\n\n" + bid_format_hint(game)
-    )
-
-
-def invalid_bid_retry_request(reason: str, game: GameSettings) -> str:
-    """数值非法（解析成功但违反出价规则）的提醒重试：写清具体违规原因。"""
-    return f"你的上一提交非法：{reason}。请重新出价。\n\n" + bid_format_hint(game)
 
 
 def render_match_log(log: MatchLog) -> str:

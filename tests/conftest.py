@@ -7,11 +7,16 @@
 2. 引擎场景构造器：run_one_match / constant_strategies / constant_by_name /
    bids_by_day / super_by_day / run_scenario——消灭「按天查表策略」在各用例里
    逐字重写的样板。策略只依赖 obs.day 与 obs.my_name，可全员共用同一个函数。
-3. AI 玩家测试夹具：ALL_NAMES / TEST_PREDICTIONS / fake_chat_fn / make_player /
-   bid_reply / speech_reply / legacy_speech_reply / make_ai_obs。
+3. AI 玩家测试夹具：模型边界注入，任务均经过生产 Agent 校验。
 """
 
 from copy import deepcopy
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+import json
+
+from pydantic_ai.models.function import FunctionModel, DeltaToolCall
+from agent_tasks import TaskRunner
 
 from ai_player import AIPlayer
 from engine import run_match
@@ -171,40 +176,47 @@ ALL_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
 TEST_PREDICTIONS = [(name, 10) for name in ALL_NAMES]
 
 
-def fake_chat_fn(script):
-    """script: 回复文本或异常的有序列表；calls 保存每次请求时的独立快照。"""
+def fake_task_runner(script):
+    """脚本只模拟模型输出；严格 schema、规则、纠错均使用生产路径。"""
     queue = list(script)
     calls = []
 
-    def chat_fn(messages):
+    async def stream(messages, info):
         calls.append(deepcopy(messages))
         item = queue.pop(0)
+        if callable(item):
+            item = item(messages)
         if isinstance(item, Exception):
             raise item
-        return item
+        if isinstance(item, dict):
+            yield {0: DeltaToolCall(name=info.output_tools[0].name, json_args=json.dumps(item, ensure_ascii=False),
+                                   tool_call_id=f"call-{len(calls)}")}
+        else:
+            yield item
 
-    chat_fn.calls = calls
-    return chat_fn
+    @asynccontextmanager
+    async def open_model():
+        model = FunctionModel(stream_function=stream)
+        model.request_errors = []
+        yield model
+
+    runner = TaskRunner(SimpleNamespace(open=open_model, settings={}))
+    runner.calls = calls
+    return runner
 
 
-def make_player(chat_fn, tmp_path=None, game=TEST_GAME):
+def make_player(task_runner, tmp_path=None, game=TEST_GAME):
     log_path = (tmp_path / "ai_Alpha.jsonl") if tmp_path else None
     return AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
-                    chat_fn, game=game, log_path=log_path)
+                    task_runner, game=game, log_path=log_path)
 
 
-def bid_reply(bid):
-    return f"我的分析：……\n```json\n{{\"bid\": {bid}}}\n```"
+def bid_reply(bid, super_bid=None, strategy="我的私有分析"):
+    return {"strategy": strategy, "bid": bid, "super_bid": super_bid}
 
 
 def speech_reply(speech):
-    """公开发言回复（当前格式）：先规划策略，末尾定界符块给出实际公开发言。"""
-    return f"发言策略：先放个烟雾弹。\n【公开发言】\n{speech}\n【发言结束】"
-
-
-def legacy_speech_reply(speech):
-    """旧格式发言回复：末尾裸 JSON {"speech": ...}（解析器保留兼容）。"""
-    return f'发言策略：先放个烟雾弹。\n{{"speech": "{speech}"}}'
+    return {"strategy": "先放个烟雾弹（私有）", "speech": speech}
 
 
 def make_ai_obs(day=1, coins=6, game=TEST_GAME):

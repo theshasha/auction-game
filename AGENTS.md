@@ -12,11 +12,12 @@ Bot 默认 6 人；局数、经济与奖池由 `game.yaml` 决定，第一名并
 - `RULES.md`：生成的可读规则，修改规则时编辑模板并重新生成。
 - `game.yaml`、`game_rules.py`：比赛参数及共享校验；生产默认值只维护在 `game.yaml`。
 - `models.py`、`engine.py`、`tournament.py`：数据结构、出价结算和比赛流程。
-- `ai_player.py`、`llm_client.py`、`prompts.py`：模型玩家、Pydantic AI 模型工厂与过渡文本接口、提示词。
+- `ai_player.py`：规范历史与首日缓存事务；`agent_tasks.py`：拍卖任务与共享纠错；`prompts.py`：提示词。
+- `agent_execution.py`：通用 Agent 执行与历史隔离；`agent_log.py`：审计写入与消息投影；`llm_client.py`：模型工厂与请求级重试。
 - `main.py`：命令行解析与模式分派；`runners.py`：Bot/AI 玩家组装与比赛启动。
 - `ai_speech.py`：AI 发言编排；`run_output.py`：运行目录、局末日志与最终结果展示。
 - `benchmark.py`：批量策略对照及统计；`players.py`：Bot 名单和随机/脚本玩家。
-- `controller.py`：单步、连续、暂停与轮级并行控制。
+- `controller.py`：轮级并行与暂停控制；`RoundTask.participant` 显式接入可选检查点参与者。
 - `players.yaml`：玩家名称、人设、渠道引用（provider）、显式协议与输出预算。
 - `config.yaml`：超时及渠道地址、密钥环境变量名；`configuration.py` 集中校验运行与玩家配置。
 - `analyze.py`：对局统计，统计口径见 `docs/analyze.md`。
@@ -54,7 +55,7 @@ Bot 默认 6 人；局数、经济与奖池由 `game.yaml` 决定，第一名并
 provider 引用 `config.yaml` 的 `llm.channels`；渠道定义 base_url 和 api_key_env，密钥写入 `.env` 对应变量。
 protocol 必填 `chat` / `responses` / `anthropic`，渠道名不决定协议。OpenAI 地址保留 `/v1`，Anthropic 地址由 SDK 追加 `/v1/messages`。
 AI、Bot 和 benchmark 均读取 `game.yaml`；`check_llm.py` 只检查服务连接，不依赖比赛参数。
-当前 AIPlayer 仍使用薄文本接口；SDK 与模型层不重试，失败重试仍归 AIPlayer。继续模型迁移或排查协议兼容时先读 `docs/pydantic-ai-integration.md`。
+Agent 负责结构化输出及一次共享纠错；SDK 重试为 0，模型层每请求至多一次基础设施重试。修改任务、历史事务、重试或排查协议兼容时先读 `docs/pydantic-ai-integration.md`。
 以下命令会访问真实服务，可能产生费用，执行前先征求用户同意。
 
 检查模型服务连接：

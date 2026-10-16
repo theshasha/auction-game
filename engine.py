@@ -25,7 +25,7 @@ def validate_submission(
     非法情形：正常出价非整数/超 0~上限/超余额/未提交；超级出价非整数/
     超 0~上限/与当天正常出价同值；正常出价 + 固定超级成本总耗资超余额。
 
-    AI 模式下非法提交在收集层已被拦截重试（InvalidBidError），这里是
+    AI 模式下非法提交由 Agent 共享校验及输出纠错拦截，这里是
     Bot 模式与防御性兜底。
     """
     if submission_error(raw_bid, raw_super_bid, coins, game) is not None:

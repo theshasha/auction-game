@@ -4,7 +4,7 @@
 闸门一次，回车放行全部任务并发执行；全部任务有定论后才进入下一轮。
 中途暂停：等在途调用结束，丢弃暂停后完成的结果并回滚对应玩家的对话线，
 已完成的结果保留；恢复后仅补跑未完成项。
-连续两次调用失败（CallFailedError；含解析连续失败的子类 ParseFailedError）：
+任务服务失败或输出纠错耗尽（CallFailedError；含 OutputFailedError）：
 打印失败名单，回车仅重跑失败的 AI，可反复直到本轮齐全。
 """
 
@@ -14,20 +14,28 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
-from ai_player import AIPlayer, CallFailedError
+from agent_execution import CallFailedError
 
 
 class TournamentAborted(Exception):
     """用户中止整场比赛。"""
 
 
+class CheckpointParticipant(Protocol):
+    """状态由参与者解释，控制器只保存并原样交还快照。"""
+
+    def checkpoint(self) -> Any: ...
+
+    def rollback(self, checkpoint: Any) -> None: ...
+
+
 @dataclass
 class RoundTask:
     key: str                  # 结果字典的键（通常是玩家名）
-    player: Any               # 用于 checkpoint/rollback（非 AIPlayer 则跳过）
     fn: Callable[[], Any]     # 实际执行的一次 LLM 调用（或 Bot 决策）
+    participant: CheckpointParticipant | None = None  # 无状态任务不传
 
 
 class Controller:
@@ -124,15 +132,14 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
     只有 TournamentAborted 会向上抛。
     """
     checkpoints = {
-        task.key: task.player.checkpoint()
+        task.key: task.participant.checkpoint()
         for task in tasks
-        if isinstance(task.player, AIPlayer)
+        if task.participant is not None
     }
 
     def rollback(task: RoundTask) -> None:
-        checkpoint = checkpoints.get(task.key)
-        if checkpoint is not None:
-            task.player.rollback(checkpoint)
+        if task.key in checkpoints:
+            task.participant.rollback(checkpoints[task.key])
 
     results: dict[str, Any] = {}
     pending = list(tasks)

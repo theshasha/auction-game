@@ -125,17 +125,15 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
         loaded.append(True)
         return load_configuration(*config_files)
 
-    def make_chat_fn(**kwargs):
+    def make_model_factory(**kwargs):
         factories.append(kwargs)
-
-        def chat(messages):
-            chats.append(messages)
-            return "测试回复"
-
-        return chat
+        from conftest import fake_task_runner
+        runner = fake_task_runner(["测试回复"])
+        chats.append(runner)
+        return runner.executor.factory
 
     monkeypatch.setattr(entry, "load_configuration", load)
-    monkeypatch.setattr(entry, "make_chat_fn", make_chat_fn)
+    monkeypatch.setattr(entry, "make_model_factory", make_model_factory)
     if entry is runners:
         game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
         games_loaded = []
@@ -152,12 +150,12 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
             assert actual_game is game
             assert kwargs["director"].game is game
             assert [p.name for p in players] == ["甲", "乙"]
-            assert "沉稳温柔" in players[0].messages[0]["content"]
-            assert "活泼好奇" in players[1].messages[0]["content"]
+            assert "沉稳温柔" in players[0].messages[0].parts[0].content
+            assert "活泼好奇" in players[1].messages[0].parts[0].content
             for player in players:
                 assert player.game is game
                 assert player.log_path.parent == tmp_path
-                player.chat_fn([])
+                assert player.final_summary("测试总结") == "测试回复"
             raise runners.TournamentAborted
 
         monkeypatch.setattr(runners, "run_tournament", tournament)
@@ -166,7 +164,10 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
         assert (tmp_path / "RULES.md").read_text(encoding="utf-8") == runners.render_rules(game, ["甲", "乙"])
     else:
         assert check_llm.main() == 0
-        assert chats == [check_llm.PING_MESSAGES, check_llm.PING_MESSAGES]
+        for runner in chats:
+            parts = [p for m in runner.calls[0] for p in m.parts]
+            assert parts[0] == check_llm.PING_HISTORY[0].parts[0]
+            assert parts[1].content == check_llm.PING_PROMPT
     assert loaded == [True]
     assert len(chats) == 2
     assert factories == [
@@ -182,7 +183,7 @@ def test_entries_report_configuration_errors(config_files, monkeypatch, capsys, 
     config_path, _ = config_files
     config_path.write_text("llm: null", encoding="utf-8")
     monkeypatch.setattr(entry, "load_configuration", lambda: load_configuration(*config_files))
-    monkeypatch.setattr(entry, "make_chat_fn", lambda **kwargs: pytest.fail("配置错误时不应创建客户端"))
+    monkeypatch.setattr(entry, "make_model_factory", lambda **kwargs: pytest.fail("配置错误时不应创建客户端"))
     if entry is runners:
         monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("配置错误时不应创建日志"))
         assert runners.run_ai() == 1

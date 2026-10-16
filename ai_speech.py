@@ -28,7 +28,7 @@ class AISpeechDirector:
         print(text)
 
     @staticmethod
-    def _dispatch(player: AIPlayer, request: tuple[str, str], context: str) -> str:
+    def _dispatch(player: AIPlayer, request: tuple[str, str], context: str) -> str | None:
         user_text, phase = request
         if phase == "final_summary":
             return player.final_summary(user_text, context)
@@ -36,14 +36,14 @@ class AISpeechDirector:
             return player.plan_strategy(user_text, phase, context)
         return player.give_speech(user_text, phase, context)
 
-    def _run_round(self, requests: dict[AIPlayer, tuple[str, str]], phase_label: str) -> dict[str, str]:
-        """requests: {player: (user_text, phase)}。返回 {名字: 发言}。
+    def _run_round(self, requests: dict[AIPlayer, tuple[str, str]], phase_label: str) -> dict[str, str | None]:
+        """返回公开发言或总结；规划任务返回 None，调用方仅等待完成。
         phase_label 同时作为失败日志的轮次上下文（context）传给玩家。
         失败重跑与暂停补跑由 run_parallel_round 内部处理；中止比赛向上抛。"""
         tasks = [
             RoundTask(
                 key=player.name,
-                player=player,
+                participant=player,
                 fn=lambda player=player, req=req: self._dispatch(player, req, phase_label),
             )
             for player, req in requests.items()

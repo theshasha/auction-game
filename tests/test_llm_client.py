@@ -1,106 +1,204 @@
-"""生产文本适配器的 SDK/SSE 边界，全部 HTTP 使用假密钥和 MockTransport。"""
+"""生产 TaskRunner 的 HTTP 异常分类、流隔离与客户端生命周期。"""
 
-from __future__ import annotations
-
-from copy import deepcopy
 from dataclasses import replace
+from copy import deepcopy
 import json
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import ModelMessagesTypeAdapter, ToolCallPart, ToolReturnPart
 
-from llm_client import (
-    IncompleteStream,
-    strip_think_blocks,
-    text_chat_fn,
-    make_model_factory,
-)
-from pydantic_ai.exceptions import ModelAPIError
-from test_pydantic_ai_contract import Harness, PROTOCOLS, reply
+from agent_execution import CallFailedError, OutputFailedError
+from agent_tasks import TaskRunner
+from conftest import make_player, make_ai_obs
+from llm_client import retryable_request_error
+from test_pydantic_ai_contract import Harness, PROTOCOLS, reply, GOOD
 
 
-class TestStripThinkBlocks:
-    @pytest.mark.parametrize("text, expected", [
-        ('正常回复。\n```json\n{"bid": 42}\n```', '正常回复。\n```json\n{"bid": 42}\n```'),
-        ('<think>让我想想……</think>\n最终回答。', '最终回答。'),
-        ('<think>第一段</think>中间<think>第二段</think>结尾', '中间结尾'),
-        ('<think>\n多行\n推理\n</think>\n\n正文保留', '正文保留'),
-        ('前面内容<think>推理到一半被截断', '前面内容'),
-        ('<think>全是推理', ''),
-    ], ids=["plain", "leading", "multiple", "multiline", "unclosed", "only-unclosed"])
-    def test_strip_think_blocks(self, text, expected):
-        assert strip_think_blocks(text) == expected
+@pytest.mark.parametrize("status,expected", [
+    (400, False), (401, False), (403, False), (408, True), (429, True),
+    (499, False), (500, True), (599, True), (600, False),
+])
+def test_status_retry_classification(status, expected):
+    assert retryable_request_error(ModelHTTPError(status, "alias")) is expected
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_text_adapter_history_budget_and_local_clients(protocol):
-    h = Harness(protocol, [reply(tool=False, text="<think>private</think>正文"), reply(tool=False)])
-    chat = text_chat_fn(h.factory)
-    messages = [{"role": role, "content": content} for role, content in [
-        ("system", "unique system"), ("user", "previous user"),
-        ("assistant", "previous answer"), ("user", "current user")]]
-    before = deepcopy(messages)
-    assert chat(messages) == "正文"
-    assert chat(messages) == "no tool"
-    assert messages == before and len(h.requests) == 2
-    assert h.closes == 2 and h.loops[0] is not h.loops[1]
+@pytest.mark.parametrize("status,retryable", [(401, False), (503, True)])
+def test_sdk_status_retry_and_client_close(protocol, status, retryable):
+    h = Harness(protocol, [status, reply()])
+    player = make_player(TaskRunner(h.factory))
+    if retryable:
+        assert player.decide_bid(make_ai_obs()) == (2, None)
+    else:
+        with pytest.raises(CallFailedError):
+            player.decide_bid(make_ai_obs())
+        assert len(player.messages) == 1
+    assert len(h.requests) == (2 if retryable else 1)
+    assert h.closes == 1 and all(s.closed for s in h.streams)
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("fault", ["connect", "stream", "limit", "missing"])
+def test_failed_flow_never_commits_partial_messages(protocol, fault, tmp_path):
+    item = (fault if fault == "connect" else reply(broken=True, ending="missing") if fault == "stream"
+            else reply(ending=fault))
+    h = Harness(protocol, [item, deepcopy(item)])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    before = deepcopy(player.messages)
+    with pytest.raises(CallFailedError):
+        player.decide_bid(make_ai_obs())
+    assert player.messages == before and player._pending_day1_bid is None
+    assert len(h.requests) == (2 if fault in ("connect", "stream") else 1)
+    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
+    assert not any(isinstance(p, ToolCallPart) for m in audit for p in m.parts)
+    assert entry["request_errors"] and h.closes == 1
+    assert all(s.closed for s in h.streams)
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("succeeds", [True, False], ids=["recovers", "output-budget-exhausted"])
+def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol, succeeds, tmp_path):
+    final = reply() if succeeds else reply(dict(GOOD, bid=99))
+    h = Harness(protocol, ["connect", reply(dict(GOOD, bid="2")),
+                           reply(broken=True, ending="missing"), final])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    before = deepcopy(player.messages)
+    if succeeds:
+        assert player.decide_bid(make_ai_obs()) == (2, None)
+        parts = [p for m in player.messages for p in m.parts]
+        assert sum(isinstance(p, ToolCallPart) for p in parts) == 2
+    else:
+        with pytest.raises(OutputFailedError):
+            player.decide_bid(make_ai_obs())
+        assert player.messages == before
+    assert len(h.requests) == 4 and h.closes == 1
+    assert h.requests[0][1] == h.requests[1][1] and h.requests[2][1] == h.requests[3][1]
+    assert h.requests[0][1] != h.requests[2][1]
+    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(1, 1), (2, 1)]
+    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    assert "请求 1 / 尝试 1" in markdown and "请求 2 / 尝试 1" in markdown
+    assert all(s.closed for s in h.streams)
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_success_then_failure_in_new_loop_keeps_previous_state_and_closes(protocol, tmp_path):
+    h = Harness(protocol, ["connect", reply(), 400])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    player.plan_strategy("plan", "opening_plan")
+    before = deepcopy(player.messages), player._pending_day1_bid
+    with pytest.raises(CallFailedError):
+        player.give_speech("speak", "opening_speech")
+    assert (player.messages, player._pending_day1_bid) == before
+    assert h.closes == 2 and h.loops[0] is h.loops[1] and h.loops[0] is not h.loops[2]
     assert all(loop.is_closed() for loop in h.loops)
-    for request, body in h.requests:
-        encoded = json.dumps(body)
-        for message in messages:
-            assert encoded.count(message["content"]) == 1
-        assert encoded.index("previous user") < encoded.index("previous answer") < encoded.index("current user")
-        assert body["max_output_tokens" if protocol == "responses" else "max_tokens"] == 123
-        assert request.extensions["timeout"]["read"] == 3
-    assert all(stream.closed for stream in h.streams)
+    entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
+    assert [[(e["request"], e["attempt"]) for e in entry["request_errors"]] for entry in entries] == [
+        [(1, 1)], [(1, 1)]]
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("failure", ["missing", "limit", "stream", "connect", 400, 429, 500])
-def test_text_adapter_never_retries_or_returns_partial(protocol, failure):
-    import httpx2 as http
-    item = (reply(tool=False, ending=failure) if failure in ("missing", "limit")
-            else reply(tool=False, broken=True, ending="missing") if failure == "stream" else failure)
-    h = Harness(protocol, [item])
-    with pytest.raises((IncompleteStream, ModelAPIError, http.TransportError)):
-        text_chat_fn(h.factory)([{"role": "user", "content": "current"}])
-    assert len(h.requests) == 1 and all(stream.closed for stream in h.streams)
-    assert h.closes == 1
-
-
-@pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("fault", ["connect", "stream", 400])
-def test_ai_player_owns_only_failure_retry(protocol, fault):
-    from ai_player import AIPlayer
+@pytest.mark.parametrize("task", ["bid", "summary"])
+def test_empty_complete_response_uses_one_output_correction(protocol, task):
+    h = Harness(protocol, [reply(tool=False, text=""),
+                           reply(tool=False, text="summary") if task == "summary" else reply()])
+    runner = TaskRunner(h.factory)
     from conftest import TEST_GAME
-    item = reply(tool=False, broken=True, ending="missing") if fault == "stream" else fault
-    h = Harness(protocol, [item, reply(tool=False)])
-    player = AIPlayer("甲", "测试", "测试人设", [], ["甲", "乙"],
-                      text_chat_fn(h.factory), game=TEST_GAME)
-    assert player._guarded_call("today", "test") == "no tool"
-    assert len(h.requests) == h.closes == 2
-    assert h.requests[0][1] == h.requests[1][1]
-    assert [m["role"] for m in player.messages] == ["system", "user", "assistant"]
+    result = runner(task, "today", [], game=TEST_GAME, coins=6)
+    if task == "summary":
+        assert result.output == "summary"
+    else:
+        assert result.output.bid == 2
+    assert len(h.requests) == 2 and h.closes == 1
+    assert not result.request_errors
 
 
-@pytest.mark.parametrize("index", range(6))
-def test_actual_player_configuration_drives_wire_request(index, monkeypatch):
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol, tmp_path):
+    h = Harness(protocol, [reply(dict(GOOD, bid="2")), reply(broken=True, ending="missing"),
+                           reply(broken=True, ending="missing")])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    with pytest.raises(CallFailedError):
+        player.decide_bid(make_ai_obs())
+    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
+    assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 1
+    assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(2, 1), (2, 2)]
+    assert len(h.requests) == 3 and len(player.messages) == 1 and h.closes == 1
+
+
+def test_non_transport_model_api_error_is_not_retryable():
+    from pydantic_ai.exceptions import ModelAPIError
+    assert not retryable_request_error(ModelAPIError("alias", "provider configuration failure"))
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_player_task_chain_preserves_tool_history_on_wire(protocol, tmp_path):
+    long_summary = "观众总结" * 200
+    h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}),
+                           reply(tool=False, text=long_summary)])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    assert player.plan_strategy("plan", "opening_plan") is None
+    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert len(h.requests) == 1
+    assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
+    assert player.give_speech("speak", "final_speech") == "public"
+    before = deepcopy(player.messages)
+    assert player.final_summary("original summary request and other players' speeches") == long_summary
+    assert player.messages == before and len(h.requests) == h.closes == 4
+    body = json.dumps(h.requests[-1][1], ensure_ascii=False)
+    assert body.count("【你的身份】") == 1 and "original summary request" in body
+    assert "private" in body and "other players' speeches" in body
+    names = ["plan", "bid", "speech"]
+    for index, (_, request_body) in enumerate(h.requests):
+        encoded_body = json.dumps(request_body, ensure_ascii=False)
+        assert encoded_body.count("【你的身份】") == 1
+        tools = request_body.get("tools", [])
+        assert [t.get("function", t)["name"] for t in tools] == names[index:index + 1]
+        if protocol == "chat":
+            messages = request_body["messages"]
+            calls = [(c["id"], c["function"]["name"]) for m in messages for c in m.get("tool_calls", [])]
+            returns = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
+        elif protocol == "responses":
+            items = request_body["input"]
+            calls = [(p["call_id"], p["name"]) for p in items if p.get("type") == "function_call"]
+            returns = [p["call_id"] for p in items if p.get("type") == "function_call_output"]
+        else:
+            parts = [p for m in request_body["messages"] for p in m["content"] if isinstance(p, dict)]
+            calls = [(p["id"], p["name"]) for p in parts if p["type"] == "tool_use"]
+            returns = [p["tool_use_id"] for p in parts if p["type"] == "tool_result"]
+        assert calls == [(f"call_{i + 1}", name) for i, name in enumerate(names[:index])]
+        assert returns == [call_id for call_id, _ in calls]
+    assert body.index('"plan"') < body.index("当前是第 1 局第 2 天") < body.index('"speak"')
+    assert "public" in body
+    parts = [p for m in before for p in m.parts]
+    assert [p.tool_call_id for p in parts if isinstance(p, ToolCallPart)] == [
+        p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
+    encoded = ModelMessagesTypeAdapter.dump_json(before)
+    assert ModelMessagesTypeAdapter.dump_json(ModelMessagesTypeAdapter.validate_json(encoded)) == encoded
+    entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
+    assert [e["task"] for e in entries] == ["plan", "bid", "speech", "summary"]
+    assert entries[-1]["result"] == long_summary
+    assert long_summary in player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    assert all(s.closed for s in h.streams)
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     import llm_client
-    from configuration import load_configuration
-    config, players = load_configuration()
-    player = players[index]
-    channel = config["llm"]["channels"][player["provider"]]
+    channel = {"base_url": "https://configured.invalid/custom", "api_key_env": "TEST_WIRE_KEY"}
     monkeypatch.setattr(llm_client, "load_dotenv", lambda path: None)
     monkeypatch.setenv(channel["api_key_env"], "fake-key")
-    h = Harness(player["protocol"], [reply(tool=False)])
-    factory = make_model_factory(provider=player["provider"], channel=channel, model=player["model"],
-                                 protocol=player["protocol"], timeout=config["llm"]["timeout_seconds"],
-                                 max_tokens=player["max_tokens"])
+    h = Harness(protocol, [reply(tool=False)])
+    factory = llm_client.make_model_factory(provider="channel-name-is-not-protocol", channel=channel,
+                                           model="custom-model-alias", protocol=protocol,
+                                           timeout=17, max_tokens=321)
     assert factory.base_url == channel["base_url"]
     factory = replace(factory, base_url=h.factory.base_url, transport=h.factory.transport)
-    assert text_chat_fn(factory)([{"role": "user", "content": "ping"}]) == "no tool"
+    assert TaskRunner(factory)("summary", "ping", []).output == "no tool"
     request, body = h.requests[0]
-    assert body["model"] == player["model"]
-    field = "max_output_tokens" if player["protocol"] == "responses" else "max_tokens"
-    assert body[field] == player["max_tokens"]
-    assert request.extensions["timeout"]["read"] == 900
-    assert h.closes == 1
+    assert body["model"] == "custom-model-alias"
+    assert body["max_output_tokens" if protocol == "responses" else "max_tokens"] == 321
+    assert request.extensions["timeout"]["read"] == 17 and h.closes == 1

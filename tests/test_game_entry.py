@@ -60,7 +60,7 @@ def test_game_errors_stop_before_clients_or_logs(monkeypatch, capsys, entry, arg
 
     monkeypatch.setattr(runners, "load_game_settings", load)
     monkeypatch.setattr(runners, "load_configuration", lambda: ({}, []))
-    monkeypatch.setattr(runners, "make_chat_fn", lambda **kwargs: pytest.fail("参数错误时不应创建客户端"))
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("参数错误时不应创建客户端"))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("参数错误时不应创建日志"))
     assert entry(*args) == 1
     assert "配置读取失败：game.yaml：max_bid" in capsys.readouterr().out
@@ -72,7 +72,7 @@ def test_ai_single_player_stops_before_clients_or_logs(monkeypatch, capsys, game
         [{"name": "甲", "provider": "openai", "model": "test-model"}],
     ))
     monkeypatch.setattr(runners, "load_game_settings", lambda: game)
-    monkeypatch.setattr(runners, "make_chat_fn", lambda **kwargs: pytest.fail("一人名单不应创建客户端"))
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("一人名单不应创建客户端"))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("一人名单不应创建日志"))
 
     assert runners.run_ai() == 1
@@ -127,16 +127,16 @@ def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, er
     ))
     monkeypatch.setattr(runners, "load_game_settings", lambda: game)
 
-    def make_chat_fn(**kwargs):
+    def make_model_factory(**kwargs):
         raise error_type("初始化失败")
 
-    monkeypatch.setattr(runners, "make_chat_fn", make_chat_fn)
+    monkeypatch.setattr(runners, "make_model_factory", make_model_factory)
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("初始化失败不应创建日志"))
     assert runners.run_ai() == 1
     assert "玩家 甲 的 LLM 配置不可用：初始化失败" in capsys.readouterr().out
 
 
-def test_ai_success_returns_zero(monkeypatch, tmp_path, game):
+def test_ai_success_returns_zero_with_mocked_tournament(monkeypatch, tmp_path, game):
     monkeypatch.setattr(runners, "load_configuration", lambda: (
         {"llm": {"timeout_seconds": 30, "channels": {"test": {}}}},
         [dict(name=name, provider="test", model="test", protocol="chat", max_tokens=123,
@@ -144,7 +144,7 @@ def test_ai_success_returns_zero(monkeypatch, tmp_path, game):
          for name in ["甲", "乙"]],
     ))
     monkeypatch.setattr(runners, "load_game_settings", lambda: game)
-    monkeypatch.setattr(runners, "make_chat_fn", lambda **kwargs: lambda messages: pytest.fail("不应联网"))
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path)
     monkeypatch.setattr(runners, "Controller", lambda mode: SimpleNamespace(start_stdin_reader=lambda: None))
     result = object()
