@@ -83,7 +83,7 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     load_requests(tmp_path / "capture.jsonl", [entry])
     assert [record["errors"] for record in entry["requests"]] == [[error] for error in entry["request_errors"]]
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
-    assert "网络尝试 4 次（请求 1：2 次；请求 2：2 次）" in markdown
+    assert "网络尝试" not in markdown
     assert f"输出纠错 1 次，{'最终通过校验' if succeeds else '最终失败'}" in markdown
     assert all(s.closed for s in h.streams)
 
@@ -132,7 +132,7 @@ def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol,
     assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 1
     assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(2, 1), (2, 2)]
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
-    assert "网络尝试 3 次（请求 1：1 次；请求 2：2 次）" in markdown
+    assert "网络尝试" not in markdown
     assert "输出纠错 1 次，最终失败" in markdown
     assert len(h.requests) == 3 and len(player.messages) == 1 and h.closes == 1
 

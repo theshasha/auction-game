@@ -3,6 +3,6 @@ daily_salary: 4
 daily_pool: [1, 1, 1, 1, 1]
 max_bid: 8
 super_cost: 2
-super_bounty: 4
+super_bounty: 5
 regular_matches: 4
 max_playoffs: 10

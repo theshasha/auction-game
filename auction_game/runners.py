@@ -127,7 +127,13 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         )
         for number, pc in enumerate(player_configs, 1)
     ]
-    print("测试运行：全员使用配置的测试模型，角色身份与独立历史保持不变。" if test_model else "常规阵容运行")
+    if test_model:
+        test_key = config["test_model"]
+        test_execution = config["models"][test_key]
+        print(f"测试运行：全员使用 {test_key} / {test_execution['model']} / {test_execution['protocol']}，"
+              "角色身份与独立历史保持不变。")
+    else:
+        print("常规阵容运行")
     print(f"整轮任务并发上限：{max_concurrency}（实际不超过待执行任务数）")
     for pc in player_configs:
         print(f"{pc['name']}: 身份 {pc['identity_model']['model']} → 实际 {pc['provider']} / "

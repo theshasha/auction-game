@@ -117,10 +117,10 @@ def test_missing_file(tmp_path):
 
 
 @pytest.mark.parametrize("entry", [runners, check_llm])
-@pytest.mark.parametrize("test_model", [False, True])
-def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, entry, test_model):
+@pytest.mark.parametrize("test_model,test_key", [(False, "substitute"), (True, "substitute"), (True, "first")])
+def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, capsys, entry, test_model, test_key):
     config_path = config_files[0]
-    config_path.write_text(yaml.safe_dump({"test_model": "substitute", "llm": {"max_concurrency": 2, "timeout_seconds": 900.5, "channels": CHANNELS}}), encoding="utf-8")
+    config_path.write_text(yaml.safe_dump({"test_model": test_key, "llm": {"max_concurrency": 2, "timeout_seconds": 900.5, "channels": CHANNELS}}), encoding="utf-8")
     loaded = []
     factories = []
     chats = []
@@ -169,6 +169,14 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
 
         monkeypatch.setattr(runners, "run_tournament", tournament)
         assert runners.run_ai(test_model=test_model) == 0
+        output = capsys.readouterr().out
+        if test_model:
+            selected = load_configuration(*config_files)[0]["models"][test_key]
+            assert f"测试运行：全员使用 {test_key} / {selected['model']} / {selected['protocol']}" in output
+            assert "角色身份与独立历史保持不变" in output
+        else:
+            assert "常规阵容运行" in output
+            assert "测试运行：" not in output
         assert games_loaded == [True]
         snapshot = json.loads((tmp_path / "run" / "data" / "run_config.json").read_text(encoding="utf-8"))
         assert snapshot["max_concurrency"] == 2
@@ -187,10 +195,12 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, e
         dict(provider="anthropic", channel=CHANNELS["anthropic"], model="test-model-b", timeout=900.5,
               protocol="anthropic", max_tokens=456, model_settings={}),
     ]
-    if test_model:
+    if test_model and test_key == "substitute":
         expected = [dict(provider="hub", channel=CHANNELS["hub"], model="test-model-c", timeout=900.5,
                          protocol="responses", max_tokens=789,
                          model_settings={"openai_reasoning_effort": "high"})] * len(chats)
+    elif test_model:
+        expected = [expected[0]] * len(chats)
     if entry is check_llm:
         for item in expected:
             item["request_attempts"] = 1
@@ -242,7 +252,18 @@ def test_unknown_channel(config_files):
         load_configuration(*config_files)
 
 
-def test_test_model_replaces_entire_execution_without_changing_identity(config_files):
+@pytest.mark.parametrize("test_key", ["substitute", "first"])
+def test_test_model_replaces_entire_execution_without_changing_identity(config_files, test_key):
+    config_path, _, models_path = config_files
+    models = yaml.safe_load(models_path.read_text(encoding="utf-8"))
+    models["models"]["substitute"]["reasoning_effort"] = "low"
+    models_path.write_text(yaml.safe_dump(models), encoding="utf-8")
+    # 先加载带 low 覆盖的替身，再切换目录键，检查旧配置不污染下一次启动。
+    assert load_configuration(*config_files, test_model=True)[1][0]["model_settings"] == {
+        "openai_reasoning_effort": "low"}
+    settings = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    settings["test_model"] = test_key
+    config_path.write_text(yaml.safe_dump(settings), encoding="utf-8")
     config, regular = load_configuration(*config_files)
     _, testing = load_configuration(*config_files, test_model=True)
     target = config["models"][config["test_model"]]
@@ -252,6 +273,10 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
         for key in ("model", "provider", "protocol", "max_tokens", "model_settings", "capabilities"):
             assert replaced[key] == target[key]
         assert replaced["model_key"] == config["test_model"]
+    assert testing[0] is not testing[1]
+    if test_key == "first":
+        assert all(player["model_settings"] == {} for player in testing)
+        assert config["models"]["substitute"]["model_settings"] == {"openai_reasoning_effort": "low"}
     assert load_configuration(*config_files)[1] == regular
 
 

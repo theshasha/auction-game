@@ -22,16 +22,19 @@ def test_inputs_are_collapsed_losslessly_and_final_fields_appear_once(tmp_path):
     assert player.give_speech(prompt, "opening_speech") == speech
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "## 开局发言" in markdown and "## opening_speech" not in markdown
-    assert "<details>\n<summary>输入原文</summary>" in markdown
-    assert [unescape(block) for block in re.findall(r"<pre[^>]*><code[^>]*>(.*?)</code></pre>", markdown, re.S)] == [prompt]
-    assert 'white-space: pre-wrap; overflow-wrap: anywhere;' in markdown
+    assert "<details><summary>输入原文</summary>" in markdown
+    blocks = re.findall(r"<p>(.*?)</p>", markdown)
+    assert [unescape(block.replace("<br>", "\n")).replace("\xa0", " ") for block in blocks] == [prompt]
+    assert all("\n" not in block for block in re.findall(r"<details>.*?</details>", markdown, re.S))
     assert markdown.count(strategy) == markdown.count(speech) == 1
     assert "tool-return" not in markdown and "call-1" not in markdown
     assert "Final result processed." not in markdown and '"speech":' not in markdown
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     assert entry["result"] == {"strategy": strategy, "speech": speech}
     assert any(part["part_kind"] == "tool-return" for msg in entry["messages"] for part in msg["parts"])
-    assert f"[{entry['task_id']}]({player.log_path.name})" in markdown
+    assert '<a id=' not in markdown and entry["task_id"] not in markdown
+    assert all(text not in markdown for text in ("任务：", "状态：", "任务补跑", "网络尝试", "完整审计"))
+    assert entry["reruns"] == 0 and entry["first_task"] is entry["previous_task"] is None
 
 
 @pytest.mark.parametrize("super_bid,label", [(None, "未使用"), (0, "0"), (3, "3")])
@@ -42,7 +45,7 @@ def test_plan_has_one_human_submission_and_cached_day_one_writes_nothing(tmp_pat
     assert player.decide_bid(make_ai_obs()) == (1, super_bid)
     assert (player.log_path.with_suffix(".md").read_bytes(), player.log_path.read_bytes()) == before
     markdown = before[0].decode()
-    assert "## 第1局策略规划（含首日出价）" in markdown
+    assert "## 第1局策略规划含首日出价" in markdown
     assert markdown.count("策略原文") == 1
     assert f"正常出价 1；超级出价 {label}" in markdown
     assert "提交出价" in markdown and "出价结果" not in markdown and '"bid":' not in markdown
@@ -74,14 +77,17 @@ def test_failures_and_recovery_append_links_to_first_input(tmp_path, monkeypatch
     assert writes == ["a", "a", "a"]
     assert prefixes[1].startswith(prefixes[0]) and markdown.startswith(prefixes[1])
     assert markdown.count("<summary>输入原文</summary>") == 1
-    assert markdown.count("任务补跑 0 次") == markdown.count("任务补跑 1 次") == markdown.count("任务补跑 2 次") == 1
+    assert markdown.count("补跑仍失败。") == markdown.count("补跑后成功。") == 1
     assert markdown.count("鉴权失败（HTTP 401）") == 2
-    assert markdown.count("网络尝试 1 次") == 3
-    assert markdown.count("首次任务 task-0001](#task-0001)") == 2
-    assert "上次记录 task-0002](#task-0002)" in markdown
+    assert "网络尝试" not in markdown and "完整审计" not in markdown
+    assert markdown.count("首次输入](#第1局第2天每日出价)") == 2
+    assert "上次记录](#第1局第2天每日出价补跑1)" in markdown
     assert "状态：成功" not in prefixes[1]
     entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
     assert [entry["status"] for entry in entries] == ["failed", "failed", "success"]
+    assert [entry["reruns"] for entry in entries] == [0, 1, 2]
+    assert [entry["first_task"] for entry in entries] == [None, "task-0001", "task-0001"]
+    assert [entry["previous_task"] for entry in entries] == [None, "task-0001", "task-0002"]
     assert all(any(part["part_kind"] == "user-prompt" for msg in entry["messages"]
                    for part in msg["parts"]) for entry in entries)
 
@@ -96,7 +102,7 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
     assert markdown.count("最终策略原文") == 1
     assert "输出纠错 1 次，最终通过校验" in markdown
     assert "原因：bid 必须是整数" in markdown
-    assert "网络尝试 2 次（请求 1：1 次；请求 2：1 次）" in markdown
+    assert "网络尝试" not in markdown
     audit = player.log_path.read_text(encoding="utf-8")
     assert "首次无效策略" in audit and "最终策略原文" in audit and "retry-prompt" in audit
 
@@ -172,8 +178,8 @@ def test_unknown_failure_is_short_and_audit_stays_complete(tmp_path):
     log.failure({"phase": "bid", "task": "bid", "context": "第1局第2天"}, CallFailedError(message))
     markdown = log.readable_path.read_text(encoding="utf-8")
     assert "未识别故障" in markdown and message not in markdown
-    assert "网络尝试次数未记录" in markdown
-    assert "[task-0001](../data/player.jsonl)" in markdown
+    assert "网络尝试" not in markdown
+    assert "完整审计" not in markdown and "../data/player.jsonl" not in markdown
     assert json.loads(log.path.read_text(encoding="utf-8"))["error"]["message"] == message
 
 
@@ -186,4 +192,14 @@ def test_changed_input_is_not_hidden_by_failed_task_link(tmp_path):
     log.success(entry, ExecutionResult("原输出", [ModelRequest(parts=[UserPromptPart("新输入")])], []))
     markdown = log.readable_path.read_text(encoding="utf-8")
     assert markdown.count("<summary>输入原文</summary>") == 2
-    assert "首次任务" not in markdown
+    assert "首次输入" not in markdown
+    entries = [json.loads(line) for line in log.path.read_text(encoding="utf-8").splitlines()]
+    assert [item["readable_title"] for item in entries] == ["开局发言", "开局发言记录2"]
+    assert markdown.count("## 开局发言\n") == 1
+
+
+def test_input_html_preserves_indentation_and_escapes_tags():
+    from auction_game.reporting.agent_log import _input_html
+
+    assert _input_html('  <tag>\n\n\t& "x"') == (
+        '&nbsp;&nbsp;&lt;tag&gt;<br><br>&nbsp;&nbsp;&nbsp;&nbsp;&amp; &quot;x&quot;')
