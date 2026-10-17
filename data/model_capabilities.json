@@ -59,7 +59,7 @@
       ],
       "tool_call": true
     },
-    "test_luna": {
+    "gpt_luna": {
       "source": {
         "provider": "openai",
         "model": "gpt-6-luna"
@@ -130,6 +130,32 @@
         "context": 1048576,
         "input": null,
         "output": 65536
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "gemini_argon": {
+      "source": {
+        "provider": "google",
+        "model": "gemini-4-argon"
+      },
+      "status": "matched",
+      "matched_id": "gemini-4-argon",
+      "canonical_model_id": "google/gemini-4-argon",
+      "limit": {
+        "context": 1048576,
+        "input": null,
+        "output": 32768
       },
       "reasoning": true,
       "reasoning_options": [
@@ -325,6 +351,32 @@
       "reasoning_options": [
         {
           "type": "toggle"
+        }
+      ],
+      "tool_call": true
+    },
+    "kimi_k3": {
+      "source": {
+        "provider": "moonshotai",
+        "model": "kimi-k3"
+      },
+      "status": "matched",
+      "matched_id": "kimi-k3",
+      "canonical_model_id": "moonshotai/kimi-k3",
+      "limit": {
+        "context": 1048576,
+        "input": null,
+        "output": 1048576
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "high",
+            "max"
+          ]
         }
       ],
       "tool_call": true

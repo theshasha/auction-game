@@ -18,8 +18,8 @@ models:
     models_dev:
       provider: openai
       model: gpt-6.1-sol
-  test_luna:
-    # 测试替身没有参赛角色名，不可直接加入 players。
+  gpt_luna:
+    name: GPT小妹妹
     model: gpt-6-luna
     provider: hub
     protocol: chat
@@ -27,7 +27,7 @@ models:
       provider: openai
       model: gpt-6-luna
   deepseek_flash:
-    name: 鲸鱼妹妹
+    name: deepseek妹妹
     model: deepseek-flash
     provider: hub
     protocol: chat
@@ -44,8 +44,16 @@ models:
     models_dev:
       provider: google
       model: gemini-3.8-flash
+  gemini_argon:
+    name: 双子姐姐
+    model: gemini-4-argon
+    provider: hub
+    protocol: chat
+    # 官方能力支持 medium，按快照自动选择该推理档位。
+    models_dev:
+      provider: google
+      model: gemini-4-argon
   glm_pro:
-    # 保留备用；实际参赛席位由 players.yaml 配置。
     name: GLM姐姐
     model: glm-5.3
     provider: hub
@@ -62,7 +70,7 @@ models:
       provider: zhipuai
       model: glm-5.3-flash
   deepseek_pro:
-    name: 鲸鱼姐姐
+    name: deepseek姐姐
     model: deepseek-v4-pro
     provider: hub
     protocol: chat
@@ -70,7 +78,7 @@ models:
       provider: deepseek
       model: deepseek-v4-pro
   grok:
-    name: GROK妹妹
+    name: GROK
     model: grok-4.7
     provider: hub
     protocol: responses
@@ -86,7 +94,6 @@ models:
       provider: anthropic
       model: claude-sonnet-5-5
   claude_opus:
-    # 备用模型，未加入当前阵容。
     name: CLAUDE姐姐
     model: claude-opus-5-5
     provider: hub
@@ -110,3 +117,12 @@ models:
     models_dev:
       provider: xiaomi
       model: mimo-v2.6-flash
+  kimi_k3:
+    name: KIMI姐姐
+    model: kimi-k3
+    provider: hub
+    protocol: chat
+    # 官方来源未列 medium，推理档位沿用渠道默认。
+    models_dev:
+      provider: moonshotai
+      model: kimi-k3
