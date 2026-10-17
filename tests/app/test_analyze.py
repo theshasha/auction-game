@@ -4,19 +4,20 @@
 
 第 1 局
   第 1 天：出价 [5,4,3,2,1,0]；乙 超级狙 5（命中）、丙 超级狙 6（空）；
-           5 被撞车（甲 放血 5），乙 以 4 获胜。
-  第 2 天：出价 [3,3,1,2,0,6]；3 互撞（甲、乙 放血 3），己 以 6 获胜。
+            5 被撞车（甲 扣款 5），乙 以 4 获胜。
+  第 2 天：出价 [3,3,1,2,0,6]；3 互撞（甲、乙 扣款 3），己 以 6 获胜。
   胜场：乙 1、己 1（局冠军 乙/己 各 0.5）。
   第 2 局
   第 1 天：出价 [0,3,0,2,5,4]；甲 非法提交整单转正常 0、无超级；
            戊 以 5 获胜。
-  第 2 天：出价 [0,4,1,2,3,2]；2 互撞（丁、己 放血 2），乙 以 4 获胜。
+  第 2 天：出价 [0,4,1,2,3,2]；2 互撞（丁、己 扣款 2），乙 以 4 获胜。
   胜场：乙 1、戊 1（局冠军 乙/戊 各 0.5）。
 
 手算期望值见各断言注释；局末余额按日志 game（初始 7、日工资 3、超级成本 2、悬赏 3）重放。
 """
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -86,32 +87,35 @@ def test_win_matrix_and_champions():
 
 def test_player_detail_metrics():
     rows = rows_by_name(collect_player_stats(make_matches()))
-    # 乙：超 1 用 1 中；放血 = 3（第 1 局第 2 天互撞）；均出 = (4+3+3+4)/4
+    # 乙：超 1 用 1 中；撞车扣款 = 3（第 1 局第 2 天互撞）；均出 = (4+3+3+4)/4
     assert rows["乙"]["total_wins"] == 2
     assert rows["乙"]["super_uses"] == 1 and rows["乙"]["super_hits"] == 1
+    assert rows["乙"]["super_net_coins"] == 1
     assert rows["乙"]["collision_burn"] == 3
     assert rows["乙"]["avg_bid"] == 3.5
     assert rows["乙"]["end_coins"] == [4, 6]  # 局1: 7-4-2+3=4→+3-3=4；局2: 7→+3-4=6
     assert rows["乙"]["illegal"] == 0 and rows["乙"]["zero_bids"] == 0
-    # 甲：无超级；放血 = 5+3；均出 = (5+3+0+0)/4；违规 1 笔；出 0 两次
+    # 甲：无超级；撞车扣款 = 5+3；均出 = (5+3+0+0)/4；违规 1 笔；出 0 两次
     assert rows["甲"]["super_uses"] == 0 and rows["甲"]["super_hits"] == 0
+    assert rows["甲"]["super_net_coins"] == 0
     assert rows["甲"]["collision_burn"] == 8
     assert rows["甲"]["avg_bid"] == 2.0
     assert rows["甲"]["end_coins"] == [2, 10]  # 局1: 7-5=2→+3-3=2；局2: 7→+3=10
     assert rows["甲"]["illegal"] == 1 and rows["甲"]["zero_bids"] == 2
-    # 丙：超 1 用 0 中（狙 6 空）；零放血；出 0 一次
+    # 丙：超 1 用 0 中（狙 6 空）；无撞车扣款；出 0 一次
     assert rows["丙"]["super_uses"] == 1 and rows["丙"]["super_hits"] == 0
+    assert rows["丙"]["super_net_coins"] == -2
     assert rows["丙"]["collision_burn"] == 0
     assert rows["丙"]["avg_bid"] == 1.25
     assert rows["丙"]["end_coins"] == [8, 10]
     assert rows["丙"]["zero_bids"] == 1
-    # 丁：无超级；放血 = 2（第 2 局第 2 天互撞）
+    # 丁：无超级；撞车扣款 = 2（第 2 局第 2 天互撞）
     assert rows["丁"]["super_uses"] == 0 and rows["丁"]["super_hits"] == 0
     assert rows["丁"]["collision_burn"] == 2
     assert rows["丁"]["avg_bid"] == 2.0
     assert rows["丁"]["end_coins"] == [10, 8]
     assert rows["丁"]["zero_bids"] == 0
-    # 戊 / 己：各 1 胜；戊 出 0 一次、己 放血 2 且出 0 一次
+    # 戊 / 己：各 1 胜；戊 出 0 一次、己 撞车扣款 2 且出 0 一次
     assert rows["戊"]["total_wins"] == 1 and rows["戊"]["end_coins"] == [10, 5]
     assert rows["戊"]["zero_bids"] == 1
     assert rows["己"]["total_wins"] == 1 and rows["己"]["collision_burn"] == 2
@@ -126,16 +130,80 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     analyze(run_dir)
     output = capsys.readouterr().out
     # 新统计段存在且位于「单局 ≥3 胜场」列表之前
-    assert "玩家维度统计" in output
+    assert "玩家统计" in output
     assert "明细（胜场 / 局冠军" in output
-    assert output.index("玩家维度统计") < output.index("单局 ≥3 胜场")
+    assert output.index("玩家统计") < output.index("单局 ≥3 胜场")
     # 矩阵行与明细行内容
     assert "  乙：1 1" in output
-    assert "  乙：胜2 局冠1 超1用1中（100%） 放血3 均出3.50 局末余额4/6 违规0笔 出0共0笔" in output
-    assert "  甲：胜0 局冠0 超0用 放血8 均出2.00 局末余额2/10 违规1笔 出0共2笔" in output
-    # 既有聚合输出保持不变
-    assert "撞车放血：全场因撞车被没收" in output
+    assert "  乙：胜2 局冠1 超1用1中（100%） 超级净金币收益1 撞车扣款3 均出3.50 局末余额4/6 违规0笔 出0共0笔" in output
+    assert "  甲：胜0 局冠0 超0用 超级净金币收益0 撞车扣款8 均出2.00 局末余额2/10 违规1笔 出0共2笔" in output
+    assert "撞车扣款：全场因撞车被没收" in output
+    assert "成本消耗 4 金币，悬赏发放 3 金币，超级净金币收益 -1 金币" in output
+    assert "使用超级出价 1 天，改变当日结果 1 天" in output
+    assert "含有效正常报价及超级数值" in output
     assert "获胜价平均" in output
+
+
+@pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed", [
+    ([5, 4, 3], {"乙": (6, False)}, "甲", 5, [], 0),  # 落空
+    ([5, 4, 3], {"乙": (3, True)}, "甲", 5, [3], 0),  # 命中低价
+    ([5, 5, 3], {"丙": (5, True)}, "丙", 3, [5], 0),  # 原本就互撞
+    ([5, 4, 3], {"乙": (5, True), "丙": (5, True)}, "乙", 4, [5], 1),
+    ([5, 3, 1], {"甲": (3, True), "乙": (1, True), "丙": (5, True)},
+     None, None, [1, 3, 5], 1),  # 全部被狙后流局
+    ([2, 2, 1, 1], {"甲": (5, False)}, None, None, [1, 2], 0),
+    ([0, 2, 2], {"乙": (0, True)}, None, None, [0, 2], 1),  # 移除后 0 也能获胜
+])
+def test_super_result_days_compare_all_supers_once_without_changing_logs(
+    bids, super_bids, winner, winning_bid, collisions, changed,
+):
+    days = [
+        make_day(1, bids, 1, winner, winning_bid, collisions, int(winner is not None),
+                 is_void=winner is None, super_bids=super_bids),
+        make_day(2, [0] * len(bids), 2 if winner is None else 1, None, None, [0], is_void=True),
+    ]
+    names = [bid.player for bid in days[0].bids if not bid.is_super]
+    wins = {name: int(name == winner) for name in names}
+    matches = [{"match": make_log(days=days, wins=wins, game=ANALYZE_GAME).to_dict()}]
+    original = deepcopy(matches)
+    stats = collect_player_stats(matches)
+    assert stats["super_days"] == 1
+    assert stats["super_changed_days"] == changed
+    assert matches == original
+
+
+def test_super_result_days_without_super_usage():
+    stats = collect_player_stats([{"match": make_match_2()}])
+    assert stats["super_days"] == 0
+    assert stats["super_changed_days"] == 0
+    assert all(row["super_net_coins"] == 0 for row in stats["rows"])
+
+
+def test_super_result_days_keep_effective_bids_and_do_not_simulate_future():
+    game = replace(ANALYZE_GAME, daily_salary=0)
+    days = [
+        make_day(1, [0, 5, 3], 1, "乙", 5, [], 1, super_bids={"甲": (6, False)}),
+        make_day(2, [0, 0, 3], 1, "丙", 3, [0], 1),
+    ]
+    # 甲首日落空花掉 2，次日提交 7 被转成 0；移除首日超级也不重算次日余额或报价。
+    days[1].bids[0].raw_bid = 7
+    days[1].bids[0].status = "illegal"
+    log = make_log(days=days, wins={"甲": 0, "乙": 1, "丙": 1}, game=game).to_dict()
+    stats = collect_player_stats([{"match": log}])
+    assert stats["super_days"] == 1
+    assert stats["super_changed_days"] == 0
+
+
+def test_super_result_days_do_not_revalidate_rejected_raw_bid():
+    match = make_match_1()
+    day = match["days"][0]
+    # 甲原始提交 7 因非法超级被整单拒绝；反事实仍保留有效正常 0。
+    day["bids"][0].update(raw_bid=7, bid=0, status="illegal")
+    day["collision_values"] = [0]
+    day["super_uses"][0]["hit"] = False
+    stats = collect_player_stats([{"match": match}])
+    assert stats["super_days"] == 1
+    assert stats["super_changed_days"] == 0
 
 
 def write_matches(run_dir, matches, *, run_type="bot", players=None):
@@ -217,8 +285,9 @@ def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, caps
     monkeypatch.chdir(tmp_path)
     analyze(tmp_path)
     output = capsys.readouterr().out
-    assert "获胜价=9（极点）占比 33.3%" in output
-    assert "成本消耗 1 金币，悬赏印发 5 金币" in output
+    assert "获胜价=9（出价上限）占比 33.3%" in output
+    assert "成本消耗 1 金币，悬赏发放 5 金币，超级净金币收益 4 金币" in output
+    assert rows_by_name(stats)["乙"]["super_net_coins"] == 4
     assert "局末平均剩余金币：19.67（最低 8，最高 28）" in output
     assert "全天总体：平均 4.70（10 笔）" in output  # 聚合均价包含超级出价数值
     # 总奖池 9：恰好 3 胜仍入选，2 胜不入选；门槛固定，不能改成过半。

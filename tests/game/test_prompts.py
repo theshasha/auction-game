@@ -87,6 +87,11 @@ class TestPlayoffNotice:
 
 
 class TestPlanBidMerge:
+    def test_single_day_plan_reminds_coins_reset(self):
+        game = replace(TEST_GAME, daily_pool=(1,))
+        assert "本局最后一天，结束后金币清零。" in prompts.opening_plan_request({}, game)
+        assert "本局最后一天，结束后金币清零。" in prompts.next_match_plan_request([], game, 2)
+
     """规划请求保留恒定首日状态与策略要求；schema 定义格式。"""
 
     def test_bid_format_hint_covers_super_bid(self):
@@ -95,7 +100,7 @@ class TestPlanBidMerge:
         # 提交合法性约束（同值、合计余额——违反即整单作废）放模板防无谓非法提交；
         # 策略规则细节（命中判定、悬赏、不能获胜等）不在每日消息复述，
         # 由 system 的实时渲染规则兜底
-        assert "不得与正常出价同值" in text
+        assert "使用超级出价时，两笔出价不得同值" in text
         assert "2 金币成本不得超过余额" in text
         assert "super_bid 明确为 null" in text
         assert "```json" not in text
@@ -118,7 +123,7 @@ class TestPlanBidMerge:
             assert "【甲】发言A" in text and "【乙】发言B" in text
         else:
             assert "局末发言" not in text and "累计私有记忆" in text
-        assert "你的金币 11，本局已获胜场 0，今日奖池 2 个胜场，出价上限 9" in text
+        assert "你的金币 11，本局已获胜场 0，今日奖池 2 个胜场，规则出价上限 9" in text
         assert '0 到 9 的整数' in text
         assert 'strategy' in text
         assert "加 3 金币成本" in text

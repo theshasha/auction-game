@@ -1,4 +1,4 @@
-"""通用 Agent 执行边界：隔离历史，管理客户端生命周期及失败审计。"""
+"""执行模型任务：复制输入历史，管理客户端，保留失败记录。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ class ExecutionResult(Generic[OutputT]):
 
 
 class CallFailedError(Exception):
-    """预期服务失败；消息仅供审计，不提交调用方历史。"""
+    """模型调用失败；消息只保存到日志，不加入玩家历史。"""
 
     def __init__(self, message: str, *, messages=(), request_errors=(), requests=()):
         super().__init__(message)
@@ -48,7 +48,7 @@ async def _drain_events(ctx, events):
 
 
 class AgentExecutor:
-    """每任务新循环、新客户端；只有此边界深拷贝输入历史。"""
+    """每个任务使用独立事件循环和客户端，并在开始前深拷贝输入历史。"""
 
     def __init__(self, factory: ModelFactory, *, capture_requests=False):
         self.factory = factory
@@ -69,7 +69,7 @@ class AgentExecutor:
                                              event_stream_handler=_drain_events, usage_limits=usage_limits)
                 except (ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded, IncompleteStream,
                         http.TransportError, openai.APIError, anthropic.APIError) as exc:
-                    # 库会合并相邻 request；按本次 run_id 取审计，排除失败流占位响应。
+                    # SDK 会合并相邻请求；只保留本次 run_id 的记录，跳过中断回复的占位消息。
                     run_id = captured[-1].run_id if captured else None
                     audit = [m for m in captured if m.run_id == run_id
                              and not (isinstance(m, ModelResponse) and m.state == "interrupted")]

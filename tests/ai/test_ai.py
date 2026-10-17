@@ -68,7 +68,7 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch)
     assert "第一次回复" in readable and "纠正后回复" in readable
     assert '"bid": "2"' in readable and '"bid": 7' in readable
     assert "渲染后的新增提示全文" in readable and "Input should be a valid integer" in readable
-    assert "本次结果不提交玩家历史" in readable
+    assert "本次结果不加入玩家历史" in readable
 
 
 def test_custom_game_and_realtime_balance_use_shared_rules():

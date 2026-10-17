@@ -18,7 +18,7 @@ def bid_format_hint(game: GameSettings) -> str:
     return (
         "请在 strategy 中保留对当前局势的简要分析及策略，提交今日出价。"
         f"正常出价与超级出价须为 0 到 {game.max_bid} 的整数；正常出价不得超过余额。"
-        f"超级出价不得与正常出价同值，正常出价加 {game.super_cost} 金币成本不得超过余额。"
+        f"使用超级出价时，两笔出价不得同值，正常出价加 {game.super_cost} 金币成本不得超过余额。"
         "不使用超级出价时 super_bid 明确为 null。"
     )
 
@@ -79,9 +79,10 @@ def opening_speech_request() -> str:
 
 def _day1_constant_info(game: GameSettings) -> str:
     """第 1 天信息由本场参数确定。"""
+    final_note = "；本局最后一天，结束后金币清零。" if game.max_days == 1 else ""
     return (
-        f"（第 1 天信息恒定：你的金币 {game.initial_coins}，本局已获胜场 0，"
-        f"今日奖池 {game.daily_pool[0]} 个胜场，出价上限 {game.max_bid}）"
+        f"（第 1 天：你的金币 {game.initial_coins}，本局已获胜场 0，"
+        f"今日奖池 {game.daily_pool[0]} 个胜场，规则出价上限 {game.max_bid}{final_note}）"
     )
 
 
@@ -99,8 +100,7 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) ->
 def _my_last_day_line(obs: Observation) -> Optional[str]:
     """「昨日你的结果」行：直接告知昨日自己的出价、结局与扣款。
 
-    零信息泄露（自己的出价与余额变化本来就可推出），只是免去推导——实证模型
-    会把自己的撞车推成「唯一未中退款」且不与状态行余额核对，错误随即级联。
+    这些结果都能从公开记录中得知。明确列出扣款，避免模型误以为撞车后会退款。
     正常出价与超级出价的结局分段给出：正常段只含正常出价的扣款，
     超级段单独表述本场固定成本与命中悬赏。
     """
@@ -145,7 +145,7 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
 def _bid_detail_text(detail: dict, super_hit_by_player: dict[str, bool]) -> str:
     """单日出价明细的一人份：「甲 4」或「甲 4+超6（命中）」。
 
-    命中/落空可由明细与结算规则推出，直给标注省一步推导（零信息泄露）。
+    命中情况可从公开报价得知，直接标注方便阅读。
     """
     text = f"{detail['player']} {detail['bid']}"
     if detail["super_bid"] is not None:
@@ -156,19 +156,19 @@ def _bid_detail_text(detail: dict, super_hit_by_player: dict[str, bool]) -> str:
 
 def bid_request(obs: Observation) -> str:
     match_index = len(obs.past_match_logs) + 1
-    # 第 2 天起每天开始时已发放工资，余额是发放后的值，明示避免模型自己再加一次；
-    # 可出最高价直接给数值，避免模型自己算 min（实证有「余额 7 打不了 6」的算术错误）
+    # 余额已经包含当天工资，注明这一点，避免重复计算。
     status_notes = []
     if obs.day >= 2:
         status_notes.append("已含今日工资")
-    status_notes.append(f"今日可出最高价：{min(obs.game.max_bid, obs.my_coins)}")
+    status_notes.append(f"正常出价上限：{min(obs.game.max_bid, obs.my_coins)}")
     status_line = (
         f"今日奖池：{obs.today_pool} 个胜场；"
         f"你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）；"
         f"本局已获胜场：{obs.my_match_wins}；你的累计总胜场：{obs.my_total_wins}。"
     )
+    if obs.day == obs.game.max_days:
+        status_line += "\n本局最后一天，结束后金币清零。"
     if not obs.today_history:
-        # 首日：单行不换句
         return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint(obs.game)}"
 
     yesterday = obs.today_history[-1]

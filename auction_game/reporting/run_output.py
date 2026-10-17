@@ -35,7 +35,7 @@ def make_run_dir(mode: str) -> Path:
 
 
 def make_publish(log_dir: Path):
-    """局末公开：完整出价日志 + 截至当前的累计排名与胜场明细，写 json/md 并打印。"""
+    """将完整出价和累计排名写入 JSON/Markdown 文件，终端只提示阅读位置。"""
 
     paths = RunPaths(log_dir)
     paths.prepare()

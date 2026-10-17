@@ -137,9 +137,8 @@ class Observation:
     standings: list[StandingsEntry]   # 截至当前的累计排名（含本局已决出的胜场）
     past_match_logs: list[dict]  # 已结束各局的完整公开日志
     game: GameSettings          # 本场不可变规则参数，与裁判和日志共用
-    # 昨日自己的结算结果（第 1 天为 None/默认值）。自己的出价与余额变化本来就可
-    # 从对话历史推出，直接给结论不泄露任何信息——实证模型复盘自己的结局时经常
-    # 推错且不与状态行余额核对，错误随后级联到全场资金推断。
+    # 昨日自己的结算结果（第 1 天用默认值）。这些信息都来自公开记录；
+    # 直接列出，避免模型误算扣款，进而误判其他玩家的余额。
     my_last_bid: Optional[int] = None      # 昨日自己的有效正常出价（非法提交整单记 0）
     my_last_deduction: Optional[int] = None  # 昨日正常出价的扣款（退还为 0；超级成本另列）
     my_last_collided: bool = False         # 昨日自己的正常出价是否撞车（互撞或被狙）

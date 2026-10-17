@@ -131,7 +131,7 @@ class TestController:
             assert "result" in outcome
 
     def test_pause_degenerates_to_step_gate(self):
-        # 轮间按 p：不再有 RoundAborted，退化为单步闸门等回车
+        # 轮间按 p：等待用户确认继续，不启动下一轮。
         gate = threading.Event()
         controller = Controller(
             mode="continuous", announce=lambda msg: gate.set() if msg.startswith("[单步]") else None,
@@ -250,7 +250,9 @@ class TestParallelRound:
             assert outcome.get("result") == {"first": 1, "second": 2}
             assert calls == ["first", "second"]
             assert sum("正在暂停" in message for message in announcements) == 1
-            assert any("成功 1、失败 0、未启动 1" in message for message in announcements)
+            assert any("成功 1，失败 0，未启动 1" in message for message in announcements)
+            assert any("不再启动新任务" in message and "任务内部重试可能继续" in message
+                       and "撤销本轮并中止" in message for message in announcements)
 
     def test_pause_keeps_success_and_holds_unstarted_until_resume(self):
         release = threading.Event()
@@ -318,7 +320,9 @@ class TestParallelRound:
             assert gate.wait(timeout=5)
             assert "result" not in outcome
             assert calls == [1, 1, 0]
-            assert any("成功 1、失败 1、未启动 1" in message for message in announcements)
+            assert any("成功 1，失败 1，未启动 1" in message for message in announcements)
+            assert any("按回车或 c 重试失败任务并执行未启动任务" in message
+                       and "成功任务不会重跑" in message for message in announcements)
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"0": 0, "1": 1, "2": 2}
@@ -537,7 +541,7 @@ class TestParallelRound:
             assert player._pending_day1_bid is None
             assert player.messages == history
             assert "result" not in outcome
-            assert any("全部成功，继续本轮" in message for message in announcements)
+            assert any("全部成功，确认后继续本轮" in message for message in announcements)
             assert not any("补跑" in message for message in announcements)
             controller.offer_command("")
             thread.join(timeout=5)
@@ -640,7 +644,7 @@ class TestParallelRound:
         def track_collection(futures):
             for future in original_as_completed(futures):
                 yield future
-                # yield 返回时控制器已执行 collected[key] = future.result()
+                # yield 返回时控制器已执行 results[key] = future.result()。
                 if future.result() == (1, None):
                     alpha_collected.set()
 

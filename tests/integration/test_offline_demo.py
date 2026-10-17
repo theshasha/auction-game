@@ -146,7 +146,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert replay.count("【你的身份】") == 1
     assert "不重复请求模型" in replay and "跳转：省略" in replay
     assert "## 第1局第3天" not in replay and "## 第2局第2天" not in replay
-    assert "非 HTTP 报文" in replay and "模拟回复" in replay and "仅 speech 投递" in replay
+    assert "不含 HTTP 报文" in replay and "模拟回复" in replay and "仅 speech 投递" in replay
     assert "SDK 在离线模拟传输中生成的请求定义，未发送到真实中转" in replay
     snapshots = json.loads(paths.definitions(1).read_text(encoding="utf-8"))
     assert len(snapshots) == 4  # 共享出价工具、发言、记忆与文本；完整赛不逐请求重复捕获。
@@ -206,6 +206,10 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     monkeypatch.setattr("auction_game.configuration.load_game_settings", lambda: (_ for _ in ()).throw(AssertionError("应读快照")))
     analyze.analyze(run_dir)
     output = capsys.readouterr().out
+    assert "离线演示：全员使用假模型，不调用真实服务，不收费。" in output
+    assert f"本场日志目录：{run_dir}" in output
+    assert "操作：" not in output and "切换到连续模式" not in output
+    assert "测试模型：" not in output and "[预算提醒]" not in output
     # 明确的合成参数覆盖各阶段，不随生产配置缩短而丢失断言。
     assert f"共进行 {game.regular_matches} 局（正赛 {game.regular_matches} 局 + 加赛 0 局）" in output
     assert f"总拍卖天数：{game.regular_matches * game.max_days}" in output

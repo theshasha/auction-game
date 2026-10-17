@@ -21,8 +21,8 @@ def positive_count(value: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="唯一高价拍卖游戏")
     parser.add_argument("--seed", type=int, default=None, help="随机种子（仅 Bot 模式），用于复现对局")
-    parser.add_argument("--ai", action="store_true", help="AI 模式：读取运行设置、模型目录与玩家阵容")
-    parser.add_argument("--test-model", action="store_true", help="仅 AI 模式：全员采用 config.test_model 的完整调用配置")
+    parser.add_argument("--ai", action="store_true", help="使用真实模型比赛，可能收费")
+    parser.add_argument("--test-model", action="store_true", help="配合 --ai：全员使用配置指定的测试模型，仍可能收费")
     parser.add_argument("--benchmark", type=positive_count, metavar="N", default=None,
                         help="策略对照：N 为正整数，跑 N 场纯随机 + N 场最高可付价策略对照，共 2N 场（不写日志）")
     args = parser.parse_args()

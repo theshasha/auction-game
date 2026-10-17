@@ -27,7 +27,7 @@ def run_bots(seed) -> int:
         game = load_game_settings()
         sync_root_rules(game)
     except ConfigurationError as exc:
-        print(f"错误：配置读取失败：{exc}")
+        print(f"[配置错误] {exc}")
         return 1
     rng = random.Random(seed)
     players = [RandomBot(name, random.Random(rng.random())) for name in BOT_NAMES]
@@ -59,7 +59,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             game = load_game_settings()
             sync_root_rules(game)
     except ConfigurationError as exc:
-        print(f"错误：配置读取失败：{exc}")
+        print(f"[配置错误] {exc}")
         return 1
     if len(player_configs) < 2:
         print("错误：AI 对局至少需要 2 名玩家，请检查 players.yaml")
@@ -84,13 +84,13 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
                 model_settings=pc["model_settings"],
             ), capture_requests=pc["name"] == record_player)
         except (MissingApiKeyError, ValueError) as exc:
-            print(f"错误：玩家 {pc['name']} 的 LLM 配置不可用：{exc}")
+            print(f"[配置错误] 玩家 {pc['name']}：{exc}")
             return 1
 
     run_type = run_type or ("ai-test" if test_model else "ai")
     run_dir = run_dir if run_dir is not None else make_run_dir(run_type)
     run_dir.mkdir(parents=True, exist_ok=True)
-    # 只保存本场公开配置，不落环境变量值；回放无需读取今天的配置或密钥。
+    # 只保存本场公开配置，不保存环境变量值；回放无需读取今天的配置或密钥。
     snapshot = {
         "run_type": run_type,
         "mode": "test_model" if test_model else "regular",
@@ -130,26 +130,34 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         )
         for number, pc in enumerate(player_configs, 1)
     ]
-    if test_model:
+    if run_type == "offline":
+        print("离线演示：全员使用假模型，不调用真实服务，不收费。")
+    elif test_model:
         test_key = config["test_model"]
         test_execution = config["models"][test_key]
-        print(f"测试运行：全员使用 {test_key} / {test_execution['model']} / {test_execution['protocol']}，"
-              "角色身份与独立历史保持不变。")
+        print(f"测试模型：{test_key} / {test_execution['model']}（全员使用，调用真实服务，可能收费）")
+        print("角色身份与独立历史保持不变。")
     else:
-        print("常规阵容运行")
-    print(f"整轮任务并发上限：{max_concurrency}（实际不超过待执行任务数）")
-    for pc in player_configs:
-        print(f"{pc['name']}: 身份 {pc['identity_model']['model']} → 实际 {pc['provider']} / "
-              f"{pc['protocol']} / {pc['model']}（人设：{pc['persona_title']}）")
-        capabilities = pc["capabilities"]
-        print(f"  比赛输出预算 {pc['max_tokens']}；推理 {capabilities['reasoning_status']}："
-              f"{capabilities['reasoning_detail']}")
-        if capabilities["output_fallback_reason"]:
-            print(f"  输出回退：{capabilities['output_fallback_reason']}")
+        print("常规阵容：")
+        for pc in player_configs:
+            print(f"  {pc['name']}：{pc['model']}")
+    print(f"并发上限：{max_concurrency}")
+    if run_type != "offline":
+        warned = set()
+        for pc in player_configs:
+            reason = pc["capabilities"]["output_fallback_reason"]
+            target = (pc["provider"], pc["protocol"], pc["model"], pc["max_tokens"], reason)
+            if reason and target not in warned:
+                warned.add(target)
+                label = "测试模型" if test_model else pc["model"]
+                print(f"[预算提醒] {label}：{reason}；暂用 {pc['max_tokens']} tokens。")
+        if warned:
+            print("请运行 python -m auction_game.cli.sync_models --write 更新能力快照；"
+                  "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
 
     if start_reader:
         controller.start_stdin_reader()
-    print("命令：回车=推进一轮 / c=连续模式 / s=单步模式 / p=暂停（等待在途并保留成功，恢复仅补跑失败/未启动）/ q=中止比赛")
+        print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=中止比赛")
 
     def bid_collector(observations):
         sample_obs = observations[0][1]  # 同一轮内所有玩家的局/天相同

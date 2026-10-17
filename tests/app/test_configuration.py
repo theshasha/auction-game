@@ -172,11 +172,18 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, c
         output = capsys.readouterr().out
         if test_model:
             selected = load_configuration(*config_files)[0]["models"][test_key]
-            assert f"测试运行：全员使用 {test_key} / {selected['model']} / {selected['protocol']}" in output
+            assert f"测试模型：{test_key} / {selected['model']}" in output
+            assert output.count(selected["model"]) == 1
+            assert "调用真实服务，可能收费" in output
             assert "角色身份与独立历史保持不变" in output
         else:
-            assert "常规阵容运行" in output
-            assert "测试运行：" not in output
+            assert "常规阵容：" in output
+            assert "甲：test-model-a" in output and "乙：test-model-b" in output
+            assert "测试模型：" not in output
+        assert "并发上限：2" in output
+        assert "操作：回车=下一轮" in output
+        for technical in ("比赛输出预算", "推理", "synthetic", "身份 ", "实际 ", "anthropic /", "responses /"):
+            assert technical not in output
         assert games_loaded == [True]
         snapshot = json.loads((tmp_path / "run" / "data" / "run_config.json").read_text(encoding="utf-8"))
         assert snapshot["max_concurrency"] == 2
@@ -287,7 +294,25 @@ def test_missing_key_stops_before_logs_without_reading_dotenv(config_files, monk
     monkeypatch.delenv("FAKE_KEY", raising=False)
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("缺密钥不应创建日志"))
     assert runners.run_ai() == 1
-    assert "FAKE_KEY" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "FAKE_KEY" in output and "项目根 .env" in output
+
+
+def test_startup_deduplicates_budget_warning_with_repair_command(config_files, monkeypatch, tmp_path, capsys):
+    config, players = load_configuration(*config_files, test_model=True)
+    for player in players:
+        player["capabilities"]["output_fallback_reason"] = "来源缺少有效最大输出"
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
+    monkeypatch.setattr(runners, "run_tournament", lambda *args, **kwargs: (_ for _ in ()).throw(runners.TournamentAborted))
+    assert runners.run_ai(test_model=True, loaded_configuration=(config, players),
+                          run_dir=tmp_path / "run", start_reader=False) == 0
+    output = capsys.readouterr().out
+    assert output.count("[预算提醒]") == 1
+    assert output.count("test-model-c") == 1
+    assert "暂用 789 tokens" in output
+    assert "python -m auction_game.cli.sync_models --write" in output
+    assert "configs/models.yaml" in output and "models_dev" in output
+    assert "操作：" not in output
 
 
 @pytest.mark.parametrize("field,value", [

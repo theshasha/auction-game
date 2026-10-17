@@ -129,7 +129,7 @@ class ModelFactory:
     timeout: float
     max_tokens: int
     transport: http.AsyncBaseTransport | None = None
-    request_attempts: int = 2  # 连通探测可显式禁用重发，比赛仍保留原预算。
+    request_attempts: int = 2  # 连通探测只请求一次；比赛每个请求最多尝试两次。
     model_settings: dict = field(default_factory=dict)
     model_profile: dict = field(default_factory=dict)  # 公开 profile 覆盖，独立于请求设置。
 
@@ -171,7 +171,7 @@ def _require_env(name: str, provider: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise MissingApiKeyError(
-            f"provider={provider} 未找到 {name}。请在 .env 中填入后再运行 --ai 模式。"
+            f"渠道 {provider} 缺少密钥 {name}。请在项目根 .env 中填写该变量后重试。"
         )
     return value
 

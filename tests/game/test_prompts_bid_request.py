@@ -23,8 +23,7 @@ class TestBidRequest:
         text = prompts.bid_request(make_prompt_obs(day=1, total_wins=3))
         first_line = text.splitlines()[0]
         assert first_line.startswith("当前是第 2 局第 1 天。")
-        # 首日不换行分句；状态行附「今日可出最高价」（= min(上限, 余额)），防止模型自己算错
-        assert "今日奖池：1 个胜场；你的金币余额：7（今日可出最高价：7）；" in first_line
+        assert "今日奖池：1 个胜场；你的金币余额：7（正常出价上限：7）；" in first_line
         assert "昨日公布" not in text
         assert "已含今日工资" not in text  # 第 1 天没有工资
         assert "你的累计总胜场：3。" in first_line
@@ -33,7 +32,7 @@ class TestBidRequest:
     def test_max_affordable_bid_capped_by_balance(self):
         # 余额 4 低于上限时，可出最高价明示为 4
         text = prompts.bid_request(make_prompt_obs(day=1, coins=4))
-        assert "你的金币余额：4（今日可出最高价：4）；" in text.splitlines()[0]
+        assert "你的金币余额：4（正常出价上限：4）；" in text.splitlines()[0]
 
     def test_later_day_three_lines_with_salary_note(self):
         text = prompts.bid_request(make_prompt_obs(
@@ -48,7 +47,7 @@ class TestBidRequest:
             "昨日出价明细：甲 6、乙 5、丙 4、丁 3、戊 2、己 1。"
             "当前全场金币：甲 10、乙 8、丙 9、丁 7、戊 6、己 5。"
         )
-        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：10（已含今日工资，今日可出最高价：7）；")
+        assert lines[2].startswith("今日奖池：1 个胜场；你的金币余额：10（已含今日工资，正常出价上限：7）；")
         assert "你的累计总胜场：5。" in lines[2]
         # 余额行必须在昨日公布之后
         assert text.index("昨日公布") < text.index("你的金币余额")
@@ -164,6 +163,19 @@ class TestMyLastDayLine:
         )
         obs.game = replace(TEST_GAME, max_bid=9, super_cost=3, super_bounty=5)
         text = prompts.bid_request(obs)
-        assert "今日可出最高价：9" in text
+        assert "正常出价上限：9" in text
         assert "超级出价 9 命中，扣除 3 金币成本，获得 5 金币悬赏" in text
         assert "正常出价加 3 金币成本" in text
+
+    @pytest.mark.parametrize("days", [1, 3])
+    def test_final_day_reminds_coins_reset(self, days):
+        game = replace(TEST_GAME, daily_pool=tuple([1] * days))
+        obs = make_prompt_obs(day=days, today_history=[history()] if days > 1 else [])
+        obs.game = game
+        text = prompts.bid_request(obs)
+        assert "本局最后一天，结束后金币清零。" in text
+        assert "使用超级出价时，两笔出价不得同值" in text
+
+    def test_earlier_day_has_no_final_day_reminder(self):
+        text = prompts.bid_request(make_prompt_obs(day=1))
+        assert "结束后金币清零" not in text

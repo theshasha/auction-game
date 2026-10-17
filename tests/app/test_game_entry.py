@@ -63,7 +63,7 @@ def test_game_errors_stop_before_clients_or_logs(monkeypatch, capsys, entry, arg
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("参数错误时不应创建客户端"))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("参数错误时不应创建日志"))
     assert entry(*args) == 1
-    assert "配置读取失败：game.yaml：max_bid" in capsys.readouterr().out
+    assert "[配置错误] game.yaml：max_bid" in capsys.readouterr().out
 
 
 def test_ai_single_player_stops_before_clients_or_logs(monkeypatch, capsys, game):
@@ -147,7 +147,7 @@ def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, er
     monkeypatch.setattr(runners, "make_model_factory", make_model_factory)
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("初始化失败不应创建日志"))
     assert runners.run_ai() == 1
-    assert "玩家 甲 的 LLM 配置不可用：初始化失败" in capsys.readouterr().out
+    assert "[配置错误] 玩家 甲：初始化失败" in capsys.readouterr().out
 
 
 def test_ai_success_returns_zero_with_mocked_tournament(monkeypatch, tmp_path, game):

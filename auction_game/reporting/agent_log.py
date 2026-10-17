@@ -1,4 +1,4 @@
-"""完整任务审计及精简私人阅读投影；补跑关联保存在机器记录中。"""
+"""保存完整任务记录，并生成便于阅读的私人日志；补跑关系保存在 JSON 中。"""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def _heading_link(title: str) -> str:
 
 
 def render_markdown_entry(entry: dict, result_renderer: Callable = render_result) -> str:
-    """正文仅投影输入及最终业务结果；工具协议与完整错误留在机器审计。"""
+    """正文只展示输入和最终结果；工具协议及完整错误保存在 JSON 记录中。"""
     success = entry["status"] == "success"
     first_title = entry.get("first_title")
     previous_title = entry.get("previous_title")

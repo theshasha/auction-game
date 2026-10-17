@@ -1,4 +1,4 @@
-"""从可选模型边界审计导出单玩家关键节点；不生成回复或维护比赛历史。"""
+"""从已保存的模型请求记录导出单玩家关键节点；不生成回复或修改比赛历史。"""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def _response_lines(response):
         elif kind == "thinking":
             lines.append("思考内容：\n\n" + part["content"])
         else:
-            lines.append(f"其他响应部分（{kind}）见任务审计，可按需导出完整调试记录。")
+            lines.append(f"其他回复内容（{kind}）见完整任务记录，可按需导出调试文件。")
     return lines
 
 
@@ -142,7 +142,7 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
               *(["[本场默认工具记录](tools.md)保留发送前定义或明确标注的离线 SDK 定义与任务引用。"]
                 if paths.tools.exists() else []),
               f"[增量模型边界捕获]({paths.capture(number).relative_to(run_dir).as_posix()})"
-              f"包含框架模型边界参数，非 HTTP 报文。[任务结果与工具应答]({audit.relative_to(run_dir).as_posix()})保留完整审计。",
+              f"包含框架传给模型的参数，不含 HTTP 报文。[任务结果与工具应答]({audit.relative_to(run_dir).as_posix()})保留完整记录。",
               f"工具定义来自[SDK 离线捕获]({protocol_path.relative_to(run_dir).as_posix()})：SDK 在离线模拟传输中生成的请求定义，"
               "未发送到真实中转。使用本场执行配置的生产适配器与假密钥，按定义及设置复用捕获；"
               "它与上述运行时逻辑记录分开保存，捕获过程不生成或替换比赛回复。",
@@ -167,11 +167,11 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
         if phase == "final_speech":
             lines.append("\n> 跳转：省略第二局其余日常出价及中间各局，直接到实际最后一局结束。")
         has_history = any(message["kind"] == "response" for message in entry["requests"][0]["messages"])
-        history = ("沿用系统规则与人设，以及本次实际请求携带的任务提示与有效业务结果；已完成任务的内部 thinking 只留审计。"
+        history = ("沿用系统规则与人设，以及本次请求携带的任务提示与有效结果；已完成任务的内部 thinking 只保存在日志中。"
                    if has_history else "沿用系统规则与人设；跨局重置后仅保留最新累计记忆，成绩由本次提示提供。")
         purpose = {"speech": "根据当前比赛阶段生成私有策略与公开发言。", "plan": "读取本局信息，规划并给出首日出价。",
                     "bid": "读取昨日结果与当前余额，生成当天出价。", "memory": "读取全部已公布局末发言，整理累计私有记忆。",
-                    "summary": "读取全场去 thinking 回顾，为观众生成总结。"}[entry["task"]]
+                    "summary": "回顾全场记录（不含内部 thinking），为观众生成总结。"}[entry["task"]]
         lines.extend([f"## {title}", purpose + history])
         for record in entry["requests"]:
             if len(entry["requests"]) > 1:
@@ -204,18 +204,18 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
             if "response" in record:
                 lines.extend(_response_lines(record["response"]))
             else:
-                lines.append("本次请求未取得完整回复，失败详情见任务审计；可按需导出完整调试记录。")
+                lines.append("本次请求未取得完整回复，失败详情见任务记录；可按需导出完整调试文件。")
             if record.get("errors"):
                 lines.append(_json(record["errors"]))
         lines.append("**程序处理**")
         if entry["status"] != "success":
-            lines.extend(["任务失败，审计保留；本次结果不提交玩家历史或首日缓存。", _json(entry.get("error"))])
+            lines.extend(["任务失败，详情已记录；本次结果不加入玩家历史，也不会用作首日出价。", _json(entry.get("error"))])
         elif entry["task"] == "plan":
             lines.append("校验通过后保存私有策略与首日缓存。")
             if phase == "opening_plan":
                 day = matches[0]["match"]["days"][0]
                 bid = next(b for b in day["bids"] if b["player"] == player and not b["is_super"])
-                lines.append(f"第一局第 1 天消费缓存，不重复请求模型；实际正常出价 {bid['bid']}，"
+                lines.append(f"第一局第 1 天使用已保存的出价，不重复请求模型；实际正常出价 {bid['bid']}，"
                              f"当日获胜者：{day['winner']}。")
             else:
                 lines.append("本节点只展示下一局规划衔接，随后跳过该局的日常流程。")

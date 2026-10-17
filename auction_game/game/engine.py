@@ -43,6 +43,27 @@ def normalize_bid_submission(submission: Any) -> tuple[Any, Any]:
     return submission, None
 
 
+def resolve_bids(bids: list[BidRecord]) -> tuple[Optional[BidRecord], set[int], set[int]]:
+    """按有效报价判定当天结果，返回获胜记录、撞车价位、超级命中价位。
+
+    不重新校验提交，不修改记录，也不处理金币或次日奖池；只有正常报价能获胜。
+    """
+    normal_bids = [record for record in bids if not record.is_super]
+    normal_counts = Counter(record.bid for record in normal_bids)
+    sniped_values = {
+        record.bid for record in bids if record.is_super and record.bid in normal_counts
+    }
+    burned_values = {
+        value for value, count in normal_counts.items() if count >= 2 or value in sniped_values
+    }
+    winning_record = max(
+        (record for record in normal_bids if record.bid not in burned_values),
+        key=lambda record: record.bid,
+        default=None,
+    )
+    return winning_record, burned_values, sniped_values
+
+
 def compute_standings(
     wins_history: dict[str, list[int]],
     current_match_wins: dict[str, int] | None = None,
@@ -202,32 +223,9 @@ def run_match(
                 )
                 super_uses.append({"player": player.name, "value": super_value, "hit": False})
 
-        normal_counts = Counter(record.bid for record in bids if not record.is_super)
-
-        # 狙击命中判定：超级出价数值上 ≥1 笔正常出价（其他超级出价不影响判定）
+        winning_record, burned_normal_values, sniped_values = resolve_bids(bids)
         for use in super_uses:
-            use["hit"] = normal_counts[use["value"]] >= 1
-        sniped_values = {use["value"] for use in super_uses if use["hit"]}
-
-        # 判定撞车：正常出价互撞（同值 ≥2 笔）；被狙中的数值上所有正常出价全灭
-        burned_normal_values = {
-            record.bid
-            for record in bids
-            if not record.is_super
-            and (normal_counts[record.bid] >= 2 or record.bid in sniped_values)
-        }
-
-        # 判定胜负：未撞车的正常出价中最高的一笔获胜，其主人获得当天全部奖池；
-        # 正常出价全灭则流局（超级出价不参与获胜判定）
-        winning_record = max(
-            (
-                record
-                for record in bids
-                if not record.is_super and record.bid not in burned_normal_values
-            ),
-            key=lambda record: record.bid,
-            default=None,
-        )
+            use["hit"] = use["value"] in sniped_values
 
         if winning_record is not None:
             winning_bid = winning_record.bid
@@ -246,7 +244,7 @@ def run_match(
         # 金币结算：获胜与撞车的正常出价全额扣除（流局日必然全员撞车，
         # 即全员扣除），其余正常出价全额退还，扣除部分系统没收；
         # 超级出价每次提交扣本场固定成本（无论是否命中），
-        # 命中悬赏由系统印发（多人命中同一数值各得一份）。
+        # 命中悬赏由系统发放（多人命中同一数值各得一份）。
         for record in bids:
             if record.is_super:
                 continue

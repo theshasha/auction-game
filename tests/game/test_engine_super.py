@@ -3,10 +3,31 @@
 测试基准参数：不限次数（每天最多 1 笔），每次提交固定消耗 2 金币（无论是否命中）；
 0~7、不能等于当天正常出价、与正常出价合计不得超过余额、不能获胜；
 命中 = 其数值上 ≥1 笔正常出价 → 该数值所有正常出价按撞车处理，
-狙击者获得系统印发的 3 金币悬赏（多人命中同一数值各得 3）。
+狙击者获得系统发放的 3 金币悬赏（多人命中同一数值各得 3）。
 """
 
-from tests.support.factories import run_scenario, super_by_day
+from copy import deepcopy
+
+from auction_game.game.engine import resolve_bids
+from tests.support.factories import make_day, run_scenario, super_by_day
+
+
+def test_resolve_bids_is_pure_and_uses_effective_normal_bids():
+    day = make_day(1, [0, 4, 3, 2, 2, 1], 1, "丙", 3, [2, 4],
+                   super_bids={"丙": (4, True), "己": (4, True), "丁": (7, False)})
+    day.bids[0].raw_bid = 7
+    day.bids[0].status = "illegal"
+    original = deepcopy(day.bids)
+    winner, collisions, hits = resolve_bids(day.bids)
+    assert winner is day.bids[2]
+    assert collisions == {2, 4}
+    assert hits == {4}
+    normal_bids = [bid for bid in day.bids if not bid.is_super]
+    winner, collisions, hits = resolve_bids(normal_bids)
+    assert winner is day.bids[1]
+    assert collisions == {2}
+    assert hits == set()
+    assert day.bids == original
 
 
 class TestSuperBid:

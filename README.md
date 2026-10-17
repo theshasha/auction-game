@@ -11,7 +11,7 @@ python -m pip install -r requirements.txt
 python -m auction_game.cli.offline_demo
 ```
 
-离线赛使用确定性假模型，走完整比赛流程，无需密钥，不调用真实服务。运行后打开新生成的 `logs/<场次目录>/README.md` 查看结果。
+离线赛使用确定性假模型，走完整比赛流程，无需密钥，不调用真实服务，不收费，也无需键盘推进。运行后打开新生成的 `logs/<场次目录>/README.md` 查看结果。
 
 也可以运行 Bot 比赛：`python main.py --seed 42`。
 
@@ -24,6 +24,8 @@ python main.py --ai --test-model
 ```
 
 **这会调用真实服务并可能收费。** `--test-model` 让全员使用配置指定的测试模型，仍保留各自身份与独立历史。完整测试赛经检查确认后，再用 `python main.py --ai` 运行常规阵容。
+
+启动时显示实际使用的模型、并发上限与日志目录；详细预算和推理设置在场次快照中查看。
 
 ## 文档入口
 

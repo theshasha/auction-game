@@ -51,4 +51,4 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
     assert "最终感言" in rounds
     assert "观众总结（不回喂）" in rounds
     assert RunPaths(run_dir).read_config()["max_concurrency"] == limit
-    assert f"整轮任务并发上限：{limit}" in capsys.readouterr().out
+    assert f"并发上限：{limit}" in capsys.readouterr().out

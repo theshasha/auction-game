@@ -27,7 +27,7 @@ def _read_mapping(path: Path) -> dict:
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ConfigurationError(f"{path}：读取失败：{exc}") from exc
     if not isinstance(data, dict):
-        raise ConfigurationError(f"{path}：根节点必须是 mapping（键值配置）")
+        raise ConfigurationError(f"{path}：根节点必须是键值配置")
     return data
 
 
@@ -49,7 +49,7 @@ def load_configuration(
         raise ConfigurationError(f"{config_path}：players 请移至 {players_path}")
     llm = config.setdefault("llm", {})
     if not isinstance(llm, dict):
-        raise ConfigurationError(f"{config_path}：llm 必须是 mapping（键值配置）")
+        raise ConfigurationError(f"{config_path}：llm 必须是键值配置")
     max_concurrency = llm.setdefault("max_concurrency", 10)
     if type(max_concurrency) is not int or max_concurrency <= 0:
         raise ConfigurationError(f"{config_path}：llm.max_concurrency 必须是正整数")
@@ -60,15 +60,15 @@ def load_configuration(
         or timeout <= 0
         or (isinstance(timeout, float) and not math.isfinite(timeout))
     ):
-        raise ConfigurationError(f"{config_path}：llm.timeout_seconds 必须是正有限数字")
+        raise ConfigurationError(f"{config_path}：llm.timeout_seconds 必须是大于 0 的有限数字")
 
     channels = llm.get("channels")
     if not isinstance(channels, dict) or not channels:
-        raise ConfigurationError(f"{config_path}：llm.channels 必须是非空 mapping（键值配置）")
+        raise ConfigurationError(f"{config_path}：llm.channels 必须是非空键值配置")
     for name, channel in channels.items():
         field = f"llm.channels.{name}"
         if not isinstance(name, str) or not name.strip() or not isinstance(channel, dict):
-            raise ConfigurationError(f"{config_path}：{field} 必须是具名 mapping（键值配置）")
+            raise ConfigurationError(f"{config_path}：{field} 必须有名称，内容必须是键值配置")
         url = channel.get("base_url")
         try:
             parsed = urlsplit(url) if isinstance(url, str) else None
@@ -80,7 +80,7 @@ def load_configuration(
         except ValueError:
             valid = False
         if not valid:
-            raise ConfigurationError(f"{config_path}：{field}.base_url 必须是无鉴权信息的 HTTP(S) 地址")
+            raise ConfigurationError(f"{config_path}：{field}.base_url 必须是 HTTP(S) 地址，不能包含账号、密码或查询参数")
         key = channel.get("api_key_env")
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
             raise ConfigurationError(f"{config_path}：{field}.api_key_env 必须是环境变量名")
@@ -134,12 +134,12 @@ def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=T
     path = ROOT_DIR / path
     models = _read_mapping(path).get("models")
     if not isinstance(models, dict) or not models:
-        raise ConfigurationError(f"{path}：models 必须是非空 mapping（键值配置）")
+        raise ConfigurationError(f"{path}：models 必须是非空键值配置")
     names = set()
     for key, model in models.items():
         field = f"models.{key}"
         if not isinstance(key, str) or not key.strip() or not isinstance(model, dict):
-            raise ConfigurationError(f"{path}：{field} 必须是具名 mapping（键值配置）")
+            raise ConfigurationError(f"{path}：{field} 必须有名称，内容必须是键值配置")
         for prop in ("model", "provider"):
             if not isinstance(model.get(prop), str) or not model[prop].strip():
                 raise ConfigurationError(f"{path}：{field}.{prop} 必须是非空字符串")
@@ -173,7 +173,8 @@ def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=T
             for key, model in models.items():
                 model.update(effective_capabilities(key, model, snapshot))
         except (OSError, ValueError) as exc:
-            raise ConfigurationError(f"{path}：能力快照读取失败：{exc}") from exc
+            raise ConfigurationError(f"{path}：能力快照读取失败：{exc}。"
+                                     "请运行 python -m auction_game.cli.sync_models --write 更新快照。") from exc
     return models
 
 
@@ -190,7 +191,7 @@ def load_players(path: str | Path = PLAYERS_PATH, models_path: str | Path = MODE
     for index, player in enumerate(players):
         field = f"players[{index}]"
         if not isinstance(player, dict):
-            raise ConfigurationError(f"{players_path}：{field} 必须是 mapping（键值配置）")
+            raise ConfigurationError(f"{players_path}：{field} 必须是键值配置")
         extra = set(player) - {"model", "persona_title", "persona_text", "predicted_win_rate"}
         if extra:
             raise ConfigurationError(f"{players_path}：{field} 不支持字段：{', '.join(sorted(extra))}")

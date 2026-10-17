@@ -104,7 +104,9 @@ def main(argv=None) -> int:
             effective = effective_capabilities(key, model, snapshot)
             cap = effective["capabilities"]
             print(f"{key}: max_tokens={effective['max_tokens']} / reasoning={cap['reasoning_status']} / "
-                  f"{cap['reasoning_detail']} / fallback={cap['output_fallback_reason']}")
+                  f"{cap['reasoning_detail']}")
+            if cap["output_fallback_reason"]:
+                print(f"  预算回退：{cap['output_fallback_reason']}")
         if args.write and changed:
             output.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent,

@@ -85,7 +85,7 @@ def test_bot_run_publishes_rules_and_replayable_statistics(tmp_path, monkeypatch
     assert f"玩家：{'、'.join(BOT_NAMES)}" in report
     assert "局数：4（正赛 2 + 加赛 2）" in report
     assert "总拍卖天数：12" in report
-    assert "矩阵列 = 第 1/2/加1/加2 局" in report
+    assert "各列为第 1/2/加1/加2 局" in report
     assert "Alpha：0 4 3 6" in report
     assert "Alpha：胜13" in report
     assert "局末余额22/14/18/11" in report

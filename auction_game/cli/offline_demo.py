@@ -1,4 +1,4 @@
-"""确定性离线完整个人赛；生产组装与测试共用，模型边界零网络。"""
+"""使用假模型跑完整比赛，不调用真实服务，不收费。"""
 
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ class DemoFactory:
 
 
 def generate_demo(output: Path | None = None, player: str | None = None, *, test_model=False):
-    """返回回放路径及模型资源计数；赛后另以假密钥离线捕获 SDK 工具定义。"""
+    """返回回放路径及模型资源计数；工具定义用假密钥离线生成，不发真实请求。"""
     loaded_configuration = load_configuration(test_model=test_model)
     _, configs = loaded_configuration
     game = load_game_settings()
@@ -151,6 +151,7 @@ def generate_demo(output: Path | None = None, player: str | None = None, *, test
         output = output.resolve()
         if output.exists():
             raise FileExistsError(f"场次已存在，拒绝覆盖：{output}")
+        print(f"本场日志目录：{output}")
     else:
         output = make_run_dir("offline")
     factories = []
@@ -166,8 +167,7 @@ def generate_demo(output: Path | None = None, player: str | None = None, *, test
         factories.append(item)
         return item
 
-    controller = Controller()
-    controller.offer_command("c")
+    controller = Controller(mode="continuous")
     with override_allow_model_requests(False):
         status = run_ai(model_factory=factory, run_dir=output, controller=controller,
                           record_player=player, start_reader=False, test_model=test_model, run_type="offline",
@@ -182,7 +182,7 @@ def generate_demo(output: Path | None = None, player: str | None = None, *, test
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--player", help="回放玩家，默认 players.yaml 第一位")
-    parser.add_argument("--test-model", action="store_true", help="离线验证整套测试模型覆盖；仍不请求真实服务")
+    parser.add_argument("--test-model", action="store_true", help="用假模型验证测试配置，不调用真实服务，不收费")
     parser.add_argument("--output", type=Path, help="全新输出目录，默认 logs/<时间戳>_offline")
     args = parser.parse_args()
     replay, _ = generate_demo(args.output, args.player, test_model=args.test_model)

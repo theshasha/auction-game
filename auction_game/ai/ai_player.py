@@ -1,4 +1,4 @@
-"""原始任务留审计，已完成任务以程序历史资料提供；局末记忆替换游戏上下文。"""
+"""保存原始任务日志，将已完成任务的结果提供给模型；局末用累计记忆替换旧对话。"""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ class AIPlayer(Player):
             # 不重放原始 response/tool，也不示范 assistant 正文提交成功 JSON。
             # 三协议均以 user 历史资料接收已完成任务的原提示及合法业务结果，
             # 无 thinking、签名、加密 reasoning、response ID 或 provider 元数据。
-            # 任务内部的纠错与工具配对仍完整交给 SDK；原始消息只写审计。
+            # 任务内的纠错与工具应答仍由 SDK 处理；原始消息只写入日志。
             original_prompts = [part.content for message in result.messages for part in message.parts
                                 if isinstance(part, UserPromptPart)]
             output = result.output.model_dump() if isinstance(result.output, BaseModel) else result.output
