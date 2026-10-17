@@ -1,4 +1,4 @@
-"""统计新格式场次。默认只选最新有效常规真实 AI，也可显式指定其他类型。
+"""统计新格式场次。默认选最新有效真实 AI（ai 或 ai-test），也可显式指定其他类型。
 
 用法：
     python -m auction_game.reporting.analyze
@@ -17,7 +17,7 @@ from auction_game.game.game_rules import GameSettings
 from auction_game.paths import ROOT_DIR, LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
 
-RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(_\d+)?$")  # 时间戳场次目录，排除 archive 等归档目录
+RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(?:-test)?(_\d+)?$")  # 时间戳场次目录，排除 archive 等归档目录
 
 
 def _require_fields(record: dict, fields: tuple[str, ...], context: str) -> None:
@@ -109,13 +109,13 @@ def find_latest_ai_run() -> Path:
         if not path.is_dir() or not RUN_DIR_PATTERN.match(path.name):
             continue
         try:
-            if RunPaths(path).read_config()["run_type"] == "ai":
+            if RunPaths(path).read_config()["run_type"] in ("ai", "ai-test"):
                 load_match_logs(path)
                 candidates.append(path)
         except (OSError, ValueError):
             continue
     if not candidates:
-        sys.exit("logs/ 下没有有效的新格式常规 AI 场次（ai）；测试赛与模拟赛请显式指定目录")
+        sys.exit("logs/ 下没有有效的新格式真实 AI 场次（ai 或 ai-test）；Bot 与离线模拟赛请显式指定目录")
     return max(candidates, key=lambda path: (path.name[:15], int(path.name.rsplit('_', 1)[1])
                                            if path.name.rsplit('_', 1)[1].isdigit() else 1))
 

@@ -28,8 +28,7 @@ def test_collision_and_default_analysis_only_valid_ai(tmp_path, monkeypatch):
                        "players": [{"name": name} for name in log.wins]}, "rules")
         paths.match(1).write_text(json.dumps({"match": log.to_dict()}), encoding="utf-8")
         assert analyze.load_match_logs(path)
-    with pytest.raises(SystemExit, match="没有有效"):
-        analyze.find_latest_ai_run()
+    assert analyze.find_latest_ai_run() == tmp_path / "20261016_120000_ai-test"
     paths = run_output.initialize_run(second, {"run_type": "ai", "mode": "regular", "game": log.game.to_dict(),
                    "players": [{"name": name} for name in log.wins]}, "rules")
     paths.match(1).write_text(json.dumps({"match": log.to_dict()}), encoding="utf-8")

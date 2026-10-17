@@ -24,7 +24,7 @@ import pytest
 from tests.support.factories import TEST_GAME, make_day, make_log
 
 from auction_game.reporting.analyze import (
-    analyze, collect_player_stats, load_match_logs, main, recompute_remaining_coins,
+    analyze, collect_player_stats, find_latest_ai_run, load_match_logs, main, recompute_remaining_coins,
     validate_match, validate_matches,
 )
 from auction_game.reporting.run_output import initialize_run
@@ -138,14 +138,62 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "获胜价平均" in output
 
 
-def write_matches(run_dir, matches):
+def write_matches(run_dir, matches, *, run_type="bot", players=None):
     first = matches[0]["match"]
-    paths = initialize_run(run_dir, {"run_type": "bot", "mode": "regular", "game": first["game"],
-                          "players": [{"name": name} for name in first["wins"]]}, "test rules")
+    paths = initialize_run(run_dir, {"run_type": run_type,
+                          "mode": "test_model" if run_type == "ai-test" else "regular", "game": first["game"],
+                          "players": players if players is not None else
+                          [{"name": name} for name in first["wins"]]}, "test rules")
     for payload in matches:
         paths.match(payload["match"]["match_index"]).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
+
+
+@pytest.mark.parametrize("latest_type,older_type", [("ai-test", "ai"), ("ai", "ai-test")])
+def test_default_analysis_selects_latest_valid_real_ai(tmp_path, monkeypatch, latest_type, older_type):
+    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    write_matches(tmp_path / f"20261016_110000_{older_type}", make_matches(), run_type=older_type)
+    latest = tmp_path / f"20261016_120000_{latest_type}"
+    write_matches(latest, make_matches(), run_type=latest_type)
+    for suffix, run_type in [("bot", "bot"), ("offline", "offline"), ("ai_2", "offline")]:
+        write_matches(tmp_path / f"20261016_130000_{suffix}", make_matches(), run_type=run_type)
+    (tmp_path / "20261016_140000_ai").mkdir()  # 缺场次快照
+    incomplete = make_matches()
+    incomplete[0]["match"]["days"].pop()
+    write_matches(tmp_path / "20261016_150000_ai-test", incomplete, run_type="ai-test")
+    write_matches(tmp_path / "archive_20261016_160000_ai", make_matches(), run_type="ai")
+    assert find_latest_ai_run() == latest
+
+
+@pytest.mark.parametrize("run_type", ["ai", "ai-test"])
+def test_default_analysis_orders_collision_suffix_numerically(tmp_path, monkeypatch, run_type):
+    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    for suffix in ("", "_2", "_10"):
+        write_matches(tmp_path / f"20261016_120000_{run_type}{suffix}", make_matches(), run_type=run_type)
+    assert find_latest_ai_run() == tmp_path / f"20261016_120000_{run_type}_10"
+
+
+def test_default_cli_keeps_test_run_type_and_actual_models(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    monkeypatch.setattr("sys.argv", ["analyze"])
+    players = [{"name": name, "identity_model": {"model": f"identity-{index}"},
+                "execution_model": {"protocol": "responses", "model": "actual-test-model"}}
+               for index, name in enumerate(make_match_1()["wins"], 1)]
+    write_matches(tmp_path / "20261016_120000_ai-test", make_matches(), run_type="ai-test", players=players)
+    main()
+    output = capsys.readouterr().out
+    assert "运行类型：测试模型真实 AI（收费）" in output
+    assert "测试运行结果（非身份模型成绩）" in output
+    assert "甲：身份 identity-1 → 实际 responses / actual-test-model" in output
+
+
+def test_default_analysis_rejects_only_bot_and_offline(tmp_path, monkeypatch):
+    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    for run_type in ("bot", "offline"):
+        write_matches(tmp_path / f"20261016_120000_{run_type}", make_matches(), run_type=run_type)
+    with pytest.raises(SystemExit, match="没有有效.*ai 或 ai-test"):
+        find_latest_ai_run()
 
 
 def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, capsys, monkeypatch):
@@ -332,3 +380,20 @@ def test_mean_bids_exclude_void_days_but_include_illegal_zero(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "第 1 天：出价 —（全流局），奖池 1.00" in output
     assert "全天总体：平均 2.33（6 笔）" in output
+
+
+def test_aggregate_zero_bids_include_super_but_player_zero_bids_only_normal(tmp_path, capsys):
+    days = [
+        make_day(1, [0, 0, 0, 0, 0, 0], 1, None, None, [0], is_void=True,
+                 super_bids={"甲": (0, True)}),
+        make_day(2, [1, 0, 2, 3, 4, 5], 2, "己", 5, [0], 2,
+                 super_bids={"甲": (0, True)}),
+    ]
+    match = make_log(days=days, wins={"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 2},
+                     game=ANALYZE_GAME).to_dict()
+    rows = rows_by_name(collect_player_stats([{"match": match}]))
+    assert rows["甲"]["zero_bids"] == 1  # 流局日正常 0 计入，两笔超级 0 不计
+    assert rows["乙"]["zero_bids"] == 2
+    write_matches(tmp_path, [{"match": match}])
+    analyze(tmp_path)
+    assert "出 0 共 9 笔，其中 0 价获胜 0 次" in capsys.readouterr().out
