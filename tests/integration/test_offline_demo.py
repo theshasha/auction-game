@@ -137,7 +137,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
 
     replay = replay_path.read_text(encoding="utf-8")
     assert "[本场默认工具记录](tools.md)" in replay
-    assert "../tools.md#" in paths.player(1, readable=True).read_text(encoding="utf-8")
+    assert "tools.md" not in paths.player(1, readable=True).read_text(encoding="utf-8")
     titles = ["比赛开头 · 开局发言", "第一局规划 · 首日缓存", "第一局第二天 · 正常出价",
               "第一局结束 · 局末发言", "第一局结束 · 累计私有记忆", "第二局规划 · 接收实际反馈", "实际比赛结尾 · 最终感言",
               "实际比赛结尾 · 观众总结"]

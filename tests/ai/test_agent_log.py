@@ -1,9 +1,7 @@
 """私人阅读日志只做展示投影；原文、审计及增量写入独立验证。"""
 
-from html import unescape
 import json
 from pathlib import Path
-import re
 
 import pytest
 
@@ -15,7 +13,7 @@ from tests.support.factories import bid_reply, fake_task_runner, make_ai_obs, ma
 from tests.support.wire import Harness, reply
 
 
-def test_inputs_are_collapsed_losslessly_and_final_fields_appear_once(tmp_path):
+def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     strategy = "保持原文 **不调整**\n第二行策略"
     speech = "我的原话 <原样>！"
     prompt = '\n输入 <details> & </pre> "引号"\n```json\n{"x": 1}\n```\n' + "长行" * 500 + '\n最后一行\n'
@@ -23,10 +21,8 @@ def test_inputs_are_collapsed_losslessly_and_final_fields_appear_once(tmp_path):
     assert player.give_speech(prompt, "opening_speech") == speech
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "## 开局发言" in markdown and "## opening_speech" not in markdown
-    assert "<details><summary>输入原文</summary>" in markdown
-    blocks = re.findall(r"<p>(.*?)</p>", markdown)
-    assert [unescape(block.replace("<br>", "\n")).replace("\xa0", " ") for block in blocks] == [with_output_requirement(prompt, "speech", task="speech")]
-    assert all("\n" not in block for block in re.findall(r"<details>.*?</details>", markdown, re.S))
+    assert "### 输入原文\n\n" + with_output_requirement(prompt, "speech", task="speech") in markdown
+    assert "<summary>" not in markdown and "<br>" not in markdown
     assert markdown.count(strategy) == markdown.count(speech) == 1
     assert "tool-return" not in markdown and "call-1" not in markdown
     assert "Final result processed." not in markdown and '"speech":' not in markdown
@@ -77,7 +73,7 @@ def test_failures_and_recovery_append_links_to_first_input(tmp_path, monkeypatch
     markdown = md_path.read_text(encoding="utf-8")
     assert writes == ["a", "a", "a"]
     assert prefixes[1].startswith(prefixes[0]) and markdown.startswith(prefixes[1])
-    assert markdown.count("<summary>输入原文</summary>") == 1
+    assert markdown.count("### 输入原文") == 1
     assert markdown.count("补跑仍失败。") == markdown.count("补跑后成功。") == 1
     assert markdown.count("鉴权失败（HTTP 401）") == 2
     assert "网络尝试" not in markdown and "完整审计" not in markdown
@@ -173,6 +169,27 @@ def test_phase_titles(phase, title):
     assert f"## {title}" in render_markdown_entry(entry)
 
 
+def test_tool_audit_does_not_clutter_readable_markdown():
+    entry = {"task_id": "task-0037", "phase": "bid", "status": "success",
+             "messages": [{"parts": [{"part_kind": "user-prompt",
+                                        "content": "| 天 | 出价 |\n| --- | --- |\n| 1 | 4 |"}]}],
+             "tool_definitions": ["definition-hash"], "request_errors": [], "result": "完成"}
+    markdown = render_markdown_entry(entry)
+    assert "| 天 | 出价 |\n| --- | --- |\n| 1 | 4 |" in markdown
+    assert all(text not in markdown for text in ("task-0037", "definition-hash", "tools.md", "<details>"))
+    assert entry["tool_definitions"] == ["definition-hash"]
+
+
+def test_bid_instructions_only_describe_canonical_types():
+    from auction_game.ai.agent_tasks import BidOutput
+
+    texts = [with_output_requirement("出价", "bid", task="bid"),
+             BidOutput.model_json_schema()["properties"]["super_bid"]["description"]]
+    for text in texts:
+        assert "必填" in text and "JSON null" in text
+        assert all(fragment not in text for fragment in ('"null"', '"None"', "兼容", "类型示例"))
+
+
 def test_unknown_failure_is_short_and_audit_stays_complete(tmp_path):
     log = AgentLog("Alpha", tmp_path / "data" / "player.jsonl", readable_path=tmp_path / "players" / "player.md")
     message = "未识别故障\n" + "长错误" * 200
@@ -192,15 +209,15 @@ def test_changed_input_is_not_hidden_by_failed_task_link(tmp_path):
     log.failure(entry, CallFailedError("failure", messages=[ModelRequest(parts=[UserPromptPart("原输入")])]))
     log.success(entry, ExecutionResult("原输出", [ModelRequest(parts=[UserPromptPart("新输入")])], []))
     markdown = log.readable_path.read_text(encoding="utf-8")
-    assert markdown.count("<summary>输入原文</summary>") == 2
+    assert markdown.count("### 输入原文") == 2
     assert "首次输入" not in markdown
     entries = [json.loads(line) for line in log.path.read_text(encoding="utf-8").splitlines()]
     assert [item["readable_title"] for item in entries] == ["开局发言", "开局发言记录2"]
     assert markdown.count("## 开局发言\n") == 1
 
 
-def test_input_html_preserves_indentation_and_escapes_tags():
-    from auction_game.reporting.agent_log import _input_html
-
-    assert _input_html('  <tag>\n\n\t& "x"') == (
-        '&nbsp;&nbsp;&lt;tag&gt;<br><br>&nbsp;&nbsp;&nbsp;&nbsp;&amp; &quot;x&quot;')
+def test_input_markdown_preserves_indentation():
+    content = '  原文\n\n\t& "x"'
+    entry = {"phase": "bid", "status": "success", "messages": [
+        {"parts": [{"part_kind": "user-prompt", "content": content}]}]}
+    assert "### 输入原文\n\n" + content in render_markdown_entry(entry)

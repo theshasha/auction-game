@@ -41,8 +41,7 @@ def with_output_requirement(prompt: str, tool_name: str | None, *, task: str) ->
     elif task == "memory":
         requirement += "只填写非空 memory；这是私有累计笔记，不向其他玩家公开。"
     else:
-        requirement += ('super_bid 必须出现：整数不加引号；不使用时推荐填实际 JSON null，仅兼容精确字符串 "null"，字符串 "None" 无效。'
-                        '类型示例：{"super_bid": null}（仅示意字段类型，完整提交仍须包含全部必填字段）。')
+        requirement += "super_bid 必填，使用不加引号的整数；不使用超级出价时填 JSON null。"
     return prompt + "\n\n" + requirement
 
 

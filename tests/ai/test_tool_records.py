@@ -66,7 +66,8 @@ def test_actual_http_definition_retry_failure_summary_and_dedup(protocol, tmp_pa
     assert "发送前实际请求定义" in text and "无输出工具" in text
     assert text.count('"name": "bid"') == 1
     assert "[本场工具定义](tools.md)" in (paths.root / "README.md").read_text(encoding="utf-8")
-    assert "../tools.md#" in paths.player(1, readable=True).read_text(encoding="utf-8")
+    readable = paths.player(1, readable=True).read_text(encoding="utf-8")
+    assert "tools.md" not in readable and "task-0001" not in readable
     for path in (paths.tools, paths.tool_definitions, paths.tool_requests):
         data = path.read_text(encoding="utf-8")
         assert not any(secret in data for secret in ("fake-key", '"messages"', '"input"', '"authorization"'))

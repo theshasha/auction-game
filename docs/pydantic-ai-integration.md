@@ -48,7 +48,7 @@ ModelFactory 按显式 protocol 选择 Chat、Responses 或 Anthropic，不猜�
 
 写入顺序为任务 JSONL、可选捕获、显式私人 Markdown；任一失败向上传播，成功日志完成后才提交内存状态。没有跨文件事务：后续写入失败会留下部分审计，但上下文、记忆与首日缓存不提交。记忆任务记录 `memory_chars`（Python 字符长度，非 token），私人 Markdown 展示完整笔记及长度，仅用于观察。
 
-默认轻量工具审计先于 HTTP 发送：`llm_client.py` 的公开 HTTP request hook 调用 `tool_records.protocol_tools()`，只提取实际存在的 tools/tool_choice/parallel_tool_calls。AgentLog 在任务开始时分配既有 task_id，通过 ContextVar 关联玩家、业务任务、BufferedRequest 的 request/attempt。每场共享 ToolWriter 在锁内按协议及字段内容哈希去重，定义写 `data/tool_definitions.json`，来源与请求引用写 `data/tool_requests.jsonl`，随后更新 `tools.md`。磁盘异常即使被 SDK 包装成连接错误也原样传播，不消耗网络重发；此时不提交历史或缓存。失败请求的发送前记录保留，无跨文件事务。README 与私人 Markdown 直接链接工具页，任务 JSONL 引用定义 ID。
+默认轻量工具审计先于 HTTP 发送：`llm_client.py` 的公开 HTTP request hook 调用 `tool_records.protocol_tools()`，只提取实际存在的 tools/tool_choice/parallel_tool_calls。AgentLog 在任务开始时分配既有 task_id，通过 ContextVar 关联玩家、业务任务、BufferedRequest 的 request/attempt。每场共享 ToolWriter 在锁内按协议及字段内容哈希去重，定义写 `data/tool_definitions.json`，来源与请求引用写 `data/tool_requests.jsonl`，随后更新 `tools.md`。磁盘异常即使被 SDK 包装成连接错误也原样传播，不消耗网络重发；此时不提交历史或缓存。失败请求的发送前记录保留，无跨文件事务。README 直接链接工具页，任务 JSONL 引用定义 ID；私人 Markdown 不重复展示工具链接或任务编号。
 
 真实捕获标记 `http_pre_send`（发送前实际请求定义），FunctionModel 用生产 SDK + MockTransport 序列化并标记 `offline_sdk_generated`（离线 SDK 生成）。仅有场次上下文时启用；无请求显示尚无记录，总结记录无输出工具。不保存鉴权头、密钥、完整 body 或历史副本。独立连通检查不创建场次；旧场次不补写。默认轻量审计与下述完整捕获互相独立。
 

@@ -23,7 +23,7 @@ class BidOutput(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
     strategy: str = Field(min_length=1, description="仅自己可见的局势分析与出价策略")
     bid: int = Field(description="今日正常出价，必须为不加引号的整数")
-    super_bid: int | None = Field(description='必填：今日超级出价，使用不加引号的整数或 JSON null；不使用时推荐填实际 JSON null，仅兼容精确字符串 "null"，字符串 "None"、字符串数字及布尔值无效，不能省略')
+    super_bid: int | None = Field(description="必填：今日超级出价，使用不加引号的整数；不使用时填 JSON null")
 
     @field_validator("super_bid", mode="before")
     @classmethod
@@ -32,7 +32,7 @@ class BidOutput(BaseModel):
             return None
         if value is not None and type(value) is not int:
             raise PydanticCustomError("super_bid_type",
-                                     'super_bid 必须为整数或不加引号的 JSON null；仅兼容精确字符串 "null"，字符串 "None"、字符串数字及布尔值均无效。不使用时推荐填实际 JSON null，不能省略字段。')
+                                      "super_bid 必填，必须为不加引号的整数或 JSON null。")
         return value
 
 

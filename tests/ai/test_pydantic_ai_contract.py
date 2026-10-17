@@ -133,7 +133,7 @@ def test_super_bid_feedback_preserves_schema_and_explains_json_null(protocol, va
     result = TaskRunner(h.factory)("plan", "plan", [], game=TEST_GAME, coins=6)
     assert result.output.super_bid is None and len(h.requests) == 2
     body = json.dumps(h.requests[1][1], ensure_ascii=False)
-    assert "整数或不加引号的 JSON null" in body
+    assert "super_bid 必填，必须为不加引号的整数或 JSON null。" in body
     tool = h.requests[0][1]["tools"][0]
     tool = tool.get("function", tool)
     schema = tool.get("parameters", tool.get("input_schema"))

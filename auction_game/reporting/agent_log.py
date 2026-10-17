@@ -90,13 +90,6 @@ def render_result(result) -> list[str]:
     return ["### 结果\n\n" + (result if isinstance(result, str) else json.dumps(result, ensure_ascii=False))]
 
 
-def _input_html(content: str) -> str:
-    """连续 HTML 避免 Typora 拆块；空白显式编码，输入标签仅作为文本。"""
-    text = html.escape(content.expandtabs(4)).replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r" {2,}|(?m:^ )", lambda match: "&nbsp;" * len(match[0]), text)
-    return text.replace("\n", "<br>")
-
-
 def _heading_link(title: str) -> str:
     # 使用纯中文/数字章节名，避免各 Markdown 阅读器对标点的锚点规则差异。
     return "#" + title
@@ -108,9 +101,6 @@ def render_markdown_entry(entry: dict, result_renderer: Callable = render_result
     first_title = entry.get("first_title")
     previous_title = entry.get("previous_title")
     lines = [f"## {entry.get('readable_title', _phase_title(entry))}"]
-    if entry.get("tool_definitions"):
-        lines.append(f"任务 `{entry['task_id']}` · 工具定义：" + " / ".join(
-            f"[{key[:12]}](../tools.md#{key})" for key in entry["tool_definitions"]))
     if entry.get("reruns", 0):
         lines.append("补跑后成功。" if success else "补跑仍失败。")
     if first_title:
@@ -119,8 +109,7 @@ def render_markdown_entry(entry: dict, result_renderer: Callable = render_result
     else:
         inputs = _inputs(entry)
         if inputs:
-            blocks = "".join(f"<p>{_input_html(content)}</p>" for content in inputs)
-            lines.append(f"<details><summary>输入原文</summary>{blocks}</details>")
+            lines.append("### 输入原文\n\n" + "\n\n".join(inputs))
     corrections = sum(part["part_kind"] == "retry-prompt"
                       for message in entry["messages"] for part in message["parts"])
     if corrections:
@@ -203,6 +192,4 @@ class AgentLog:
         with md_path.open("a", encoding="utf-8") as file:
             if is_new:
                 file.write(f"# {self.name} · 私人对话（含私有策略）\n\n")
-                if self.path.parent.name == "players" and self.path.parent.parent.name == "data":
-                    file.write("[本场工具定义与任务引用](../tools.md)；按任务编号对照玩家 JSONL。\n\n")
             file.write(render_markdown_entry(entry, self.result_renderer))
