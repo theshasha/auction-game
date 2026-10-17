@@ -70,19 +70,19 @@ def run_benchmark(count: int) -> int:
         print(f"\n===== {label} =====")
         print(f"总拍卖天数：{days}，流局 {stats['void_days']} 天（{stats['void_days'] / days:.1%}），"
               f"加赛总局数 {stats['playoffs']}")
-        print("按天统计：非流局日全部有效出价均值（含超级出价数值）；奖池均值包含全部日期（含流局日）。")
+        print("按天统计：")
         for day_index in sorted(stats["pools_by_day"]):
             bids = stats["bids_by_day"].get(day_index, [])
             pools = stats["pools_by_day"][day_index]
             avg_bid = f"{sum(bids) / len(bids):.2f}" if bids else "—（全流局）"
-            print(f"  第 {day_index} 天：非流局日全部有效出价均值（含超级出价数值） {avg_bid}，"
-                  f"奖池均值（含流局日） {sum(pools) / len(pools):.2f}")
+            print(f"  第 {day_index} 天：平均出价 {avg_bid}，平均奖池 {sum(pools) / len(pools):.2f}")
         win_dist = dict(sorted(stats["winning_bids"].items()))
         cap_wins = stats["winning_bids"][game.max_bid]
         print(f"获胜价分布：{win_dist}")
         print(f"获胜价={game.max_bid}（出价上限）占比：{cap_wins}/{decided}（{cap_wins / max(decided, 1):.1%}）")
 
     print(f"两组各 {count} 场，共 {2 * count} 场；第一组仅作过程统计参考。")
+    print("每日统计口径：非流局日全部有效出价均值（含超级出价数值）；奖池均值包含全部日期（含流局日）。")
     baseline = [play_tournament(seed=1000 + i, with_affordable_max=False) for i in range(count)]
     print_stats(f"纯随机对照：{count} 场随机 Bot 对战", aggregate(baseline))
 

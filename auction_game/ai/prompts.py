@@ -217,7 +217,7 @@ def bid_request(obs: Observation) -> str:
 
 
 def render_match_log(log: MatchLog) -> str:
-    """直接展示引擎结算字段；玩家单元格标注正常款项及超级出价结果。"""
+    """共用局末表：保留报价与结算结果，固定扣款规则不在单元格重复。"""
     if not log.days:
         return "  （本局未进行任何拍卖）"
     player_names = [record.player for record in log.days[0].bids if not record.is_super]
@@ -235,20 +235,20 @@ def render_match_log(log: MatchLog) -> str:
             )
             cell = str(normal.bid)
             if name == day.winner:
-                cell += f"（获胜，扣{normal.bid}）"
+                cell += "（获胜）"
             elif normal.bid in day.collision_values:
-                cell += f"（撞车，扣{normal.bid}）"
+                cell += "（撞车）"
             else:
                 cell += "（退款）"
             if super_record is not None:
                 cell += f"+超{super_record.bid}"
                 if name in hit_by_player:
-                    cell += f"（命中，成本{log.game.super_cost}，悬赏{log.game.super_bounty}）"
+                    cell += "（命中）"
                 else:
-                    cell += f"（落空，成本{log.game.super_cost}）"
+                    cell += "（落空）"
             cells.append(cell)
         if day.is_void:
-            outcome = "流局（奖池作废）" if day.day == log.game.max_days else "流局（奖池并入次日）"
+            outcome = "流局（奖池作废）" if day.day == log.game.max_days else "流局"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
         collision_text = "、".join(str(value) for value in day.collision_values) or "—"

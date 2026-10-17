@@ -213,7 +213,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     # 明确的合成参数覆盖各阶段，不随生产配置缩短而丢失断言。
     assert f"共进行 {game.regular_matches} 局（正赛 {game.regular_matches} 局 + 加赛 0 局）" in output
     assert f"总拍卖天数：{game.regular_matches * game.max_days}" in output
-    assert f"{selected}：胜{game.regular_matches * expected_wins}" in output
+    assert f"\n{selected}\n  总胜场：{game.regular_matches * expected_wins}\n" in output
     assert "测试运行结果（非身份模型成绩）" in output
 
 

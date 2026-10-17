@@ -67,7 +67,8 @@ def test_bot_run_publishes_rules_and_replayable_statistics(tmp_path, monkeypatch
     assert "最多进行 3 局加赛" in rules
 
     stats = analyze.collect_player_stats(matches)
-    assert stats["match_labels"] == ["1", "2", "加1", "加2"]
+    assert stats["match_labels"] == ["正赛第 1 局", "正赛第 2 局",
+                                     "加赛第 1 局（总第 3 局）", "加赛第 2 局（总第 4 局）"]
     assert stats["win_matrix"] == expected_wins
     rows = {row["name"]: row for row in stats["rows"]}
     for name, wins in expected_wins.items():
@@ -85,7 +86,6 @@ def test_bot_run_publishes_rules_and_replayable_statistics(tmp_path, monkeypatch
     assert f"玩家：{'、'.join(BOT_NAMES)}" in report
     assert "局数：4（正赛 2 + 加赛 2）" in report
     assert "总拍卖天数：12" in report
-    assert "各列为第 1/2/加1/加2 局" in report
-    assert "Alpha：0 4 3 6" in report
-    assert "Alpha：胜13" in report
-    assert "局末余额22/14/18/11" in report
+    assert "各局顺序：正赛第 1 局 / 正赛第 2 局 / 加赛第 1 局（总第 3 局） / 加赛第 2 局（总第 4 局）" in report
+    assert "\nAlpha\n  总胜场：13\n  各局胜场：0 / 4 / 3 / 6\n" in report
+    assert "各局结束余额：22 / 14 / 18 / 11 金币" in report

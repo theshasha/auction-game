@@ -180,7 +180,7 @@ def _recompute_remaining_coins(match: dict, game: GameSettings, player_names: li
 
 
 def collect_player_stats(matches: list[dict]) -> dict:
-    """按玩家聚合整场统计：每局胜场矩阵 + 玩家明细行（均价只计正常出价）。
+    """按玩家聚合整场统计：每局胜场矩阵 + 玩家明细（均价只计正常出价）。
 
     返回每局胜场矩阵、玩家明细、超级命中原本互撞价次数及使用/改变当天结果的天数；玩家按总胜场降序。
     """
@@ -192,7 +192,8 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
     """已校验场次的玩家统计，局末余额在此统一重放。"""
     match_labels: list[str] = []
     win_matrix: dict[str, list[int]] = {name: [] for name in player_names}
-    match_champions = {name: 0.0 for name in player_names}  # 第一名并列按 1/n 计
+    solo_top_matches = dict.fromkeys(player_names, 0)
+    tied_top_matches = dict.fromkeys(player_names, 0)
     super_uses_count = {name: 0 for name in player_names}
     super_hits = {name: 0 for name in player_names}
     super_collision_hits = 0
@@ -208,17 +209,20 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
         match = payload["match"]
         days = match["days"]
         if match["is_playoff"]:
-            match_labels.append(f"加{match['match_index'] - game.regular_matches}")
+            match_labels.append(f"加赛第 {match['match_index'] - game.regular_matches} 局"
+                                f"（总第 {match['match_index']} 局）")
         else:
-            match_labels.append(str(match["match_index"]))
+            match_labels.append(f"正赛第 {match['match_index']} 局")
         wins = match["wins"]
         for name in player_names:
             win_matrix[name].append(wins[name])
         if wins:
             top_wins = max(wins.values())
             champions = [name for name, count in wins.items() if count == top_wins]
+            # 全员 0 胜也保留为并列最高；每人计一局，不折算份额。
+            top_matches = solo_top_matches if len(champions) == 1 else tied_top_matches
             for name in champions:
-                match_champions[name] += 1 / len(champions)
+                top_matches[name] += 1
         for day in days:
             if day["super_uses"]:
                 super_days += 1
@@ -263,7 +267,8 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
         rows.append({
             "name": name,
             "total_wins": sum(win_matrix[name]),
-            "match_champions": match_champions[name],
+            "solo_top_matches": solo_top_matches[name],
+            "tied_top_matches": tied_top_matches[name],
             "super_uses": super_uses_count[name],
             "super_hits": super_hits[name],
             "super_net_coins": super_hits[name] * game.super_bounty - super_uses_count[name] * game.super_cost,
@@ -280,31 +285,37 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
 
 
 def print_player_stats(stats: dict) -> None:
-    """打印各玩家每局的胜场数及详细统计。"""
+    """每玩家一个小块，胜场与余额共用明确标注正赛/加赛的列序。"""
     match_labels = stats["match_labels"]
     win_matrix = stats["win_matrix"]
-    print(f"玩家统计（按总胜场排序；各列为第 {'/'.join(match_labels)} 局）：")
+    print("玩家明细（按总胜场排序）")
+    print(f"各局顺序：{' / '.join(match_labels)}")
     for row in stats["rows"]:
-        cells = " ".join(str(count) for count in win_matrix[row["name"]])
-        print(f"  {row['name']}：{cells}")
-    print("  明细（胜场 / 局冠军 / 超级出价 / 超级净金币收益 / 撞车扣款 / 平均正常出价 / 局末余额 / 违规 / 出0）：")
-    for row in stats["rows"]:
+        print()
+        print(row["name"])
+        print(f"  总胜场：{row['total_wins']}")
+        cells = " / ".join(str(count) for count in win_matrix[row["name"]])
+        print(f"  各局胜场：{cells}")
+        print(f"  单局最高胜场：独占{row['solo_top_matches']}局，并列{row['tied_top_matches']}局")
+        super_text = f"使用{row['super_uses']}次，命中{row['super_hits']}次"
         if row["super_uses"]:
-            super_text = f"{row['super_uses']}用{row['super_hits']}中（{row['super_hits'] / row['super_uses']:.0%}）"
-        else:
-            super_text = "0用"
+            super_text += f"（{row['super_hits'] / row['super_uses']:.0%}）"
+        print(f"  超级出价：{super_text}")
+        print(f"  超级净收益：{row['super_net_coins']:+d}金币")
+        print(f"  撞车损失：{row['collision_burn']}金币")
         avg_bid_text = f"{row['avg_bid']:.2f}" if row["avg_bid"] is not None else "—"
-        end_coins_text = "/".join(str(coins) for coins in row["end_coins"])
-        print(
-            f"  {row['name']}：胜{row['total_wins']} 局冠{row['match_champions']:g} "
-            f"超{super_text} 超级净金币收益{row['super_net_coins']} 撞车扣款{row['collision_burn']} 均出{avg_bid_text} "
-            f"局末余额{end_coins_text} 违规{row['illegal']}笔 出0共{row['zero_bids']}笔"
-        )
+        print(f"  平均正常出价：{avg_bid_text}")
+        end_coins_text = " / ".join(str(coins) for coins in row["end_coins"])
+        print(f"  各局结束余额：{end_coins_text} 金币")
+        print(f"  非法出价：{row['illegal']}次")
+        print(f"  正常出价为零：{row['zero_bids']}次")
 
 
 def analyze(run_dir: Path) -> None:
     matches, snapshot, game, player_names = _load_match_logs(run_dir)
     player_stats = _collect_player_stats(matches, game, player_names)
+    print("比赛概况")
+    print(f"场次目录：{run_dir.name}")
     print(f"运行类型：{RUN_TYPES[snapshot['run_type']]}")
     print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
     for pc in snapshot["players"]:
@@ -320,7 +331,7 @@ def analyze(run_dir: Path) -> None:
     pools_by_day_index: dict[int, list[int]] = {}
     winning_bids: list[int] = []
     remaining_coins_all = [coins for row in player_stats["rows"] for coins in row["end_coins"]]
-    multi_win_matches: list[tuple[int, str, int]] = []  # (局号, 玩家, 胜场)
+    multi_win_matches: list[tuple[str, str, int]] = []  # (正赛/加赛标签, 玩家, 胜场)
     illegal_bids = sum(row["illegal"] for row in player_stats["rows"])
     zero_bids = 0
     zero_bid_wins = 0
@@ -332,12 +343,12 @@ def analyze(run_dir: Path) -> None:
     cap_wins = 0            # 获胜价等于出价上限的天数
     cap_bid = game.max_bid
 
-    for payload in matches:
+    for payload, match_label in zip(matches, player_stats["match_labels"]):
         match = payload["match"]
         wins = match["wins"]
         for name, win_count in wins.items():
             if win_count >= 3:  # 固定统计口径，不随本局计划总胜场改变
-                multi_win_matches.append((match["match_index"], name, win_count))
+                multi_win_matches.append((match_label, name, win_count))
 
         for day in match["days"]:
             total_days += 1
@@ -355,16 +366,30 @@ def analyze(run_dir: Path) -> None:
             if day["winning_bid"] == 0:
                 zero_bid_wins += 1
 
-    print(f"场次目录：{run_dir.name}")
     print(f"玩家：{'、'.join(player_names)}")
     playoff_count = sum(1 for m in matches if m["match"]["is_playoff"])
     print(f"局数：{len(matches)}（正赛 {len(matches) - playoff_count} + 加赛 {playoff_count}）")
-    print()
-
     print(f"总拍卖天数：{total_days}，其中流局 {void_days} 天（{void_days / total_days:.1%}）")
     print()
 
-    print("每一天的平均出价 / 平均奖池（出价排除流局日，含有效正常报价及超级数值）：")
+    print("经济与超级出价")
+    print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
+          f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
+    print(f"撞车损失：{collision_burn} 金币（只计正常出价）")
+    print(f"  每局平均：{collision_burn / len(matches):.1f} 金币")
+    hit_rate = f"（命中率 {super_hits / super_uses:.0%}）" if super_uses else ""
+    print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次{hit_rate}")
+    print(f"  成本消耗：{super_cost_spent} 金币")
+    print(f"  悬赏发放：{super_bounty_minted} 金币")
+    print(f"  超级净收益：{super_bounty_minted - super_cost_spent:+d} 金币")
+    print(f"  命中原本互撞价 {player_stats['super_collision_hits']} 次（按超级使用笔数计，包含流局）")
+    print(f"  使用超级出价：{player_stats['super_days']} 天")
+    print(f"  改变当日结果：{player_stats['super_changed_days']} 天")
+    print("    保持正常报价不变，对比取消全部超级后的结果")
+    print()
+
+    print("平均出价与奖池：")
+    print("  出价排除流局日，含有效正常报价及超级数值；奖池包含流局日")
     for day_index in sorted(pools_by_day_index):
         pools = pools_by_day_index[day_index]
         bids = bids_by_day_index.get(day_index, [])
@@ -376,33 +401,22 @@ def analyze(run_dir: Path) -> None:
     if winning_bids:
         win_dist = dict(sorted(Counter(winning_bids).items()))
         print(f"  获胜价平均：{sum(winning_bids) / len(winning_bids):.2f}（{len(winning_bids)} 个获胜日）")
-        print(f"  获胜价分布：{win_dist}；获胜价={cap_bid}（出价上限）占比 {cap_wins / len(winning_bids):.1%}")
-    print()
-
-    print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
-          f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
-    print(f"撞车扣款：全场因撞车被没收 {collision_burn} 金币"
-          f"（每局平均 {collision_burn / len(matches):.1f}，只计正常出价）")
-    hit_rate = f"{super_hits / super_uses:.0%}" if super_uses else "—"
-    print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
-          f"成本消耗 {super_cost_spent} 金币，悬赏发放 {super_bounty_minted} 金币，"
-          f"超级净金币收益 {super_bounty_minted - super_cost_spent} 金币")
-    print(f"  命中原本互撞价 {player_stats['super_collision_hits']} 次（按超级使用笔数计，包含流局）")
-    print(f"  使用超级出价 {player_stats['super_days']} 天，改变当日结果 {player_stats['super_changed_days']} 天"
-          "（保持正常报价不变，对比取消全部超级后的结果）")
+        print(f"  获胜价分布：{win_dist}")
+        print(f"  获胜价={cap_bid}（出价上限）占比 {cap_wins / len(winning_bids):.1%}")
     print()
 
     print_player_stats(player_stats)
     print()
 
+    print("特殊情况")
     print(f"单局 ≥3 胜场的玩家-局次数：{len(multi_win_matches)}"
           f"（占 {len(matches)} 局的 {len({m for m, _, _ in multi_win_matches})} 局）")
-    for match_index, name, win_count in multi_win_matches:
-        print(f"  第 {match_index} 局：{name} 共 {win_count} 胜场")
+    for match_label, name, win_count in multi_win_matches:
+        print(f"  {match_label}：{name} 共 {win_count} 胜场")
     print()
 
-    print(f"其他：非法出价 {illegal_bids} 笔；出 0 共 {zero_bids} 笔，"
-          f"其中 0 价获胜 {zero_bid_wins} 次")
+    print(f"非法出价：{illegal_bids} 笔")
+    print(f"出 0 共 {zero_bids} 笔，其中 0 价获胜 {zero_bid_wins} 次")
 
 
 def main() -> None:

@@ -6,12 +6,12 @@
   第 1 天：出价 [5,4,3,2,1,0]；乙 超级狙 5（命中）、丙 超级狙 6（空）；
             5 被撞车（甲 扣款 5），乙 以 4 获胜。
   第 2 天：出价 [3,3,1,2,0,6]；3 互撞（甲、乙 扣款 3），己 以 6 获胜。
-  胜场：乙 1、己 1（局冠军 乙/己 各 0.5）。
+  胜场：乙 1、己 1（乙/己 各记并列最高 1 局）。
   第 2 局
   第 1 天：出价 [0,3,0,2,5,4]；甲 非法提交整单转正常 0、无超级；
            戊 以 5 获胜。
   第 2 天：出价 [0,4,1,2,3,2]；2 互撞（丁、己 扣款 2），乙 以 4 获胜。
-  胜场：乙 1、戊 1（局冠军 乙/戊 各 0.5）。
+  胜场：乙 1、戊 1（乙/戊 各记并列最高 1 局）。
 
 手算期望值见各断言注释；局末余额按日志 game（初始 7、日工资 3、超级成本 2、悬赏 3）重放。
 """
@@ -70,19 +70,44 @@ def rows_by_name(stats: dict) -> dict:
     return {row["name"]: row for row in stats["rows"]}
 
 
-def test_win_matrix_and_champions():
+def test_win_matrix_and_top_match_counts():
     stats = collect_player_stats(make_matches())
-    assert stats["match_labels"] == ["1", "2"]
+    assert stats["match_labels"] == ["正赛第 1 局", "正赛第 2 局"]
     assert stats["win_matrix"]["乙"] == [1, 1]
     assert stats["win_matrix"]["己"] == [1, 0]
     rows = rows_by_name(stats)
-    # 局冠军：第 1 局 乙/己 并列各 0.5，第 2 局 乙/戊 并列各 0.5
-    assert rows["乙"]["match_champions"] == 1.0
-    assert rows["己"]["match_champions"] == 0.5
-    assert rows["戊"]["match_champions"] == 0.5
-    assert rows["甲"]["match_champions"] == 0.0
+    # 两局分别为乙/己、乙/戊并列最高，每人计完整一局。
+    assert rows["乙"]["tied_top_matches"] == 2
+    assert rows["己"]["tied_top_matches"] == 1
+    assert rows["戊"]["tied_top_matches"] == 1
+    assert rows["甲"]["tied_top_matches"] == 0
+    assert all(row["solo_top_matches"] == 0 for row in stats["rows"])
     # 排序：总胜场降序，同胜场按名字（己 U+5DF1 < 戊 U+620A）
     assert [row["name"] for row in stats["rows"]] == ["乙", "己", "戊", "丁", "丙", "甲"]
+
+
+@pytest.mark.parametrize("all_void", [False, True])
+def test_solo_top_and_all_zero_tied_matches(all_void, tmp_path, capsys):
+    days = [
+        make_day(day, [2, 2] if all_void else [2, 1], day if all_void else 1,
+                 None if all_void else "甲", None if all_void else 2,
+                 [2] if all_void else [], 0 if all_void else 1, is_void=all_void)
+        for day in (1, 2)
+    ]
+    match = make_log(days=days, wins={"甲": 0 if all_void else 2, "乙": 0},
+                     game=ANALYZE_GAME).to_dict()
+    rows = rows_by_name(collect_player_stats([{"match": match}]))
+    assert rows["甲"]["solo_top_matches"] == (0 if all_void else 1)
+    assert rows["乙"]["solo_top_matches"] == 0
+    assert rows["甲"]["tied_top_matches"] == int(all_void)
+    assert rows["乙"]["tied_top_matches"] == int(all_void)
+    if all_void:
+        assert rows["甲"]["avg_bid"] is None
+        write_matches(tmp_path, [{"match": match}])
+        analyze(tmp_path)
+        output = capsys.readouterr().out
+        assert output.count("单局最高胜场：独占0局，并列1局") == 2
+        assert output.count("平均正常出价：—") == 2
 
 
 def test_player_detail_metrics():
@@ -129,18 +154,30 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     write_matches(run_dir, make_matches())
     analyze(run_dir)
     output = capsys.readouterr().out
-    # 新统计段存在且位于「单局 ≥3 胜场」列表之前
-    assert "玩家统计" in output
-    assert "明细（胜场 / 局冠军" in output
-    assert output.index("玩家统计") < output.index("单局 ≥3 胜场")
-    # 矩阵行与明细行内容
-    assert "  乙：1 1" in output
-    assert "  乙：胜2 局冠1 超1用1中（100%） 超级净金币收益1 撞车扣款3 均出3.50 局末余额4/6 违规0笔 出0共0笔" in output
-    assert "  甲：胜0 局冠0 超0用 超级净金币收益0 撞车扣款8 均出2.00 局末余额2/10 违规1笔 出0共2笔" in output
-    assert "撞车扣款：全场因撞车被没收" in output
-    assert "成本消耗 4 金币，悬赏发放 3 金币，超级净金币收益 -1 金币" in output
+    sections = ["比赛概况", "经济与超级出价", "玩家明细", "特殊情况"]
+    assert [output.index(section) for section in sections] == sorted(output.index(section) for section in sections)
+    assert "各局顺序：正赛第 1 局 / 正赛第 2 局" in output
+    assert "局冠" not in output
+    # 每个玩家只出现一个明细块，标签和单位自足，不再依赖压缩表头。
+    yi = output.split("\n乙\n", 1)[1].split("\n\n", 1)[0]
+    for text in ["总胜场：2", "各局胜场：1 / 1", "单局最高胜场：独占0局，并列2局",
+                 "超级出价：使用1次，命中1次（100%）", "超级净收益：+1金币",
+                 "撞车损失：3金币", "平均正常出价：3.50", "各局结束余额：4 / 6 金币",
+                 "非法出价：0次", "正常出价为零：0次"]:
+        assert text in yi
+    jia = output.split("\n甲\n", 1)[1].split("\n\n", 1)[0]
+    assert "超级出价：使用0次，命中0次\n" in jia
+    assert "%" not in jia
+    assert "非法出价：1次" in jia
+    assert "正常出价为零：2次" in jia
+    assert "撞车损失：15 金币（只计正常出价）" in output
+    assert "成本消耗：4 金币" in output
+    assert "悬赏发放：3 金币" in output
+    assert "超级净收益：-1 金币" in output
+    assert "超级净收益：-2金币" in output
     assert "命中原本互撞价 0 次（按超级使用笔数计，包含流局）" in output
-    assert "使用超级出价 1 天，改变当日结果 1 天" in output
+    assert "使用超级出价：1 天" in output
+    assert "改变当日结果：1 天" in output
     assert "含有效正常报价及超级数值" in output
     assert "获胜价平均" in output
 
@@ -175,12 +212,19 @@ def test_super_result_days_compare_all_supers_once_without_changing_logs(
     assert matches == original
 
 
-def test_super_result_days_without_super_usage():
-    stats = collect_player_stats([{"match": make_match_2()}])
+def test_super_result_days_without_super_usage(tmp_path, capsys):
+    matches = [{"match": make_match_2()}]
+    stats = collect_player_stats(matches)
     assert stats["super_days"] == 0
     assert stats["super_changed_days"] == 0
     assert stats["super_collision_hits"] == 0
     assert all(row["super_net_coins"] == 0 for row in stats["rows"])
+    write_matches(tmp_path, matches)
+    analyze(tmp_path)
+    output = capsys.readouterr().out
+    assert "超级出价：使用 0 次，命中 0 次\n" in output
+    assert "命中率" not in output
+    assert "（0%）" not in output
 
 
 def test_super_collision_hits_include_void_days_and_illegal_effective_zero(tmp_path, capsys):
@@ -299,7 +343,8 @@ def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, caps
     # 手算：甲 20-9+4-2+4-9=8；乙 20-7-1+5+4-2+4=23；丙 20+4+4=28。
     assert recompute_remaining_coins(log) == {"甲": 8, "乙": 23, "丙": 28}
     stats = collect_player_stats([{"match": log}])
-    assert stats["match_labels"] == ["加1"]
+    assert stats["match_labels"] == ["加赛第 1 局（总第 3 局）"]
+    assert rows_by_name(stats)["丙"]["solo_top_matches"] == 1
     assert rows_by_name(stats)["乙"]["avg_bid"] == 4
     write_matches(tmp_path, [{"match": log}])
     # 分析不能依赖当前配置；当前目录甚至放置无效的 game.yaml。
@@ -308,15 +353,18 @@ def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, caps
     analyze(tmp_path)
     output = capsys.readouterr().out
     assert "获胜价=9（出价上限）占比 33.3%" in output
-    assert "成本消耗 1 金币，悬赏发放 5 金币，超级净金币收益 4 金币" in output
+    assert "成本消耗：1 金币" in output
+    assert "悬赏发放：5 金币" in output
+    assert "超级净收益：+4 金币" in output
+    assert "各局顺序：加赛第 1 局（总第 3 局）" in output
     assert rows_by_name(stats)["乙"]["super_net_coins"] == 4
     assert "局末平均剩余金币：19.67（最低 8，最高 28）" in output
     assert "全天总体：平均 4.70（10 笔）" in output  # 聚合均价包含超级出价数值
     # 总奖池 9：恰好 3 胜仍入选，2 胜不入选；门槛固定，不能改成过半。
     assert "单局 ≥3 胜场的玩家-局次数：2" in output
-    assert "第 3 局：甲 共 3 胜场" in output
-    assert "第 3 局：丙 共 4 胜场" in output
-    assert "第 3 局：乙 共 2 胜场" not in output
+    assert "加赛第 1 局（总第 3 局）：甲 共 3 胜场" in output
+    assert "加赛第 1 局（总第 3 局）：丙 共 4 胜场" in output
+    assert "加赛第 1 局（总第 3 局）：乙 共 2 胜场" not in output
 
 
 def test_missing_game_setting_is_rejected():

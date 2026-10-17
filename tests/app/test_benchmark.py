@@ -108,10 +108,10 @@ def test_comparison_describes_only_second_group(monkeypatch, capsys, strategy_wi
     output = capsys.readouterr().out
     assert f"最高可付价玩家平均总胜场 {strategy_wins:.2f}" in output
     assert "随机对手平均 5.00" in output
-    assert "奖池均值包含全部日期（含流局日）" in output
-    assert ("第 1 天：非流局日全部有效出价均值（含超级出价数值） 4.00，"
-            "奖池均值（含流局日） 6.00") in output
-    assert ("第 2 天：非流局日全部有效出价均值（含超级出价数值） —（全流局），"
-            "奖池均值（含流局日） 12.00") in output
+    explanation = "每日统计口径：非流局日全部有效出价均值（含超级出价数值）；奖池均值包含全部日期（含流局日）。"
+    assert output.count(explanation) == 1
+    assert output.index(explanation) < output.index("===== 纯随机对照")
+    assert output.count("第 1 天：平均出价 4.00，平均奖池 6.00") == 2
+    assert output.count("第 2 天：平均出价 —（全流局），平均奖池 12.00") == 2
     assert f"本批样本中，最高可付价玩家平均胜场{comparison}随机对手。" in output
     assert all(term not in output for term in ["显著", "占优", "规则需要", "极点", "Whale", "鲸鱼"])

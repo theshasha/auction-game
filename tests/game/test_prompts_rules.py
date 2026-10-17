@@ -23,7 +23,7 @@ class TestSettlementFacts:
             make_log(), make_standings({n: [0] for n in NAMES}), True
         )
         assert "规则要点重申" not in text
-        assert "本局完整出价日志" in text and "5（获胜，扣5）" in text and "4（退款）" in text
+        assert "本局完整出价日志" in text and "5（获胜）" in text and "4（退款）" in text
 
     def test_memory_prompt_covers_cumulative_notes_and_all_speeches(self):
         text = prompts.memory_request({"甲": "本人发言", "乙": "他人发言"})

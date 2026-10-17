@@ -51,6 +51,7 @@ def make_publish(log_dir: Path):
         kind = "加赛" if log.is_playoff else "正赛"
         text = (
             f"===== 第 {log.match_index} 局（{kind}）=====\n"
+            "[本场规则](../RULES.md)\n\n"
             f"{prompts.render_match_log(log)}\n\n"
             f"截至本局的累计排名:\n{prompts.render_standings(standings)}\n"
         )
