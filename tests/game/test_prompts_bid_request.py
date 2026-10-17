@@ -45,6 +45,8 @@ class TestBidRequest:
         assert ("本局剩余可分配胜场：9" in text) == visible
         plan = prompts.next_match_plan_request([], obs.game, match_index)
         assert ("本局剩余可分配胜场：9" in plan) == visible
+        assert "。。" not in plan
+        assert plan.split("\n\n")[-2].endswith("。")
 
     def test_single_match_opening_and_final_day_remaining(self):
         game = replace(TEST_GAME, regular_matches=1, daily_pool=(2, 3))

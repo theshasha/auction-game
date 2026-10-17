@@ -86,11 +86,11 @@ def _remaining_wins_info(game: GameSettings, match_index: int, day: int, today_p
 
 
 def _day1_constant_info(game: GameSettings, match_index: int = 1) -> str:
-    """第 1 天信息由本场参数确定。"""
+    """第 1 天信息由本场参数确定，各信息行在此完成句末标点。"""
     final_note = "；本局最后一天，结束后金币清零。" if game.max_days == 1 else ""
     return (
         f"（第 1 天：你的金币 {game.initial_coins}，本局已获胜场 0，"
-        f"今日奖池 {game.daily_pool[0]} 个胜场，规则出价上限 {game.max_bid}{final_note}）"
+        f"今日奖池 {game.daily_pool[0]} 个胜场，规则出价上限 {game.max_bid}{final_note}）。"
         + _remaining_wins_info(game, match_index, 1, game.daily_pool[0])
     )
 
@@ -312,7 +312,7 @@ def next_match_plan_request(standings: list[StandingsEntry], game: GameSettings,
         f"截至当前的最新累计成绩：\n{render_standings(standings)}\n\n"
         f"请结合累计私有记忆，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价"
         + _day1_constant_info(game, match_index)
-        + "。\n\n"
+        + "\n\n"
         + bid_format_hint(game)
     )
 

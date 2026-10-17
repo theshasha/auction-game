@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-10-16T13:01:16.556102+00:00",
+  "fetched_at": "2026-10-17T08:03:10.794732+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -219,6 +219,89 @@
           "values": [
             "low",
             "high",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "grok": {
+      "source": {
+        "provider": "xai",
+        "model": "grok-4.7"
+      },
+      "status": "matched",
+      "matched_id": "grok-4.7",
+      "canonical_model_id": "xai/grok-4.7",
+      "limit": {
+        "context": 500000,
+        "input": null,
+        "output": 500000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "claude_sonnet": {
+      "source": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5-5"
+      },
+      "status": "matched",
+      "matched_id": "claude-sonnet-5-5",
+      "canonical_model_id": "anthropic/claude-sonnet-5-5",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 128000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      ],
+      "tool_call": true
+    },
+    "claude_opus": {
+      "source": {
+        "provider": "anthropic",
+        "model": "claude-opus-5-5"
+      },
+      "status": "matched",
+      "matched_id": "claude-opus-5-5",
+      "canonical_model_id": "anthropic/claude-opus-5-5",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 128000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
             "max"
           ]
         }
