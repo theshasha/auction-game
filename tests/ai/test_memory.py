@@ -71,7 +71,7 @@ def test_sdk_memory_tool_and_cross_match_replacement(protocol):
                            reply(bid_reply(1)), reply({"memory": "cumulative-v2"}), reply(bid_reply(2))])
     player = make_player(TaskRunner(h.factory))
     player.give_speech("old match raw", "match_1_speech")
-    player.save_memory(prompts.memory_request({"Alpha": "old public signal", "Bravo": "other signal"}), "match_1_memory")
+    player.save_memory(prompts.memory_request({"Bravo": "other signal"}), "match_1_memory")
     body = h.requests[-1][1]
     tool = body["tools"][0].get("function", body["tools"][0])
     assert tool["name"] == "save_memory"
@@ -92,13 +92,13 @@ def test_sdk_memory_tool_and_cross_match_replacement(protocol):
 
 def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_path):
     long_memory = "第二版累计经验" + "观察与猜测。" * 2500
-    runner = fake_task_runner([speech_reply("opening signal"), {"memory": "第一版经验"},
+    runner = fake_task_runner([speech_reply("own raw signal"), {"memory": "第一版经验"},
                                bid_reply(1), speech_reply("match two signal"), {"memory": long_memory},
                                bid_reply(2), "review"])
     player = make_player(runner, tmp_path)
     player.give_speech("first match raw", "opening_speech")
     checkpoint = player.checkpoint()
-    player.save_memory(prompts.memory_request({"Alpha": "own raw signal", "Bravo": "other raw signal"}), "match_1_memory")
+    player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}), "match_1_memory")
     assert "own raw signal" in encoded(runner.calls[-1]) and "other raw signal" in encoded(runner.calls[-1])
     assert player.memory == "第一版经验"
     assert "first match raw" not in encoded(player.messages)
@@ -161,6 +161,11 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             assert "public-Alpha" in public_log and "public-Bravo" in public_log
             text = encoded(messages)
             assert "public-Alpha" in text and "public-Bravo" in text
+            # 自己的发言只在历史中出现一次，新提示仅补充其他玩家。
+            assert text.count("public-" + name) == 1
+            prompt = messages[-1].parts[-1].content
+            assert "public-" + name not in prompt
+            assert "public-" + ("Bravo" if name == "Alpha" else "Alpha") in prompt
             assert "private-" not in text
             return {"memory": "private-" + name}
         p = make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1)]))

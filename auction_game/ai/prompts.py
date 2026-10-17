@@ -294,11 +294,12 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], wil
     return "\n\n".join(lines)
 
 
-def memory_request(speeches: dict[str, str]) -> str:
+def memory_request(others_speeches: dict[str, str]) -> str:
+    """仅补充他人发言；本人的发言已在当前历史中，整理完成后才清空。"""
     return (
-        "本局全部公开发言已经公布（含你本人）：\n"
-        + "\n".join(f"【{name}】{text}" for name, text in speeches.items())
-        + "\n\n请用 save_memory 整理一份累计私有记忆，综合旧记忆、本局经历及上述全部公开发言。"
+        "以下是其他玩家的局末公开发言：\n"
+        + "\n".join(f"【{name}】{text}" for name, text in others_speeches.items())
+        + "\n\n请用 save_memory 整理一份累计私有记忆，综合旧记忆、本局经历及公开发言。"
         "新记忆会整体替换旧记忆；下一局看不到历局原始对话与原始公开发言。"
         "保留仍有用的早期经验，更新失效判断，区分已观察事实与待验证猜测。"
         "优先记下影响未来决策的对手规律、自身策略修正和有用的公开信号，避免逐日流水账。"

@@ -86,7 +86,7 @@ class AISpeechDirector:
         self._publish_speeches(f"第 {log.match_index} 局局末发言", speeches)
         if will_continue:
             self._run_round(
-                {p: (prompts.memory_request(speeches), f"match_{log.match_index}_memory") for p in self.players},
+                {p: (prompts.memory_request(self._others(speeches, p.name)), f"match_{log.match_index}_memory") for p in self.players},
                 f"第 {log.match_index} 局累计私有记忆",
             )
             self._run_round(
