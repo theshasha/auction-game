@@ -139,23 +139,25 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "  甲：胜0 局冠0 超0用 超级净金币收益0 撞车扣款8 均出2.00 局末余额2/10 违规1笔 出0共2笔" in output
     assert "撞车扣款：全场因撞车被没收" in output
     assert "成本消耗 4 金币，悬赏发放 3 金币，超级净金币收益 -1 金币" in output
+    assert "命中原本互撞价 0 次（按超级使用笔数计，包含流局）" in output
     assert "使用超级出价 1 天，改变当日结果 1 天" in output
     assert "含有效正常报价及超级数值" in output
     assert "获胜价平均" in output
 
 
-@pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed", [
-    ([5, 4, 3], {"乙": (6, False)}, "甲", 5, [], 0),  # 落空
-    ([5, 4, 3], {"乙": (3, True)}, "甲", 5, [3], 0),  # 命中低价
-    ([5, 5, 3], {"丙": (5, True)}, "丙", 3, [5], 0),  # 原本就互撞
-    ([5, 4, 3], {"乙": (5, True), "丙": (5, True)}, "乙", 4, [5], 1),
+@pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed,collision_hits", [
+    ([5, 4, 3], {"乙": (6, False)}, "甲", 5, [], 0, 0),  # 落空
+    ([5, 4, 3], {"乙": (3, True)}, "甲", 5, [3], 0, 0),  # 命中低价
+    ([5, 5, 3], {"丙": (5, True)}, "丙", 3, [5], 0, 1),  # 原本就互撞
+    ([5, 5, 3], {"乙": (5, True), "丙": (5, True)}, "丙", 3, [5], 0, 2),
+    ([5, 4, 3], {"乙": (5, True), "丙": (5, True)}, "乙", 4, [5], 1, 0),
     ([5, 3, 1], {"甲": (3, True), "乙": (1, True), "丙": (5, True)},
-     None, None, [1, 3, 5], 1),  # 全部被狙后流局
-    ([2, 2, 1, 1], {"甲": (5, False)}, None, None, [1, 2], 0),
-    ([0, 2, 2], {"乙": (0, True)}, None, None, [0, 2], 1),  # 移除后 0 也能获胜
+     None, None, [1, 3, 5], 1, 0),  # 全部被狙后流局
+    ([2, 2, 1, 1], {"甲": (5, False)}, None, None, [1, 2], 0, 0),
+    ([0, 2, 2], {"乙": (0, True)}, None, None, [0, 2], 1, 0),  # 移除后 0 也能获胜
 ])
 def test_super_result_days_compare_all_supers_once_without_changing_logs(
-    bids, super_bids, winner, winning_bid, collisions, changed,
+    bids, super_bids, winner, winning_bid, collisions, changed, collision_hits,
 ):
     days = [
         make_day(1, bids, 1, winner, winning_bid, collisions, int(winner is not None),
@@ -169,6 +171,7 @@ def test_super_result_days_compare_all_supers_once_without_changing_logs(
     stats = collect_player_stats(matches)
     assert stats["super_days"] == 1
     assert stats["super_changed_days"] == changed
+    assert stats["super_collision_hits"] == collision_hits
     assert matches == original
 
 
@@ -176,7 +179,26 @@ def test_super_result_days_without_super_usage():
     stats = collect_player_stats([{"match": make_match_2()}])
     assert stats["super_days"] == 0
     assert stats["super_changed_days"] == 0
+    assert stats["super_collision_hits"] == 0
     assert all(row["super_net_coins"] == 0 for row in stats["rows"])
+
+
+def test_super_collision_hits_include_void_days_and_illegal_effective_zero(tmp_path, capsys):
+    days = [
+        make_day(1, [0, 0, 3, 3], 1, None, None, [0, 3], is_void=True,
+                 super_bids={"乙": (0, True), "丙": (0, True), "丁": (3, True)}),
+        make_day(2, [0, 0, 0, 0], 2, None, None, [0], is_void=True),
+    ]
+    days[0].bids[0].raw_bid = 7
+    days[0].bids[0].status = "illegal"  # 有效正常 0 参与互撞，原始 7 不参与。
+    matches = [{"match": make_log(days=days, wins=dict.fromkeys(["甲", "乙", "丙", "丁"], 0),
+                                  game=ANALYZE_GAME).to_dict()}]
+    stats = collect_player_stats(matches)
+    assert stats["super_collision_hits"] == 3  # 同一天、两个价位，按三笔使用分别计数。
+    assert stats["super_changed_days"] == 0
+    write_matches(tmp_path, matches)
+    analyze(tmp_path)
+    assert "命中原本互撞价 3 次（按超级使用笔数计，包含流局）" in capsys.readouterr().out
 
 
 def test_super_result_days_keep_effective_bids_and_do_not_simulate_future():

@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from auction_game.ai import prompts
+from auction_game.game.models import StandingsEntry
 from tests.support.factories import TEST_GAME, history, make_obs
 
 
@@ -28,6 +29,31 @@ class TestBidRequest:
         assert "已含今日工资" not in text  # 第 1 天没有工资
         assert "你的累计总胜场：3。" in first_line
         assert "当前全场金币" not in text  # 首日恒定余额不再单列公布
+
+    @pytest.mark.parametrize("day", [1, 2])
+    def test_live_totals_include_all_players(self, day):
+        obs = make_prompt_obs(day=day, today_history=[history()] if day > 1 else [])
+        obs.standings = [StandingsEntry("甲", 6, [3, 3]), StandingsEntry("乙", 4, [2, 2])]
+        assert "全员实时总胜场：甲 6 胜、乙 4 胜。" in prompts.bid_request(obs)
+
+    @pytest.mark.parametrize("match_index,visible", [(1, False), (2, True), (3, True), (4, True)])
+    def test_remaining_wins_only_final_regular_and_playoffs(self, match_index, visible):
+        obs = make_prompt_obs(day=2, pool=5, today_history=[history()])
+        obs.game = replace(TEST_GAME, regular_matches=2, daily_pool=(2, 3, 4))
+        obs.past_match_logs = [{}] * (match_index - 1)
+        text = prompts.bid_request(obs)
+        assert ("本局剩余可分配胜场：9" in text) == visible
+        plan = prompts.next_match_plan_request([], obs.game, match_index)
+        assert ("本局剩余可分配胜场：9" in plan) == visible
+
+    def test_single_match_opening_and_final_day_remaining(self):
+        game = replace(TEST_GAME, regular_matches=1, daily_pool=(2, 3))
+        opening = prompts.opening_plan_request({}, game)
+        assert "全员实时总胜场：全员 0 胜。" in opening
+        assert "本局剩余可分配胜场：5" in opening
+        obs = make_prompt_obs(day=2, pool=5, today_history=[history()])
+        obs.game = game
+        assert "本局剩余可分配胜场：5" in prompts.bid_request(obs)
 
     def test_max_affordable_bid_capped_by_balance(self):
         # 余额 4 低于上限时，可出最高价明示为 4

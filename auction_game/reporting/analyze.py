@@ -182,7 +182,7 @@ def _recompute_remaining_coins(match: dict, game: GameSettings, player_names: li
 def collect_player_stats(matches: list[dict]) -> dict:
     """按玩家聚合整场统计：每局胜场矩阵 + 玩家明细行（均价只计正常出价）。
 
-    返回每局胜场矩阵、玩家明细及超级使用/改变当天结果的天数；玩家按总胜场降序。
+    返回每局胜场矩阵、玩家明细、超级命中原本互撞价次数及使用/改变当天结果的天数；玩家按总胜场降序。
     """
     game, player_names = validate_matches(matches)
     return _collect_player_stats(matches, game, player_names)
@@ -195,6 +195,7 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
     match_champions = {name: 0.0 for name in player_names}  # 第一名并列按 1/n 计
     super_uses_count = {name: 0 for name in player_names}
     super_hits = {name: 0 for name in player_names}
+    super_collision_hits = 0
     super_days = 0
     super_changed_days = 0
     collision_burn = {name: 0 for name in player_names}
@@ -226,6 +227,11 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
                     BidRecord(player=bid["player"], raw_bid=bid["raw_bid"], bid=bid["bid"], status=bid["status"])
                     for bid in day["bids"] if not bid["is_super"]
                 ]
+                normal_bid_counts = Counter(bid.bid for bid in effective_normal_bids)
+                super_collision_hits += sum(
+                    use["hit"] and normal_bid_counts[use["value"]] >= 2
+                    for use in day["super_uses"]
+                )
                 without_super, _, _ = resolve_bids(effective_normal_bids)
                 without_super_winner = without_super.player if without_super is not None else None
                 if (without_super_winner, without_super is None) != (day["winner"], day["is_void"]):
@@ -269,6 +275,7 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
         })
     rows.sort(key=lambda row: (-row["total_wins"], row["name"]))
     return {"match_labels": match_labels, "win_matrix": win_matrix, "rows": rows,
+            "super_collision_hits": super_collision_hits,
             "super_days": super_days, "super_changed_days": super_changed_days}
 
 
@@ -380,6 +387,7 @@ def analyze(run_dir: Path) -> None:
     print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次（命中率 {hit_rate}），"
           f"成本消耗 {super_cost_spent} 金币，悬赏发放 {super_bounty_minted} 金币，"
           f"超级净金币收益 {super_bounty_minted - super_cost_spent} 金币")
+    print(f"  命中原本互撞价 {player_stats['super_collision_hits']} 次（按超级使用笔数计，包含流局）")
     print(f"  使用超级出价 {player_stats['super_days']} 天，改变当日结果 {player_stats['super_changed_days']} 天"
           "（保持正常报价不变，对比取消全部超级后的结果）")
     print()

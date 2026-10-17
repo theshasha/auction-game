@@ -77,12 +77,21 @@ def opening_speech_request() -> str:
     )
 
 
-def _day1_constant_info(game: GameSettings) -> str:
+def _remaining_wins_info(game: GameSettings, match_index: int, day: int, today_pool: int) -> str:
+    """最后一局正赛与各局加赛展示本局余量，包含今日已滚存奖池。"""
+    if match_index < game.regular_matches:
+        return ""
+    remaining = today_pool + sum(game.daily_pool[day:])
+    return f"\n本局剩余可分配胜场：{remaining}（含今日奖池；末日流局的胜场作废）。"
+
+
+def _day1_constant_info(game: GameSettings, match_index: int = 1) -> str:
     """第 1 天信息由本场参数确定。"""
     final_note = "；本局最后一天，结束后金币清零。" if game.max_days == 1 else ""
     return (
         f"（第 1 天：你的金币 {game.initial_coins}，本局已获胜场 0，"
         f"今日奖池 {game.daily_pool[0]} 个胜场，规则出价上限 {game.max_bid}{final_note}）"
+        + _remaining_wins_info(game, match_index, 1, game.daily_pool[0])
     )
 
 
@@ -92,7 +101,7 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) ->
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价"
         + _day1_constant_info(game)
-        + "。\n\n"
+        + "\n全员实时总胜场：全员 0 胜。\n\n"
         + bid_format_hint(game)
     )
 
@@ -168,6 +177,10 @@ def bid_request(obs: Observation) -> str:
     )
     if obs.day == obs.game.max_days:
         status_line += "\n本局最后一天，结束后金币清零。"
+    status_line += "\n全员实时总胜场：" + "、".join(
+        f"{entry.player} {entry.total_wins} 胜" for entry in obs.standings
+    ) + "。"
+    status_line += _remaining_wins_info(obs.game, match_index, obs.day, obs.today_pool)
     if not obs.today_history:
         return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint(obs.game)}"
 
@@ -298,7 +311,7 @@ def next_match_plan_request(standings: list[StandingsEntry], game: GameSettings,
     return (
         f"截至当前的最新累计成绩：\n{render_standings(standings)}\n\n"
         f"请结合累计私有记忆，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价"
-        + _day1_constant_info(game)
+        + _day1_constant_info(game, match_index)
         + "。\n\n"
         + bid_format_hint(game)
     )

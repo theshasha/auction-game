@@ -45,7 +45,7 @@ models:
       provider: google
       model: gemini-3.8-flash
   glm_pro:
-    # 保留旧模型供切回使用，当前比赛席位由 MIMO 接替。
+    # GLM 姐妹已恢复参赛，具体席位由 players.yaml 配置。
     name: GLM姐姐
     model: glm-5.3
     provider: hub
