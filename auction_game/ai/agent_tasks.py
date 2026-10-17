@@ -114,7 +114,7 @@ class TaskRunner:
         if task in ("bid", "plan") and game is None:
             raise ValueError("出价及规划任务需要比赛参数")
         tool = OUTPUT_TOOLS.get(task)
-        prompt = prompts.with_output_requirement(prompt, tool.name if tool else None, task=task)
+        prompt = prompts.with_output_requirement(prompt, tool.name if tool else None)
         # SDK 的文本与工具校验路径可能分别计数；公开请求上限保证混合纠错也共用一次。
         return self.executor(make_agent(None, task), prompt, history, deps=AuctionDeps(game, coins),
                              usage_limits=UsageLimits(request_limit=2))

@@ -43,6 +43,7 @@ class TestSpeechFields:
             prompts.final_speech_request(standings, make_log(match_index=5)),
         ):
             assert "strategy" in text and "speech" in text
+            assert "strategy 仅自己可见" in text
             assert "只有 speech 会给其他玩家看" in text
             assert "不构成对你后续出价的任何约束" in text
 
@@ -52,6 +53,26 @@ class TestSpeechFields:
         assert "【乙】感言B" in text
         assert "只给观众看的总结发言" in text
         assert "不会给其他玩家看到" in text
+
+
+@pytest.mark.parametrize("task", ["plan", "bid", "speech", "memory", "summary"])
+def test_output_reminder_only_names_current_tool(task):
+    from auction_game.ai.agent_tasks import OUTPUT_TOOLS
+    tool = OUTPUT_TOOLS.get(task)
+    text = prompts.with_output_requirement("任务正文", tool.name if tool else None)
+    if tool:
+        assert text == f"任务正文\n\n当前输出要求：调用 `{tool.name}` 工具提交；不要在正文模拟工具调用。"
+    else:
+        assert text == "任务正文"
+
+
+def test_memory_body_keeps_task_boundaries_without_tool_instruction():
+    text = prompts.memory_request({"乙": "公开信号"})
+    assert "save_memory" not in text
+    for required in ("【乙】公开信号", "整体替换旧记忆", "下一局看不到历局原始对话",
+                     "保留仍有用的早期经验", "区分已观察事实与待验证猜测", "软目标",
+                     "不生成额外策略或公开发言"):
+        assert required in text
 
 class TestPlayoffNotice:
     """加赛预告只在正赛打完（或加赛后）且第一名仍并列时出现。"""
@@ -96,13 +117,14 @@ class TestPlanBidMerge:
 
     def test_bid_format_hint_covers_super_bid(self):
         text = prompts.bid_format_hint(TEST_GAME)
-        assert 'super_bid' in text
+        assert 'super_bid' not in text and 'strategy' not in text
         # 提交合法性约束（同值、合计余额——违反即整单作废）放模板防无谓非法提交；
         # 策略规则细节（命中判定、悬赏、不能获胜等）不在每日消息复述，
         # 由 system 的实时渲染规则兜底
         assert "使用超级出价时，两笔出价不得同值" in text
         assert "2 金币成本不得超过余额" in text
-        assert "super_bid 明确为 null" in text
+        assert f"0 到 {TEST_GAME.max_bid} 的整数" in text
+        assert "正常出价不得超过余额" in text
         assert "```json" not in text
 
     @pytest.mark.parametrize(
@@ -125,6 +147,6 @@ class TestPlanBidMerge:
             assert "局末发言" not in text and "累计私有记忆" in text
         assert "你的金币 11，本局已获胜场 0，今日奖池 2 个胜场，规则出价上限 9" in text
         assert '0 到 9 的整数' in text
-        assert 'strategy' in text
+        assert '请分析当前局势并决定今日出价' in text
         assert "加 3 金币成本" in text
         assert "```json" not in text

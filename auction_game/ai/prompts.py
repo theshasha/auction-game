@@ -16,32 +16,25 @@ from auction_game.game.rules import render_rules
 def bid_format_hint(game: GameSettings) -> str:
     """业务要求；输出格式由任务 schema 唯一声明。"""
     return (
-        "请在 strategy 中保留对当前局势的简要分析及策略，提交今日出价。"
+        "请分析当前局势并决定今日出价。"
         f"正常出价与超级出价须为 0 到 {game.max_bid} 的整数；正常出价不得超过余额。"
         f"使用超级出价时，两笔出价不得同值，正常出价加 {game.super_cost} 金币成本不得超过余额。"
-        "不使用超级出价时 super_bid 明确为 null。"
     )
 
 
 def speech_format_hint() -> str:
     """保持私有策略与公开信号的业务边界。"""
     return (
-        "请在 strategy 中保留私有发言策略，在 speech 中给出实际公开发言。只有 speech 会给其他玩家看。"
+        "只有 speech 会给其他玩家看，strategy 仅自己可见。"
         "注意：公开发言只是对其他玩家释放的信号，不构成对你后续出价的任何约束。"
     )
 
 
-def with_output_requirement(prompt: str, tool_name: str | None, *, task: str) -> str:
-    """任务组装时追加一次；工具名由 agent_tasks 的映射传入。"""
+def with_output_requirement(prompt: str, tool_name: str | None) -> str:
+    """统一追加工具提交提醒；字段格式交给 schema，工具名来自任务映射。"""
     if tool_name is None:
         return prompt
     requirement = f"当前输出要求：调用 `{tool_name}` 工具提交；不要在正文模拟工具调用。"
-    if task == "speech":
-        requirement += "私有策略填 strategy，公开发言填 speech。"
-    elif task == "memory":
-        requirement += "只填写非空 memory；这是私有累计笔记，不向其他玩家公开。"
-    else:
-        requirement += "super_bid 必填，使用不加引号的整数；不使用超级出价时填 JSON null。"
     return prompt + "\n\n" + requirement
 
 
@@ -299,7 +292,7 @@ def memory_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家的局末公开发言：\n"
         + "\n".join(f"【{name}】{text}" for name, text in others_speeches.items())
-        + "\n\n请用 save_memory 整理一份累计私有记忆，综合旧记忆、本局经历及公开发言。"
+        + "\n\n请整理一份累计私有记忆，综合旧记忆、本局经历及公开发言。"
         "新记忆会整体替换旧记忆；下一局看不到历局原始对话与原始公开发言。"
         "保留仍有用的早期经验，更新失效判断，区分已观察事实与待验证猜测。"
         "优先记下影响未来决策的对手规律、自身策略修正和有用的公开信号，避免逐日流水账。"

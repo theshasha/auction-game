@@ -21,7 +21,7 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     assert player.give_speech(prompt, "opening_speech") == speech
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "## 开局发言" in markdown and "## opening_speech" not in markdown
-    assert "### 输入原文\n\n" + with_output_requirement(prompt, "speech", task="speech") in markdown
+    assert "### 输入原文\n\n" + with_output_requirement(prompt, "speech") in markdown
     assert "<summary>" not in markdown and "<br>" not in markdown
     assert markdown.count(strategy) == markdown.count(speech) == 1
     assert "tool-return" not in markdown and "call-1" not in markdown
@@ -183,11 +183,11 @@ def test_tool_audit_does_not_clutter_readable_markdown():
 def test_bid_instructions_only_describe_canonical_types():
     from auction_game.ai.agent_tasks import BidOutput
 
-    texts = [with_output_requirement("出价", "bid", task="bid"),
-             BidOutput.model_json_schema()["properties"]["super_bid"]["description"]]
-    for text in texts:
-        assert "必填" in text and "JSON null" in text
-        assert all(fragment not in text for fragment in ('"null"', '"None"', "兼容", "类型示例"))
+    reminder = with_output_requirement("出价", "bid")
+    assert "super_bid" not in reminder and "JSON null" not in reminder
+    text = BidOutput.model_json_schema()["properties"]["super_bid"]["description"]
+    assert "必填" in text and "JSON null" in text
+    assert all(fragment not in text for fragment in ('"null"', '"None"', "兼容", "类型示例"))
 
 
 def test_unknown_failure_is_short_and_audit_stays_complete(tmp_path):
