@@ -37,6 +37,22 @@ def test_director_passes_game_to_both_plans(monkeypatch, tmp_path):
     assert len(plans) == 4
 
 
+@pytest.mark.parametrize("phase", ["opening_speech", "match_1_speech", "final_speech", "final_summary"])
+def test_director_orders_parallel_results_by_initial_players(monkeypatch, tmp_path, phase):
+    players = [ScriptedPlayer.constant(name, 0) for name in ("乙", "甲", "丙")]
+    director = ai_speech.AISpeechDirector(players, None, tmp_path, game=None)
+    monkeypatch.setattr(ai_speech, "run_parallel_round",
+                        lambda *args, **kwargs: {"丙": "发言丙", "甲": "发言甲", "乙": "发言乙"})
+
+    speeches = director._run_round({p: ("请发言", phase) for p in reversed(players)}, phase)
+
+    assert list(speeches.items()) == [("乙", "发言乙"), ("甲", "发言甲"), ("丙", "发言丙")]
+    assert list(director._others(speeches, "甲")) == ["乙", "丙"]
+    director._publish_speeches(phase, speeches)
+    public_log = director.speeches_log.read_text(encoding="utf-8")
+    assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
+
+
 def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     speech = '第一段说"6 真香"。\n\n第二段。' + "很" * 600
     runner = fake_task_runner([speech_reply(speech)])

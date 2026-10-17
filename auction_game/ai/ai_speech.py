@@ -50,7 +50,9 @@ class AISpeechDirector:
             )
             for player, req in requests.items()
         ]
-        return run_parallel_round(tasks, self.controller, label=phase_label)
+        results = run_parallel_round(tasks, self.controller, label=phase_label)
+        # 并发完成顺序不固定；展示及后续提示统一沿用配置中的初始玩家顺序。
+        return {player.name: results[player.name] for player in self.players if player in requests}
 
     @staticmethod
     def _others(speeches: dict[str, str], exclude: str) -> dict[str, str]:
