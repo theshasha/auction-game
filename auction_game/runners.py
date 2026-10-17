@@ -74,6 +74,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
     model_factory = model_factory or make_model_factory
     for pc in player_configs:
         try:
+            # 无模型覆盖时保留原有注入工厂接口；非空覆盖始终随实际执行模型传递。
             task_runners[pc["name"]] = task_runner_factory(model_factory(
                 provider=pc["provider"],
                 channel=config["llm"]["channels"][pc["provider"]],
@@ -82,6 +83,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
                 protocol=pc["protocol"],
                 max_tokens=pc["max_tokens"],
                 model_settings=pc["model_settings"],
+                **({"model_profile": pc["model_profile"]} if pc.get("model_profile") else {}),
             ), capture_requests=pc["name"] == record_player)
         except (MissingApiKeyError, ValueError) as exc:
             print(f"[配置错误] 玩家 {pc['name']}：{exc}")
@@ -102,9 +104,10 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             "predicted_win_rate": pc.get("predicted_win_rate", 0),
             "identity_model": pc["identity_model"],
             "execution_model": {"key": pc["model_key"], **{key: pc[key] for key in
-                                 EXECUTION_FIELDS},
-                                "model_profile": channel_model_profile(
-                                    config["llm"]["channels"][pc["provider"]], pc["protocol"]),
+                                 EXECUTION_FIELDS if key != "model_profile"},
+                                 "model_profile": channel_model_profile(
+                                     config["llm"]["channels"][pc["provider"]], pc["protocol"],
+                                     pc.get("model_profile")),
                                  "base_url": config["llm"]["channels"][pc["provider"]]["base_url"]},
         } for pc in player_configs],
     }

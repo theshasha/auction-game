@@ -590,9 +590,11 @@ class TestParallelRound:
             assert alpha.messages == alpha_snapshot
             assert bravo.messages[:len(bravo_prefix)] == bravo_prefix
             parts = [p for m in bravo.messages for p in m.parts]
-            assert not any(isinstance(p, ToolCallPart) for p in parts)
-            assert '"bid": 2' in bravo.messages[-1].parts[0].content
-            assert not any(isinstance(p, ToolReturnPart) for p in parts)
+            calls = [p for p in parts if isinstance(p, ToolCallPart)]
+            returns = [p for p in parts if isinstance(p, ToolReturnPart)]
+            assert len(calls) == len(returns) == 1
+            assert calls[0].args_as_dict()["bid"] == 2
+            assert calls[0].tool_call_id == returns[0].tool_call_id
 
     def test_step_mode_gates_once_and_runs_concurrently(self):
         announcements = []
@@ -685,6 +687,8 @@ class TestParallelRound:
             assert alpha.messages == alpha_snapshot
             assert bravo.messages == bravo_snapshot
             parts = [p for m in bravo.messages for p in m.parts]
-            assert not any(isinstance(p, ToolCallPart) for p in parts)
-            assert '"bid": 2' in bravo.messages[-1].parts[0].content
-            assert not any(isinstance(p, ToolReturnPart) for p in parts)
+            calls = [p for p in parts if isinstance(p, ToolCallPart)]
+            returns = [p for p in parts if isinstance(p, ToolReturnPart)]
+            assert len(calls) == len(returns) == 1
+            assert calls[0].args_as_dict()["bid"] == 2
+            assert calls[0].tool_call_id == returns[0].tool_call_id

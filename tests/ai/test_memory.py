@@ -23,6 +23,36 @@ def encoded(messages):
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_cleaned_history_preserves_phase_and_tool_pairs_without_mutating_audit(protocol):
+    from pydantic_ai.messages import (ModelRequest, ModelResponse, TextPart, ThinkingPart,
+                                     ToolCallPart, ToolReturnPart, UserPromptPart)
+    from auction_game.ai.ai_player import completed_history
+    raw = [ModelRequest(parts=[UserPromptPart("old task")]), ModelResponse(parts=[
+        ThinkingPart("secret", signature="old_signature_value", provider_name="openai"),
+        TextPart("working", id="msg_old", provider_name="openai",
+                 provider_details={"phase": "commentary", "other": "discard"}),
+        ToolCallPart("bid", json.dumps(bid_reply(2)), tool_call_id="call_old|fc_old",
+                     id="fc_old", provider_name="openai"),
+    ], provider_name="openai", provider_response_id="resp_old"),
+        ModelRequest(parts=[ToolReturnPart("bid", "success", tool_call_id="call_old|fc_old")])]
+    before = encoded(raw)
+    cleaned = completed_history(raw)
+    assert encoded(raw) == before
+    assert cleaned[1].parts[0].provider_details == {"phase": "commentary"}
+    h = Harness(protocol, [reply()])
+    if protocol == "responses":
+        h.factory = replace(h.factory, model_profile={"openai_supports_phase": True,
+                             "openai_supports_encrypted_reasoning_content": True})
+    TaskRunner(h.factory)("bid", "new task", cleaned, game=make_ai_obs().game, coins=6)
+    wire = json.dumps(h.requests[0][1])
+    for marker in ("secret", "old_signature_value", "msg_old", "fc_old", "resp_old", "discard"):
+        assert marker not in wire
+    assert wire.count("call_old") == 2
+    if protocol == "responses":
+        assert '"phase": "commentary"' in wire
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("auto", [False, True])
 def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_path):
     thinking = "OLD_PRIVATE_THINKING" * 1000
@@ -59,9 +89,13 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         wire = json.dumps(body, ensure_ascii=False)
         assert "OLD_PRIVATE_THINKING" not in wire
         for marker in ("encrypted_old_reasoning", "signed_old_reasoning", "redacted_old_reasoning",
-                       "rs_old", "resp_1", "previous_response_id", "call_1", "call_2"):
+                       "rs_old", "resp_1", "previous_response_id", "fc_1", "fc_2"):
             assert marker not in wire
-        assert "original task" in wire and "我的私有分析" in wire
+        assert "original task" in wire
+        from pydantic_ai.messages import ToolCallPart
+        assert any(p.args_as_dict().get("strategy") == "我的私有分析"
+                   for m in player.messages for p in m.parts if isinstance(p, ToolCallPart))
+        assert "call_1" in wire and "call_2" in wire
         assert len(wire) < len(thinking)  # 旧长推理不随独立任务累积
 
 

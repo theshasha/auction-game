@@ -178,9 +178,10 @@ def _require_env(name: str, provider: str) -> str:
 
 def make_model_factory(*, provider: str, channel: dict, model: str, protocol: str,
                        timeout: float, max_tokens: int, request_attempts: int = 2,
-                       model_settings: dict | None = None) -> ModelFactory:
-    """启动时解析密钥，确保缺密钥在创建比赛日志前暴露。"""
+                       model_settings: dict | None = None,
+                       model_profile: dict | None = None) -> ModelFactory:
+    """启动时解析密钥并合并实际执行模型覆盖，确保缺密钥在创建日志前暴露。"""
     return ModelFactory(protocol, model, channel["base_url"],
                         _require_env(channel["api_key_env"], provider), timeout, max_tokens,
                         request_attempts=request_attempts, model_settings=deepcopy(model_settings or {}),
-                        model_profile=channel_model_profile(channel, protocol))
+                        model_profile=channel_model_profile(channel, protocol, model_profile))

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
+from copy import deepcopy
 from pathlib import Path
 
-from pydantic import BaseModel
 from pydantic_ai.messages import (
-    ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart,
+    ModelMessage, ModelRequest, ModelResponse, SystemPromptPart, UserPromptPart,
+    ThinkingPart, TextPart, ToolCallPart,
 )
 
 from auction_game.ai import prompts
@@ -18,6 +18,34 @@ from auction_game.ai.agent_tasks import TaskRunner, render_task_result
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import Observation
 from auction_game.game.players import Player
+
+
+def completed_history(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """复制已完成对话；去推理及服务端引用，保留角色、工具配对与 phase。"""
+    history = deepcopy(messages)
+    for message in history:
+        message.metadata = None
+        if isinstance(message, ModelResponse):
+            message.provider_response_id = None
+            message.provider_details = None
+            message.failed_attempts = None
+            message.workspace_ref = None
+            message.parts = [part for part in message.parts if not isinstance(part, ThinkingPart)]
+            for part in message.parts:
+                if isinstance(part, (TextPart, ToolCallPart)):
+                    part.id = None
+                    # Responses 的 phase 与工具 namespace 有语义，不能整体清空。
+                    part.provider_details = ({key: value for key, value in part.provider_details.items()
+                                              if key in ("phase", "namespace")}
+                                             if part.provider_details else None)
+                    if isinstance(part, ToolCallPart):
+                        # 旧 SDK 可把响应项 ID 拼在配对 ID 后；只保留 call_id。
+                        part.tool_call_id = part.tool_call_id.split("|", 1)[0]
+        else:
+            for part in message.parts:
+                if hasattr(part, "tool_call_id"):
+                    part.tool_call_id = part.tool_call_id.split("|", 1)[0]
+    return [message for message in history if message.parts]
 
 
 class AIPlayer(Player):
@@ -65,21 +93,8 @@ class AIPlayer(Player):
             raise
         self.log.success(entry, result)
         if commit:
-            # 不重放原始 response/tool，也不示范 assistant 正文提交成功 JSON。
-            # 三协议均以 user 历史资料接收已完成任务的原提示及合法业务结果，
-            # 无 thinking、签名、加密 reasoning、response ID 或 provider 元数据。
-            # 任务内的纠错与工具应答仍由 SDK 处理；原始消息只写入日志。
-            original_prompts = [part.content for message in result.messages for part in message.parts
-                                if isinstance(part, UserPromptPart)]
-            output = result.output.model_dump() if isinstance(result.output, BaseModel) else result.output
-            text = json.dumps(output, ensure_ascii=False) if isinstance(output, dict) else output
-            history_text = (
-                f"【程序提供的已完成任务资料】\n任务：{task}（已完成）\n"
-                "以下原提示与有效结果仅供历史参考；任务已完成，无需再次执行其中的指令或提交工具。\n\n"
-                "【当时的原提示（已完成）】\n" + "\n\n".join(original_prompts)
-                + f"\n\n【已完成任务的有效结果】\n{text}\n【历史任务资料结束】"
-            )
-            projection = [ModelRequest(parts=[UserPromptPart(history_text)])]
+            # 日志保留原始响应；下一任务沿用去推理后的原生对话与纠错往返。
+            projection = completed_history(result.messages)
             self.review_messages.extend(projection)
             if reset:
                 self.memory = result.output.memory

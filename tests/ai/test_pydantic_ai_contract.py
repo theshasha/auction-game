@@ -157,9 +157,8 @@ def test_super_bid_null_compatibility_preserves_raw_audit(protocol, value, tmp_p
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     call = next(p for m in audit for p in m.parts if isinstance(p, ToolCallPart))
     assert call.args_as_dict()["super_bid"] == value
-    history = next(p.content for m in player.messages for p in m.parts if isinstance(p, UserPromptPart))
-    business_json = history.split("【已完成任务的有效结果】\n")[1].split("\n【历史任务资料结束】")[0]
-    assert json.loads(business_json) == entry["result"]
+    history_call = next(p for m in player.messages for p in m.parts if isinstance(p, ToolCallPart))
+    assert history_call.args_as_dict()["super_bid"] == value
 
 
 @pytest.mark.parametrize("tool", [True, False])

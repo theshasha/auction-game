@@ -115,20 +115,18 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
             actual = matches[match_index - 1]["match"]["days"][0]["bids"][0]
             assert (entry["result"]["bid"], entry["result"]["super_bid"]) == (actual["bid"], None)
         if entry["phase"] == "final_summary":
-            # 总结以 user 历史资料看到此前任务的原提示与有效结果，无 assistant JSON 示范。
+            # 总结看到全场原生对话和工具回执，推理仅留原始审计。
             review = json.dumps(record["messages"], ensure_ascii=False)
             history = [p["content"] for m in record["messages"] for p in m["parts"]
-                       if p["part_kind"] == "user-prompt" and "程序提供的已完成任务资料" in p["content"]]
-            assert len(history) == len(entries) - 1
+                       if p["part_kind"] == "user-prompt"]
             for prior in entries[:-1]:
                 for message in prior["messages"]:
                     for part in message["parts"]:
                         if part["part_kind"] == "user-prompt":
                             assert any(part["content"] in text for text in history)
-            assert all("当时的原提示（已完成）" in text and "无需再次执行其中的指令或提交工具" in text
-                       for text in history)
-            assert all(m["kind"] == "request" for m in record["messages"])
-            assert '"part_kind": "thinking"' not in review and '"part_kind": "tool-call"' not in review
+            assert "程序提供的已完成任务资料" not in review
+            assert any(m["kind"] == "response" for m in record["messages"])
+            assert '"part_kind": "thinking"' not in review and '"part_kind": "tool-call"' in review
     # 非选中玩家正常日志不保存重复请求。
     for number, name in enumerate(names[1:], 2):
         assert all("requests" not in json.loads(line) for line in
@@ -254,6 +252,34 @@ def test_current_game_configuration_smoke(tmp_path, demo_configuration):
     assert all(payload["match"]["game"] == game.to_dict() for payload in matches)
     assert replay.exists()
     assert all(factory.opened == factory.closed for factory in factories)
+
+
+@pytest.mark.parametrize("test_model", [False, True])
+def test_offline_model_profile_follows_actual_execution(
+        tmp_path, monkeypatch, config_files, demo_configuration, test_model):
+    """身份带强制覆盖，替身关闭；快照与离线 SDK 定义必须使用同一执行配置。"""
+    import yaml
+    model_path = config_files[2]
+    models = yaml.safe_load(model_path.read_text(encoding="utf-8"))
+    models["models"]["first"]["model_profile"] = {"supports_forced_tool_choice": True}
+    models["models"]["substitute"]["model_profile"] = {"supports_forced_tool_choice": False}
+    model_path.write_text(yaml.safe_dump(models), encoding="utf-8")
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: GameSettings(7, 0, (1,), 7, 2, 3, 1, 0))
+    run_dir = tmp_path / "profiles"
+    _, factories = generate_demo(run_dir, test_model=test_model)
+    paths = RunPaths(run_dir)
+    snapshot = paths.read_config()
+    assert snapshot["players"][0]["identity_model"]["model_profile"] == {"supports_forced_tool_choice": True}
+    assert factories[0].model_profile == {"supports_forced_tool_choice": not test_model}
+    definitions = json.loads(paths.tool_definitions.read_text(encoding="utf-8"))
+    refs = [json.loads(line) for line in paths.tool_requests.read_text(encoding="utf-8").splitlines()]
+    for number, (factory, saved) in enumerate(zip(factories, snapshot["players"]), 1):
+        assert saved["execution_model"]["model_profile"] == factory.model_profile
+        choices = [definitions[ref["definition_id"]]["definition"]["tool_choice"] for ref in refs
+                   if ref["number"] == number and definitions[ref["definition_id"]]["definition"].get("tools")]
+        expected = ("auto" if test_model else "required") if number == 1 else (
+            "auto" if test_model else {"type": "any"})
+        assert choices and all(choice == expected for choice in choices)
 
 
 def test_offline_reuses_one_game_and_syncs_once_before_directory(tmp_path, monkeypatch, demo_configuration):

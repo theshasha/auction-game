@@ -61,11 +61,13 @@ python main.py --ai
 
 每日出价提示列出日期、奖池、余额与胜场，第 2 天起同时提供昨日报价和全员余额。余额已含当天工资；使用超级时的费用约束单独说明，不额外计算出价组合。最后一天提醒本局结束后金币清零。
 
-游戏请求保留本局提示与有效业务结果；旧 thinking 留在原始审计，独立任务之间不再回传。对手只看到公开发言，私有策略与记忆仅供本人使用。
+游戏请求保留本局原生对话：user 提示、assistant 正文与工具调用、工具回执及纠错往返。每次成功写日志后，只追加去掉 thinking 的副本，不再包装成 user JSON 资料。跨任务清除旧响应引用，保留工具配对及 assistant phase；任务内部纠错由 SDK 保留所需推理状态。旧 thinking 留在原始审计。对手只看到公开发言，私有策略与记忆仅供本人使用。私人 Markdown 的“输入原文”是本次新增输入，先前历史见前序任务；完整请求可用现有请求捕获功能查看。
 
 每个需继续的局末先公布全部发言，再为每位玩家新增一次 `save_memory` 请求，整合旧笔记、本局经历及局末发言。一页笔记是软目标，无硬字数限制或截断。日志成功后清除旧游戏对话；下一局带上规则身份、最新记忆、程序提供的成绩及新局信息，再规划并缓存首日出价。最后一局跳过记忆，加赛同样按是否继续处理。
 
 观众总结单独读取全场去 thinking 回顾，不回喂玩家，终局请求仍可能较长。实际记忆质量及费用需结合真实测试赛的 usage 观察。
+
+2026-10-18 独立连通验证：Luna Responses 共 5 次成功请求，覆盖连续工具调用、切换记忆工具及记忆后重置；Luna Chat 两次探测均返回渠道 503，随后停止。改用 Sol Responses 验证“出价→记忆→新局出价”，3 次请求全部成功。成功响应均未返回 thinking 或签名；签名清理及 phase 保留已由三协议离线 SDK 回归覆盖，真实带签名响应的清理仍待验证。探测未改变生产协议配置。
 
 ## 分析统计
 
@@ -117,7 +119,9 @@ python -m auction_game.reporting.replay logs/<场次目录> 角色名 --debug
 
 `models.yaml` 的 `provider` 引用渠道，`protocol` 必填 `chat` / `responses` / `anthropic`；渠道名不决定协议。`chat` 使用 OpenAI Chat Completions。OpenAI URL 保留 `/v1`，Anthropic URL 由 SDK 追加 `/v1/messages`。测试替身可以省略角色名，参赛身份必须有名字。
 
-渠道可分别设置 `chat_profile.supports_forced_tool_choice: false`、`responses_profile.supports_forced_tool_choice: false`，使对应协议使用 `tool_choice: auto`；工具定义与严格输出校验保留。
+渠道 Chat 与 Responses 默认使用 `tool_choice: auto`，仅 Kimi 在模型目录中覆盖开启强制工具提交；按实际执行模型选择，测试替身不会继承角色身份的设置。工具定义与严格输出校验始终保留。配置仅在启动时读取。
+
+2026-10-18 对六个参赛模型各执行一次并发探测：Kimi、两个 Gemini 通过；两个 GPT Responses 返回 `Missing required parameter: 'tool_choice.type'.`，DeepSeek 返回 thinking 模式不支持该 tool_choice。最终仅对 Kimi 启用，其他模型沿用 auto。
 
 ### 能力快照与推理档位
 

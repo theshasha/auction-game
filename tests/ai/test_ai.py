@@ -27,7 +27,7 @@ def test_invalid_output_uses_one_shared_correction(invalid):
     assert player.decide_bid(make_ai_obs(coins=4)) == (2, None)
     assert len(runner.calls) == 2
     assert any(isinstance(p, RetryPromptPart) for m in runner.calls[-1] for p in m.parts)
-    assert not any(isinstance(p, RetryPromptPart) for m in player.messages for p in m.parts)
+    assert any(isinstance(p, RetryPromptPart) for m in player.messages for p in m.parts)
 
 
 def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch):
@@ -95,7 +95,9 @@ def test_business_history_and_original_audit_survive_rollback(tmp_path):
     player.rollback(checkpoint)
     assert player.messages == middle
     parts = [p for m in player.messages for p in m.parts]
-    assert not any(isinstance(p, (ToolCallPart, ToolReturnPart)) for p in parts)
+    assert [p.tool_call_id for p in parts if isinstance(p, ToolCallPart)] == [
+        p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
+    assert any(isinstance(p, ToolCallPart) for p in parts)
     entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
     assert entries[0]["result"] == bid_reply(1)
     audit = ModelMessagesTypeAdapter.validate_python(entries[0]["messages"])

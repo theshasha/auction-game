@@ -10,7 +10,8 @@ llm:
     hub:
       base_url: https://hub.oaifree.com/v1
       api_key_env: HUB_API_KEY
-      # Hub 工具选择使用 auto；保留工具及 Agent 的严格输出校验。
+      # 渠道默认使用 auto；仅已确认兼容的模型在 models.yaml 覆盖为强制工具提交。
+      # 严格输出校验始终保留，实际执行模型的 model_profile 优先于渠道默认。
       chat_profile:
         supports_forced_tool_choice: false
       responses_profile:

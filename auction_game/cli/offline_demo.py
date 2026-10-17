@@ -161,7 +161,7 @@ def generate_demo(output: Path | None = None, player: str | None = None, *, test
         item = DemoFactory(names[index], index, game,
                            {**kwargs["model_settings"], "timeout": kwargs["timeout"],
                              "max_tokens": kwargs["max_tokens"]},
-                           channel_model_profile(kwargs["channel"], kwargs["protocol"]),
+                           channel_model_profile(kwargs["channel"], kwargs["protocol"], kwargs.get("model_profile")),
                            protocol=kwargs["protocol"], model=kwargs["model"],
                            base_url=kwargs["channel"]["base_url"])
         factories.append(item)

@@ -68,7 +68,7 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     if succeeds:
         assert player.decide_bid(make_ai_obs()) == (2, None)
         parts = [p for m in player.messages for p in m.parts]
-        assert not any(isinstance(p, ToolCallPart) for p in parts)
+        assert sum(isinstance(p, ToolCallPart) for p in parts) == 2
     else:
         with pytest.raises(OutputFailedError):
             player.decide_bid(make_ai_obs())
@@ -145,7 +145,7 @@ def test_non_transport_model_api_error_is_not_retryable():
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_player_task_chain_replays_business_results_without_tool_ids_on_wire(protocol, tmp_path):
+def test_player_task_chain_replays_native_tool_pairs_on_wire(protocol, tmp_path):
     long_summary = "观众总结" * 200
     h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}), reply(),
                            reply(tool=False, text=long_summary)])
@@ -186,15 +186,11 @@ def test_player_task_chain_replays_business_results_without_tool_ids_on_wire(pro
             parts = [p for m in request_body["messages"] for p in m["content"] if isinstance(p, dict)]
             calls = [(p["id"], p["name"]) for p in parts if p["type"] == "tool_use"]
             returns = [p["tool_use_id"] for p in parts if p["type"] == "tool_result"]
-        assert calls == returns == []
-        assert encoded_body.count("已完成任务的有效结果") == index
-        assert encoded_body.count("程序提供的已完成任务资料") == index
-        assert encoded_body.count("当时的原提示（已完成）") == index
-        assert encoded_body.count("无需再次执行其中的指令或提交工具") == index
-        assert not any(m["role"] == "assistant" for m in messages)
-        historical = [m for m in messages if "程序提供的已完成任务资料" in json.dumps(m, ensure_ascii=False)]
-        assert bool(historical) == (index > 0)
-        assert all(m["role"] == "user" for m in historical)
+        assert [call_id for call_id, _ in calls] == returns
+        assert [name for _, name in calls] == names[:index]
+        assert "程序提供的已完成任务资料" not in encoded_body
+        if protocol != "responses":
+            assert any(m["role"] == "assistant" for m in messages) == (index > 0)
     assert body.index("plan\\n") < body.index("当前是第 1 局第 2 天") < body.index("speak\\n")
     assert "public" in body
     parts = [p for m in before for p in m.parts]
@@ -235,11 +231,13 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     assert request.extensions["timeout"]["read"] == 17 and h.closes == 1
 
 
-@pytest.mark.parametrize("provider,protocol,choice", [
-    ("hub", "responses", "auto"), ("hub", "chat", "required"),
-    ("other", "responses", "required"),
+@pytest.mark.parametrize("provider,protocol,override,choice", [
+    ("hub", "responses", {}, "auto"), ("hub", "chat", {}, "auto"),
+    ("hub", "chat", {"supports_forced_tool_choice": True}, "required"),
+    ("hub", "responses", {"supports_forced_tool_choice": True}, "required"),
+    ("other", "responses", {}, "required"),
 ])
-def test_channel_profile_only_changes_configured_responses(provider, protocol, choice, monkeypatch):
+def test_model_profile_overrides_channel_on_wire_and_capture(provider, protocol, override, choice, monkeypatch):
     import asyncio
     from auction_game.ai import llm_client
     from auction_game.reporting.replay import capture_protocol_definition
@@ -249,12 +247,14 @@ def test_channel_profile_only_changes_configured_responses(provider, protocol, c
         monkeypatch.setattr(llm_client.OpenAIProvider, "model_profile", lambda self, model_name: {
             "context_window": 1000, "openai_supports_encrypted_reasoning_content": True})
     channel = deepcopy(CHANNELS["hub"])
+    channel["chat_profile"] = {"supports_forced_tool_choice": False}
     if provider == "other":
         channel.pop("responses_profile")
     h = Harness(protocol, [reply()])
     factory = llm_client.make_model_factory(
         provider=provider, channel=channel, model=h.factory.model, protocol=protocol,
-        timeout=3, max_tokens=123, model_settings={"openai_reasoning_effort": "high"})
+        timeout=3, max_tokens=123, model_settings={"openai_reasoning_effort": "high"},
+        model_profile=override)
     factory = replace(factory, transport=h.factory.transport)
     result = TaskRunner(factory, capture_requests=True)("bid", "today", [], game=TEST_GAME, coins=6)
     assert result.output.bid == 2

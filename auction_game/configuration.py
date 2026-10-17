@@ -14,7 +14,7 @@ from auction_game.game.game_rules import GameSettings
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
 from auction_game.paths import ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, MODELS_PATH, GAME_PATH, CAPABILITIES_PATH
 PROTOCOLS = ("chat", "responses", "anthropic")
-EXECUTION_FIELDS = ("model", "provider", "protocol", "max_tokens", "model_settings", "capabilities")
+EXECUTION_FIELDS = ("model", "provider", "protocol", "max_tokens", "model_settings", "model_profile", "capabilities")
 
 
 class ConfigurationError(ValueError):
@@ -113,9 +113,11 @@ def load_configuration(
     return config, players
 
 
-def channel_model_profile(channel: dict, protocol: str) -> dict:
-    """按协议选择渠道兼容覆盖；与公开模型能力快照分开保存。"""
-    return deepcopy(channel.get(f"{protocol}_profile", {})) if protocol in ("chat", "responses") else {}
+def channel_model_profile(channel: dict, protocol: str, model_profile: dict | None = None) -> dict:
+    """先取协议的渠道默认，再叠加实际执行模型的覆盖；不修改公共能力快照。"""
+    if protocol not in ("chat", "responses"):
+        return {}
+    return deepcopy({**channel.get(f"{protocol}_profile", {}), **(model_profile or {})})
 
 
 def load_game_settings(path: str | Path = GAME_PATH) -> GameSettings:
@@ -145,6 +147,12 @@ def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=T
                 raise ConfigurationError(f"{path}：{field}.{prop} 必须是非空字符串")
         if model.get("protocol") not in PROTOCOLS:
             raise ConfigurationError(f"{path}：{field}.protocol 必须是 chat / responses / anthropic")
+        profile = model.setdefault("model_profile", {})
+        if (not isinstance(profile, dict) or set(profile) - {"supports_forced_tool_choice"}
+                or any(type(value) is not bool for value in profile.values())):
+            raise ConfigurationError(
+                f"{path}：{field}.model_profile 只支持布尔 supports_forced_tool_choice"
+            )
         if "reasoning_effort" in model:
             if (model["protocol"] not in ("chat", "responses")
                     or model["reasoning_effort"] not in ("low", "medium", "high")):

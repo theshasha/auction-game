@@ -122,6 +122,9 @@ models:
     model: kimi-k3
     provider: hub
     protocol: chat
+    # 已确认支持强制工具提交；测试替身按实际执行模型决定是否采用此覆盖。
+    model_profile:
+      supports_forced_tool_choice: true
     # 官方来源未列 medium，推理档位沿用渠道默认。
     models_dev:
       provider: moonshotai

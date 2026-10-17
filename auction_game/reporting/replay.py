@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import threading
 from pathlib import Path
 from importlib.metadata import version
 
@@ -20,6 +21,10 @@ from auction_game.reporting.run_paths import RunPaths
 from auction_game.reporting.request_records import load_requests, digest
 from auction_game.reporting.run_output import write_readme
 from auction_game.reporting.tool_records import protocol_tools, tool_task
+
+
+# SDK 的请求许可是进程全局变量，离线并发捕获必须串行修改并恢复。
+_capture_lock = threading.Lock()
 
 
 def _json(value):
@@ -46,14 +51,19 @@ async def capture_protocol_definition(factory, record):
                            model_profile=factory.model_profile)
     messages = ModelMessagesTypeAdapter.validate_python(record["messages"])
     parameters = TypeAdapter(ModelRequestParameters).validate_python(record["parameters"])
-    with override_allow_model_requests(True), tool_task(None, None, None, None):
-        async with offline.open() as model:
-            try:
-                async with model.request_stream(messages, record["settings"], parameters):
-                    raise RuntimeError("离线捕获应在模拟传输边界结束")
-            except ModelHTTPError as exc:
-                if exc.status_code != 400 or len(bodies) != 1:
-                    raise
+    while not _capture_lock.acquire(blocking=False):
+        await asyncio.sleep(0.001)
+    try:
+        with override_allow_model_requests(True), tool_task(None, None, None, None):
+            async with offline.open() as model:
+                try:
+                    async with model.request_stream(messages, record["settings"], parameters):
+                        raise RuntimeError("离线捕获应在模拟传输边界结束")
+                except ModelHTTPError as exc:
+                    if exc.status_code != 400 or len(bodies) != 1:
+                        raise
+    finally:
+        _capture_lock.release()
     return {"source": "offline_sdk_mock_transport", "protocol": factory.protocol,
              "model": factory.model, "model_profile": factory.model_profile,
              "versions": {name: version(name) for name in ("pydantic-ai-slim", "openai", "anthropic")},
@@ -167,7 +177,7 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
         if phase == "final_speech":
             lines.append("\n> 跳转：省略第二局其余日常出价及中间各局，直接到实际最后一局结束。")
         has_history = any(message["kind"] == "response" for message in entry["requests"][0]["messages"])
-        history = ("沿用系统规则与人设，以及本次请求携带的任务提示与有效结果；已完成任务的内部 thinking 只保存在日志中。"
+        history = ("沿用系统规则与人设，以及此前原生对话、工具调用和纠错往返；已完成任务的内部 thinking 只保存在日志中。"
                    if has_history else "沿用系统规则与人设；跨局重置后仅保留最新累计记忆，成绩由本次提示提供。")
         purpose = {"speech": "根据当前比赛阶段生成私有策略与公开发言。", "plan": "读取本局信息，规划并给出首日出价。",
                     "bid": "读取昨日结果与当前余额，生成当天出价。", "memory": "读取全部已公布局末发言，整理累计私有记忆。",
