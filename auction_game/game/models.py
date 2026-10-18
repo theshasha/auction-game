@@ -17,7 +17,7 @@ class BidRecord:
 
     player: str
     raw_bid: Any          # 玩家提交的原始值，用于审计非法出价
-    bid: int              # 校验后的有效出价（整单口径：任何非法提交整单强制为正常出价 0）
+    bid: int              # 校验后的出价；提交不符合规则时，整次提交改为正常出价 0
     status: str = "ok"    # "ok" | "illegal"（超级出价只可能为 "ok"，非法则在收集层拦截重试）
     is_super: bool = False
 
@@ -38,7 +38,7 @@ class DayResult:
     # 当天撞车价位的具体数值（升序；只含正常出价被扣款的价位：
     # 正常出价互撞 ≥2 笔 + 被超级出价命中（≥1 笔正常出价）的数值）
     collision_values: list[int] = field(default_factory=list)
-    is_void: bool = False            # 是否流局（奖池并入次日；末日流局则作废）
+    is_void: bool = False            # 是否流局（奖池并入次日；本局最后一天流局则作废）
 
     def public_view(self) -> dict:
         """规则四.1：第 2 天起每天开始时公布昨日完整出价明细（全场玩家的

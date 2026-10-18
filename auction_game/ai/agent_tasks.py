@@ -47,14 +47,14 @@ class SpeechOutput(BaseModel):
 
 class MemoryOutput(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
-    memory: str = Field(min_length=1, description="累计私有笔记，整体替换旧记忆")
+    memory: str = Field(min_length=1, description="只有自己能看的完整笔记；本次内容会替换旧记忆")
 
 
 # 唯一任务到输出工具映射；自然语言提醒也从此取得当前名称。
 OUTPUT_TOOLS = {
     "bid": ToolOutput(BidOutput, name="bid", description="提交今日出价"),
     "speech": ToolOutput(SpeechOutput, name="speech", description="提交公开发言"),
-    "memory": ToolOutput(MemoryOutput, name="save_memory", description="保存累计私有记忆"),
+    "memory": ToolOutput(MemoryOutput, name="save_memory", description="保存供下一局使用的完整私人笔记"),
 }
 OUTPUT_TOOLS["plan"] = OUTPUT_TOOLS["bid"]
 

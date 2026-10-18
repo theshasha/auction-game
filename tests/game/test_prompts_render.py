@@ -21,12 +21,18 @@ class TestRenderMatchLog:
         text = prompts.render_match_log(log)
         lines = text.splitlines()
 
-        assert lines[0] == "| 天 | 奖池（分） | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分（分） |"
-        assert lines[2] == "| 1 | 1 | 5（获胜） | 4（退款） | 3（退款） | 2（退款） | 1（退款） | 0（退款） | 甲 以 5 获胜 | — | 甲 1 |"
-        assert lines[3] == "| 2 | 1 | 3（撞车） | 3（撞车） | 2（撞车） | 2（撞车） | 2（撞车） | 0（获胜） | 己 以 0 获胜 | 2、3 | 己 1 |"
+        assert lines[0] == "奖池和得分的单位为分，正常出价的单位为金币。"
+        assert lines[1] == ""
+        assert lines[2] == "| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分 |"
+        assert lines[4] == "| 1 | 1 | 5（获胜） | 4（退款） | 3（退款） | 2（退款） | 1（退款） | 0（退款） | 甲 以 5 金币获胜 | — | 甲 1 |"
+        assert lines[5] == "| 2 | 1 | 3（撞车） | 3（撞车） | 2（撞车） | 2（撞车） | 2（撞车） | 0（获胜） | 己 以 0 金币获胜 | 2、3 | 己 1 |"
         assert "本局得分：甲 1 分、乙 0 分、丙 0 分、丁 0 分、戊 0 分、己 1 分" in text
         assert "本局拍卖分：甲 1 分、乙 0 分、丙 0 分、丁 0 分、戊 0 分、己 1 分" in text
         assert text.count("当日得分仅列非零玩家，未列者为 0 分。") == 1
+        assert lines[6:9] == ["", "当日得分仅列非零玩家，未列者为 0 分。", ""]
+        assert lines[10] == ""
+        assert lines[9].startswith("本局得分：")
+        assert lines[11].startswith("本局拍卖分：")
 
     def test_super_hit_and_miss_shown_in_cells(self):
         # 超级出价只展示引擎命中结果，不重复固定成本及悬赏。
@@ -37,11 +43,15 @@ class TestRenderMatchLog:
         ], auction_scores=dict(zip(NAMES, [0, 0, 2, 0, 0, 0])),
             scores=dict(zip(NAMES, [0, 2, 2, 0, 0, 0])))
         text = prompts.render_match_log(log)
-        assert "6（撞车） | 4（退款）+超6（命中） | 5（获胜）" in text
-        assert "3（撞车）+超6（落空） | 4（退款）" in text
+        assert "6（撞车） | 4（退款）；超级出价 6（命中） | 5（获胜）" in text
+        assert "3（撞车）；超级出价 6（落空） | 4（退款）" in text
         assert "| 乙 2、丙 1 |" in text
         assert "本局得分：甲 0 分、乙 2 分、丙 2 分" in text
-        assert "金币" not in text
+        rows = [line for line in text.splitlines() if line.startswith(("| 1 |", "| 2 |"))]
+        for row in rows:
+            player_cells = row.strip("|").split("|")[2:2 + len(NAMES)]
+            assert all("金币" not in cell for cell in player_cells)
+        assert "成本" not in text and "悬赏" not in text
 
     def test_empty_log(self):
         log = make_log(days=[])
@@ -78,7 +88,7 @@ class TestRenderMatchLog:
         text = prompts.render_match_log(log)
         void_scores = f"甲 {hit_score}、乙 {hit_score}" if hit_score else "—"
         assert f"| 流局 | 1、2 | {void_scores} |" in text
-        assert f"| 甲 以 5 获胜 | 4 | 甲 {expected} |" in text
+        assert f"| 甲 以 5 金币获胜 | 4 | 甲 {expected} |" in text
         assert text.count("当日得分仅列非零玩家，未列者为 0 分。") == 1
         assert f"本局得分：甲 {expected + hit_score} 分、乙 {hit_score} 分" in text
 
@@ -105,7 +115,7 @@ class TestRenderMatchLog:
         monkeypatch.setattr(prompts, "calculate_day_scores", day_scores)
         text = prompts.render_match_log(log)
         assert calls == [(NAMES, {"winner": "甲", "auction_score": 1, "super_uses": [], "game": TEST_GAME})]
-        assert text.splitlines()[2].endswith("| — |")
+        assert text.splitlines()[4].endswith("| — |")
         assert "本局得分：甲 4 分" in text
 
 
@@ -116,7 +126,7 @@ class TestRenderStandings:
         text = prompts.render_standings(standings)
         lines = text.splitlines()
 
-        assert lines[0] == "| 排名 | 玩家 | 总分（分） | 第1局（分） | 第2局（分） | 拍卖分（分） |"
+        assert lines[0] == "| 排名 | 玩家 | 总分 | 第1局 | 第2局 | 拍卖分 |"
         assert lines[2] == "| 1 | 甲 | 14 | 8 | 6 | 3 |"
         assert lines[4] == "| 3 | 丙 | 2 | 2 | 0 | 0 |"
 
@@ -135,10 +145,10 @@ class TestRenderStandings:
     def test_match_columns_follow_score_history(self):
         standings = make_standings({"甲": [2]}, scores_history={"甲": [4, 6]}, total_scores={"甲": 13})
         text = prompts.render_standings(standings)
-        assert "第2局（分）" in text
+        assert "| 第2局 |" in text
         assert "| 1 | 甲 | 13 | 4 | 6 | 2 |" in text
 
     def test_no_match_columns_when_history_empty(self):
         standings = make_standings({"甲": [], "乙": []})
         text = prompts.render_standings(standings)
-        assert text.splitlines()[0] == "| 排名 | 玩家 | 总分（分） | 拍卖分（分） |"
+        assert text.splitlines()[0] == "| 排名 | 玩家 | 总分 | 拍卖分 |"

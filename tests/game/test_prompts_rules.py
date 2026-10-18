@@ -27,8 +27,8 @@ class TestSettlementFacts:
 
     def test_memory_prompt_covers_cumulative_notes_and_other_speeches(self):
         text = prompts.memory_request({"乙": "他人发言"})
-        assert "其他玩家的局末公开发言" in text and "【乙】他人发言" in text
-        assert "整体替换" in text and "旧记忆" in text and "软目标" in text
+        assert "其他玩家在本局结束后的公开发言" in text and "【乙】他人发言" in text
+        assert "完整替换旧记忆" in text and "篇幅可以根据有用信息的多少调整" in text
         assert "规则与最新成绩" in text and "无需抄写" in text
 
 
@@ -61,19 +61,19 @@ class TestRulesText:
         assert "并入次日奖池" in text
         assert "每局开始时每人发放 7 枚金币" in text
         assert "第 2 天起每天开始时每人发放 3 枚金币" in text
-        assert "金币跨局清零" in text
+        assert "本局结束后金币清零，下一局重新发放" in text
         assert "0~7 的整数" in text
         assert "第 6 天未拍出的拍卖分作废" in text
 
     def test_super_bid_rules_present(self):
         text = render_rules(TEST_GAME, NAMES)
         assert "1 笔正常出价" in text and "可再提交 1 笔超级出价" in text
-        assert "数值须不同" in text
+        assert "数值必须与自己的正常出价不同" in text
         assert "每次固定花费 2 金币，无论是否命中" in text
-        assert "正常出价加超级出价成本（如有）" in text
-        assert "须能用当前余额支付" in text and "不能预支命中悬赏" in text
-        assert "只作狙击目标，不算支付金额" in text
-        assert "超级出价不参与拍卖获胜判定" in text
+        assert "正常出价加上超级出价的固定成本（如果使用）" in text
+        assert "必须能用当前余额支付" in text and "不能预支命中后获得的金币悬赏" in text
+        assert "用来狙击某个正常出价的价位，填的是目标价位，不是支付金额" in text
+        assert "超级出价只用于狙击，不能用来赢得拍卖" in text
         assert "正常出价 0，无超级出价" in text
 
     def test_settlement_steps_present(self):
@@ -81,62 +81,64 @@ class TestRulesText:
         steps = ["判定命中", "判定撞车", "判定胜负", "扣款与奖励"]
         assert [text.index(step) for step in steps] == sorted(text.index(step) for step in steps)
         assert "至少 2 笔正常出价" in text
-        assert "所有正常出价均撞车作废" in text
+        assert "该价位的所有正常出价都算“撞车”，失去获胜资格" in text
         assert "未撞车的正常出价" in text and "最高的一笔获胜" in text
         assert "0 也能获胜" in text and "当天全部拍卖分" in text
-        assert "所有正常出价均撞车则流局" in text
+        assert "所有正常出价都撞车，则流局" in text
         assert "获胜或撞车的正常出价全额扣除" in text
         assert "其余正常出价全额退还" in text
 
     def test_scoring_preserves_hit_and_economic_boundaries(self):
         text = render_rules(TEST_GAME, NAMES)
-        assert "拍卖奖池直接计分" in text
+        assert "拍卖奖池中的分数直接计入获胜者的成绩" in text
         assert "份额" not in text and "胜场" not in text
-        assert "先处理非法提交" in text
+        assert "先按上述规则处理不符合要求的提交，再看所有人的正常出价" in text
         assert "只要有正常出价就算命中" in text
-        assert "不计入正常出价互撞笔数" in text
-        reward = text.split("每名命中者", 1)[1].split("。", 1)[0]
+        assert "判断是否有多人出同一个价格时，只数正常出价；超级出价不计入这个数量" in text
+        reward = text.split("每名使用超级出价并命中的玩家，由系统", 1)[1].split("\n", 1)[0]
         assert "3 金币悬赏" in reward and "2 分" in reward
-        assert "多人命中同一价位各领一份" in reward
-        assert "命中多人也只领一份" in reward
-        assert "已经有多人撞车也算" in text
+        assert "多人命中同一价位时，每人各领一份奖励" in reward
+        assert "同一笔超级出价命中多人时，也只领一份奖励" in reward
+        assert "即使该价位有多笔正常出价也算" in text
         assert "自己的正常出价撞车或被狙击" in text
-        assert "不影响自己的命中与领奖" in text
-        assert "流局照常发放命中奖励，包括末日流局" in text
-        assert "命中分当日入账，不滚存" in text
+        assert "不影响自己的超级出价命中和领奖" in text
+        assert "流局照常发放命中奖励，本局最后一天流局也一样" in text
+        assert "命中获得的分数当天计入玩家成绩，不会加入第二天的拍卖奖池" in text
 
     def test_rankings_and_playoffs_only_use_cumulative_scores(self):
         text = render_rules(TEST_GAME, NAMES)
         assert "拍卖分与命中分之和" in text and "总分跨局累计" in text
         assert "排名只看累计总分，同分并列" in text
-        assert "第一名同分且有加赛额度" in text and "全体玩家加赛" in text
-        assert "总分继续累计，金币照常重置" in text
-        assert "每局后重新排名，第一名唯一即结束" in text
+        assert "第一名同分且还未达到加赛上限" in text and "全体玩家一起加赛" in text
+        assert "总分继续累计，每局重新发放金币" in text
+        assert "每局加赛后重新排名，直到第一名只剩一人或达到加赛上限" in text
         assert "最多加赛 20 局" in text
-        assert "保留并列冠军" in text
+        assert "他们都是并列冠军" in text
         assert "其他名次同分不触发加赛" in text
         assert "总胜场" not in text
 
     def test_publication_includes_yesterday_log_and_all_coins(self):
         text = render_rules(TEST_GAME, NAMES)
         assert "第 2 天起，每天开始时公开" in text
-        for fact in ["昨日全员出价明细", "是否使用超级出价及其数值", "获胜者或流局",
-                     "各人拍卖分与命中分", "全员当前金币余额（含今日工资）"]:
+        for fact in ["公开昨日结果", "全员出价明细", "是否使用超级出价及其数值", "谁赢得拍卖，或者是否流局",
+                     "各人获得的拍卖分与命中分", "全员当前金币余额，已经包含今日工资"]:
             assert fact in text
         assert "每局结束后公开完整出价日志" in text
         assert "所有玩家同时秘密提交" in text
         assert "每天出价前展示全员累计总分" in text
         assert "最后一局正赛及每局加赛" in text
         assert "本局剩余拍卖分" in text
-        assert "每人理论命中分上限“剩余天数 × 2”" in text
-        assert "余量均含今天" in text and "拍卖分包含滚存" in text
-        assert "忽略资金与命中难度，各人独立计算" in text
-        assert "开赛前和每个非终局的局末" in text
-        assert "终局后发表最终感言" in text
+        assert "每人最多还能获得的命中分：剩余天数 × 2" in text
+        assert "今天的奖池加上本局之后每天的基础奖池，包含之前流局并入的分数" in text
+        assert "剩余天数包含今天" in text
+        assert "理论上限，未考虑金币是否够用和命中难度，每人分别计算" in text
+        assert "开赛前，每人有一次公开发言" in text
+        assert "每局结束后，如果比赛还要继续，每人再发表一次公开发言" in text
+        assert "如果比赛已经结束，则发表最终感言" in text
         assert "发言同时提交、同时公开" in text
-        assert "无规则约束力" in text
+        assert "发言中的承诺由玩家自行决定是否履行，不会改变游戏规则" in text
         assert "每日秘密出价期间不公开发言" in text
-        assert "听取他人发言后可私下规划策略" in text
+        assert "听取他人发言后，可以私下规划策略" in text
         assert "观众总结只给观众看" in text
 
     def test_custom_parameters_and_actual_names_reach_system(self):
@@ -151,14 +153,14 @@ class TestRulesText:
         assert "3 名玩家参赛（甲、乙、丙）" in text
         assert "共 2 局正赛，每局 3 天" in text
         assert "第 1 天 2 分、第 2 天 1 分、第 3 天 3 分" in text
-        assert "每局计划共 6 分拍卖奖池" in text
+        assert "每局基础奖池合计 6 分" in text
         assert "发放 11 枚金币" in text and "发放 4 枚金币" in text
         assert "0~9 的整数" in text and "固定花费 3 金币" in text
         assert "发放 5 金币悬赏，并获 6 分" in text
-        assert "拍卖奖池直接计分" in text
+        assert "拍卖奖池中的分数直接计入获胜者的成绩" in text
         assert "剩余天数 × 6" in text
         assert "最多加赛 4 局" in text
-        assert "保留并列冠军" in text
+        assert "他们都是并列冠军" in text
         assert "第 3 天未拍出的拍卖分作废" in text
         assert "{" not in text and "}" not in text
         system = prompts.build_system_prompt("甲", "人设", "正文", [], names, game)

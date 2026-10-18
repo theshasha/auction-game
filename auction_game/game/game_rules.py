@@ -41,7 +41,7 @@ class GameSettings:
 
     @property
     def auction_pool_per_match(self) -> int:
-        """计划拍卖总分；末日流局时实际发放分数可能更少。"""
+        """本局所有基础奖池的总和；最后一天流局时，实际发放的分数可能更少。"""
         return sum(self.daily_pool)
 
     @classmethod
@@ -79,7 +79,7 @@ def validate_submission(
     coins: int,
     game: GameSettings,
 ) -> str | None:
-    """返回整单提交的违规原因，合法返回 None；保留 AI 重试的错误语义。"""
+    """检查一次完整出价，返回违规原因供模型纠正；符合规则时返回 None。"""
     if type(raw_bid) is not int:
         return f"bid 不是整数（{raw_bid!r}）"
     if raw_bid < 0 or raw_bid > game.max_bid:
@@ -93,7 +93,7 @@ def validate_submission(
     if raw_super_bid < 0 or raw_super_bid > game.max_bid:
         return f"超级出价 {raw_super_bid} 超出 0~{game.max_bid} 的范围"
     if raw_super_bid == raw_bid:
-        return f"超级出价 {raw_super_bid} 不能等于你的正常出价（同值属非法提交）"
+        return f"超级出价 {raw_super_bid} 与你的正常出价相同，请选择不同的数值"
     if raw_bid + game.super_cost > coins:
         return (
             f"正常出价 {raw_bid} 加超级出价成本 {game.super_cost} 金币，"

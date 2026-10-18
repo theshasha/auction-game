@@ -1,14 +1,39 @@
 # 日志与回放
 
-源码入口：`run_paths.py` 定义共同布局；`agent_log.py` 写任务审计；`tool_records.py` 写发送前工具定义；`request_records.py` 做可选完整捕获；`replay.py` 导出回放；`analyze.py` 做只读统计。
+## 按任务查代码
 
-## 易损约束
+- 场次文件布局在 `run_paths.py`，任务审计日志由 `agent_log.py` 写入。
+- `tool_records.py` 记录发送前的工具定义，`request_records.py` 提供可选的完整请求捕获。
+- `replay.py` 导出回放，`analyze.py` 只读取日志并计算统计结果。
 
-- 历史读取以本场 `run_config.json` 为准，身份与实际执行模型分开；只支持当前格式，缺字段明确报错。历史保持原地，分析不使用当前配置补值。统计口径见根 `docs/analyze.md`。
-- 所有任务日志写成功后，调用方才能提交内存状态；跨文件没有事务，失败可留下部分审计，异常必须传播。改失败审计时保留相邻请求合并与 interrupted 占位响应的回归。
-- 默认工具审计仅取发送前实际存在的工具字段，保留缺失、null、false 的区别，失败请求也留痕；不保存密钥、鉴权头或完整 body。FunctionModel 定义须标注离线 SDK 生成，与真实发送来源分开。
-- 可选完整捕获保留失败、纠错及回滚分叉，按实际边界无损重建并校验哈希。回放用本场快照、假密钥与 MockTransport；复用已存工具定义，缺定义明确要求离线补捕获，避免用当前 SDK 静默改写历史证据。
+## 历史来源和统计
+
+读取历史时，以本场 `run_config.json` 为准，分别保留角色身份和实际调用模型。只支持当前场次格式；缺少字段就明确报错，不使用当前配置补值。
+
+历史日志保留在原处，分析只读。统计口径见根目录 `docs/analyze.md`。
+
+## 日志写入和失败记录
+
+任务结果先写入 JSONL，再写入可选的完整请求捕获，最后写入可读的 Markdown 日志。所有日志写成功后，调用方才能更新内存中的业务状态。跨文件写入没有整体事务，写入失败可能留下部分审计日志；异常必须继续向上传递。
+
+修改失败审计时，保留 SDK 合并相邻请求的回归测试，以及过滤 `interrupted` 占位响应的回归测试。
+
+## 工具记录和隐私
+
+默认工具审计只保存发送前实际存在的工具字段，必须区分字段缺失、`null` 和 `false`。失败请求也要留下记录。此类审计不保存密钥、鉴权头或完整请求 body。
+
+FunctionModel 的工具定义要标明来自离线 SDK 生成，与发送前实际请求的来源分开记录。
+
+私人对话日志包含私有策略和记忆，原始任务日志还保留原始 thinking；可选完整捕获会保存完整模型输入。分享日志前检查这些内容，保留玩家之间的隐私范围。
+
+## 完整捕获和离线回放
+
+可选完整捕获必须保留失败、纠错和中断记录，也要保留状态恢复后补跑形成的不同请求分支。整轮被撤销后，已写的记录仍然保留。重建时恢复每次实际请求的完整输入，保持内容不变，并校验哈希。
+
+回放使用本场配置快照、假密钥和 MockTransport，并复用已经保存的工具定义。缺少定义时，明确提示用户进行离线补捕获，不能悄悄用当前 SDK 生成的定义替换历史记录。
 
 ## 回归入口
 
-`tests/ai/test_agent_log.py`、`test_tool_records.py`、`test_request_records.py` 验证审计及重建；`tests/app/test_run_paths.py`、`test_run_output.py`、`test_analyze.py` 验证场次产物及统计；完整回放复用 `tests/integration/test_offline_demo.py`。
+- `tests/ai/test_agent_log.py`、`tests/ai/test_tool_records.py` 和 `tests/ai/test_request_records.py` 验证审计记录与请求重建。
+- `tests/app/test_run_paths.py`、`tests/app/test_run_output.py` 和 `tests/app/test_analyze.py` 验证场次文件与统计。
+- 完整回放复用 `tests/integration/test_offline_demo.py`。

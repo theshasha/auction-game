@@ -225,9 +225,9 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             row = next(line for line in plan_input.splitlines() if f"| {entry.player} |" in line)
             assert row.split(" | ")[:3] == [f"| {entry.rank}", entry.player, str(entry.total_score)]
         assert "全员累计总分：" not in plan_input
-        for fact in (f"第 {match_index + 1} 局第 1 天的出价", "你的金币 13",
-                     "今日奖池 2 分", "本局含今天还剩 3 天，拍卖奖池 6 分",
-                     "每人理论最多再得 6 命中分"):
+        for fact in (f"第 {match_index + 1} 局第 1 天的出价", "你有 13 枚金币",
+                     "今日奖池为 2 分", "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
+                     "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
         obs = replace(make_ai_obs(game=game, coins=game.initial_coins),
                       past_match_logs=[make_log(match_index=i, game=game).to_dict()

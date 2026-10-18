@@ -118,7 +118,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
             field = "memory" if entry["task"] == "memory" else "strategy"
             description = properties[field]["description"]
             if field == "memory":
-                assert "私有" in description and "替换旧记忆" in description
+                assert "只有自己能看" in description and "替换旧记忆" in description
             else:
                 assert "仅自己可见" in description
             if entry["task"] == "memory":
@@ -147,6 +147,11 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         assert not paths.capture(number).exists()
 
     replay = replay_path.read_text(encoding="utf-8")
+    for index in range(1, game.regular_matches + 1):
+        report = paths.match(index, readable=True).read_text(encoding="utf-8")
+        table = report.split("[本场规则](../RULES.md)\n\n", 1)[1].split("\n\n截至本局的累计排名：", 1)[0]
+        assert table.startswith("奖池和得分的单位为分，正常出价的单位为金币。\n\n| 天 | 奖池 |")
+        assert f"本局完整出价日志：\n\n{table}" in replay
     assert "[本场工具记录](tools.md)" in replay
     assert "tools.md" not in paths.player(1, readable=True).read_text(encoding="utf-8")
     titles = ["比赛开头 · 开局发言", "第一局规划 · 首日缓存", "第一局第二天 · 正常出价",

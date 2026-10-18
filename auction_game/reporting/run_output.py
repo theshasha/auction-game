@@ -53,7 +53,7 @@ def make_publish(log_dir: Path):
             f"===== 第 {log.match_index} 局（{kind}）=====\n"
             "[本场规则](../RULES.md)\n\n"
             f"{prompts.render_match_log(log)}\n\n"
-            f"截至本局的累计排名:\n{prompts.render_standings(standings)}\n"
+            f"截至本局的累计排名：\n\n{prompts.render_standings(standings)}\n"
         )
         paths.match(log.match_index, readable=True).write_text(text, encoding="utf-8")
         write_readme(paths, standings)

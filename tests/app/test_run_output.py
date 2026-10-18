@@ -82,8 +82,8 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     report = paths.match(1, readable=True).read_text(encoding="utf-8")
     assert "[本场规则](../RULES.md)" in report
     assert (paths.match(1, readable=True).parent / "../RULES.md").resolve() == paths.root / "RULES.md"
-    assert "| 天 | 奖池（分） | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分（分） |" in report
-    assert "4（撞车） | 4（撞车）+超3（落空） | 9（获胜） | 2（退款）+超4（命中）" in report
+    assert "奖池和得分的单位为分，正常出价的单位为金币。\n\n| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分 |" in report
+    assert "4（撞车） | 4（撞车）；超级出价 3（落空） | 9（获胜） | 2（退款）；超级出价 4（命中）" in report
     assert "| 流局 | 0、1、2 |" in report
     assert "| 流局 | 0、1、2 | 丁 2 |" in report
     assert "| 3 | 5 |" in report and "| 流局（奖池作废） | 0、1、2 |" in report
@@ -99,7 +99,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert payload["match"]["game"]["super_bounty"] == 5
     assert payload["match"]["scores"] == {"甲": 0, "乙": 0, "丙": 1, "丁": 4, "戊": 0, "己": 0}
     shared_standings = prompts.render_standings(standings)
-    assert shared_standings in report
+    assert f"截至本局的累计排名：\n\n{shared_standings}" in report
     assert shared_standings in (paths.root / "README.md").read_text(encoding="utf-8")
     assert all(entry["total_score"] == log.scores[entry["player"]]
                for entry in payload["standings_after_match"])

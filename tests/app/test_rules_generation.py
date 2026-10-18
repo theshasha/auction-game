@@ -66,8 +66,8 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
         "金币：11/4，出价：9，超级：3/5\n"
         "命中分：2\n"
         "正赛：2，加赛：4，天数：3\n"
-        "各日基础奖池依次为：第 1 天 2 分、第 2 天 1 分、第 3 天 3 分；"
-        "每局计划共 6 分拍卖奖池。\n"
+        "各日基础奖池依次为：第 1 天 2 分、第 2 天 1 分、第 3 天 3 分。"
+        "每局基础奖池合计 6 分。\n"
     )
     generated = document_path.read_bytes()
     body = rules.render_rules(

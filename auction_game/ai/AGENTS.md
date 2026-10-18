@@ -1,15 +1,44 @@
 # 模型边界
 
-源码入口：`prompts.py` 管自然语言；`agent_tasks.py` 管工具定义及业务校验；`agent_execution.py` 管通用执行；`llm_client.py` 管协议与网络；`ai_player.py` 管历史提交；`ai_speech.py` 管阶段编排。
+## 按任务查代码
 
-## 易损约束
+- 提示文字在 `prompts.py`，工具定义和业务校验在 `agent_tasks.py`。
+- 通用任务执行在 `agent_execution.py`，协议和网络请求在 `llm_client.py`。
+- 玩家对话历史由 `ai_player.py` 保存，发言、记忆和规划的顺序由 `ai_speech.py` 控制。
 
-- 严格校验与一次共享纠错预算保持启用；SDK 分别计数的错误也受总请求上限约束。网络重试独立受限，完整流明确成功后才交付，截断直接失败。
-- 客户端随任务事件循环创建并关闭；业务状态在全部成功日志写入后才提交。程序错误与磁盘错误原样传播，避免误当网络故障重试。
-- 独立任务沿用原生 user/assistant/tool 对话，保留纠错往返与工具配对；成功写日志后在副本中去掉 thinking 及旧响应引用，保留 phase 等语义字段。原始 thinking 留审计，任务内部纠错由 SDK 管理。strategy 与 memory 私有，观众总结不回写玩家。
-- 局末全员发言公布后才能生成记忆，再规划下一局；记忆篇幅只作软目标。保留首日缓存仅消费一次及最后一局跳过记忆的回归。
-- 协议按显式配置选择。Hub 的 forced-tool-choice 兼容使用公开 profile，保留框架推断的 context 与加密推理 include；纯文本 JSON 仍走工具纠错。Chat 保留明确结束原因检查与 `max_tokens` 兼容设置。输出预算及推理策略见根 `docs/usage.md`，渠道拒绝或截断后保持原预算。
+## 校验和请求失败
+
+保持严格校验，工具名、字段类型、必填条件和业务校验逻辑都按现有定义执行。结构错误和业务错误共用一次输出纠错机会，任务内部的纠错由 SDK 管理。即使 SDK 对不同错误分别计数，每个任务仍最多发出两次逻辑请求。
+
+网络重试单独计数，每个逻辑请求最多重发一次。完整接收响应并检查到明确的成功结束状态后，才能交付结果；输出截断就直接失败。
+
+客户端必须在任务自己的事件循环中创建和关闭。程序错误或磁盘写入错误要原样向上传递，不能当作网络故障重试。任务的全部成功日志写完后，才能更新业务状态；具体写入要求见 `../reporting/AGENTS.md`。
+
+## 协议兼容和输出设置
+
+协议按配置中明确指定的值选择。Hub 对强制工具选择（forced-tool-choice）的兼容通过公开的 profile 配置，覆盖时保留框架推断的上下文容量 `context_window`，以及加密推理所需的 `include: ["reasoning.encrypted_content"]` 请求设置。
+
+模型只返回纯文本 JSON 时，仍按工具输出要求进行纠错。`super_bid` 的定义保持为必填的整数或 JSON `null`；现有兼容处理还接受精确字符串 `"null"`，原始输出照常保留在日志中。
+
+Chat 保留明确结束原因检查，并继续使用兼容的 `max_tokens` 设置。输出长度和推理档位的选择规则见根目录 `docs/usage.md`；渠道拒绝请求或输出截断后，保持原输出长度设置。
+
+## 对话历史和隐私
+
+后续任务继续使用原生 user/assistant/tool 对话，保留纠错往返以及工具调用与结果的配对。成功写完日志后，在对话副本中移除 thinking 和旧响应引用，保留 `phase`、`namespace` 等有语义的字段。原始 thinking 留在审计日志中。
+
+`strategy` 和 `memory` 只对玩家自己可见，对手只看到公开发言。观众总结的请求和结果都不写回玩家历史。
+
+## 记忆和下一局规划
+
+局末先公布全员发言，再整理记忆，最后规划下一局。新记忆会完整替换旧记忆，下一局无法读取之前各局的原始对话；提示中须要求保留有效经验、修正判断，并区分事实和猜测。记忆篇幅是建议目标，可以按有用信息的多少调整。
+
+保留首日出价缓存只消费一次的回归测试。最后一局跳过记忆整理，也要保留对应回归测试。
 
 ## 回归入口
 
-`tests/ai/test_pydantic_ai_contract.py` 验证三协议真实 SDK 序列化、共享纠错与隐私；`test_llm_client.py` 验证流、重试与资源关闭；`test_ai.py`、`test_memory.py` 验证历史事务及记忆。改阶段编排复用 `tests/integration/` 完整假模型赛。全部使用 FunctionModel 或 MockTransport 与假密钥。
+- `tests/ai/test_pydantic_ai_contract.py` 验证三种协议的真实 SDK 序列化、共享纠错次数和隐私范围。
+- `tests/ai/test_llm_client.py` 验证流式响应、网络重试和资源关闭。
+- `tests/ai/test_ai.py` 与 `tests/ai/test_memory.py` 验证历史更新、失败后的状态恢复和记忆。
+- 修改阶段顺序时，复用 `tests/integration/` 中的完整假模型赛。
+
+以上测试全部使用 FunctionModel 或 MockTransport，并使用假密钥。

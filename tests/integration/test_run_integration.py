@@ -79,7 +79,7 @@ def test_bot_run_publishes_rules_and_replayable_statistics(tmp_path, monkeypatch
     assert f"6 名玩家参赛（{'、'.join(BOT_NAMES)}）" in rules
     assert "共 2 局正赛，每局 3 天" in rules
     assert "第 1 天 2 分、第 2 天 4 分、第 3 天 3 分" in rules
-    assert "拍卖奖池直接计分" in rules
+    assert "拍卖奖池中的分数直接计入获胜者的成绩" in rules
     assert "并获 2 分" in rules
     assert "每人发放 20 枚金币" in rules
     assert "每天开始时每人发放 4 枚金币" in rules

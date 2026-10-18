@@ -22,7 +22,7 @@ class TestSystemPrompt:
         assert "傲娇大小姐：自称本小姐。" in system
         # 人设只影响说话方式，思考要求保持认真
         assert "不要被人设的说话方式影响你的思考" in system
-        assert "无规则约束力" in system
+        assert "发言中的承诺由玩家自行决定是否履行，不会改变游戏规则" in system
         assert "<!--" not in system and "RULES.template.md" not in system
 
     def test_predictions_public_to_everyone(self):
@@ -48,8 +48,8 @@ class TestSpeechFields:
             prompts.final_speech_request(standings, make_log(match_index=5, auction_scores=auction_scores, scores=scores)),
         ):
             assert "strategy" in text and "speech" in text
-            assert "strategy 仅自己可见" in text
-            assert "speech 公开" in text
+            assert "strategy 用来写发言策略，仅自己可见" in text
+            assert "在 speech 中填写公开发言，其他玩家都能看到" in text
 
     @pytest.mark.parametrize("final", [False, True], ids=["match-end", "final"])
     def test_results_show_settled_scores_and_score_based_ranking(self, final):
@@ -62,6 +62,8 @@ class TestSpeechFields:
                 else prompts.match_end_speech_request(log, standings, will_continue=True))
         assert "本局得分：甲 3 分、乙 0 分" in text
         assert "排名与分数明细" in text
+        assert f"本局完整出价日志：\n\n{prompts.render_match_log(log)}" in text
+        assert f"排名与分数明细：\n\n{prompts.render_standings(standings)}" in text
         assert "| 1 | 乙 | 14 | 12 | 2 | 1 |" in text
         assert "| 2 | 甲 | 12 | 8 | 4 | 3 |" in text
         assert "胜场" not in text
@@ -80,16 +82,18 @@ def test_output_reminder_only_names_current_tool(task):
     tool = OUTPUT_TOOLS.get(task)
     text = prompts.with_output_requirement("任务正文", tool.name if tool else None)
     if tool:
-        assert text == f"任务正文\n\n当前输出要求：调用 `{tool.name}` 工具提交；不要在正文模拟工具调用。"
+        assert text == f"任务正文\n\n请调用 `{tool.name}` 工具提交结果，不要只在正文中写出工具调用的样子。"
     else:
         assert text == "任务正文"
 
 
 def test_memory_body_keeps_task_boundaries_without_tool_instruction():
-    text = prompts.memory_request({"乙": "公开信号"})
+    text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"})
     assert "save_memory" not in text
-    for required in ("【乙】公开信号", "整体替换旧记忆", "下局看不到历局原始对话与公开发言",
-                     "保留早期有效经验", "修正失效判断", "区分事实与猜测", "软目标",
+    assert "公开发言：\n\n【乙】公开信号\n\n【丙】另一条公开信号\n\n请结合" in text
+    for required in ("【乙】公开信号", "完整替换旧记忆", "下一局你看不到之前各局的原始对话和公开发言",
+                     "保留之前仍然有用的经验", "修正已经失效的判断", "区分事实与猜测",
+                     "篇幅可以根据有用信息的多少调整，无需凑字数或精确计字",
                      "只填写 memory", "规则与最新成绩会另行提供"):
         assert required in text
 
@@ -161,14 +165,14 @@ class TestPlanBidMerge:
         assert strategy in text and bid_task in text
         if opening:
             assert "【甲】发言A" in text and "【乙】发言B" in text
-            assert text.count("全员累计总分：全员 0 分。") == 1
+            assert text.count("\n\n全员累计总分：全员 0 分。\n\n") == 1
         else:
-            assert "局末发言" not in text and "累计私有记忆" in text
-            assert "| 排名 | 玩家 | 总分（分） | 第1局（分） | 拍卖分（分） |" in text
+            assert "局末发言" not in text and "之前保存的私人笔记" in text
+            assert "| 排名 | 玩家 | 总分 | 第1局 | 拍卖分 |" in text
             assert "| 1 | 乙 | 11 | 11 | 1 |" in text
             assert "| 2 | 甲 | 10 | 10 | 2 |" in text
             assert "全员累计总分：" not in text
-        for fact in ("你的金币 11", "今日奖池 2 分"):
+        for fact in ("你有 11 枚金币", "今日奖池为 2 分"):
             assert fact in text
         assert '请分析局势并提交今日出价' in text
         assert "```json" not in text
@@ -180,7 +184,7 @@ class TestPlanBidMerge:
         text = (prompts.opening_plan_request({}, game) if opening
                 else prompts.next_match_plan_request([], game, match_index))
         show_remaining = match_index >= game.regular_matches
-        assert ("本局含今天还剩" in text) is show_remaining
-        assert ("每人理论最多再得" in text) is show_remaining
+        assert ("本局还剩" in text) is show_remaining
+        assert ("每人最多还能获得" in text) is show_remaining
         if show_remaining:
-            assert "本局含今天还剩 3 天，拍卖奖池 6 分，每人理论最多再得 6 命中分。" in text
+            assert "\n\n本局还剩 3 天（含今天），剩余拍卖奖池共 6 分。如果每天都命中，每人最多还能获得 6 命中分。" in text

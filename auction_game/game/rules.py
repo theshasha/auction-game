@@ -31,7 +31,7 @@ def render_rules(game: GameSettings, names: list[str], *, include_note: bool = T
             for day, amount in enumerate(game.daily_pool, 1)
         )
         pool_description = (
-            f"各日基础奖池依次为：{daily_amounts}；每局计划共 {game.auction_pool_per_match} 分拍卖奖池。"
+            f"各日基础奖池依次为：{daily_amounts}。每局基础奖池合计 {game.auction_pool_per_match} 分。"
         )
     values = {
         **game.to_dict(),
@@ -68,7 +68,7 @@ def main() -> int:
 
 
 def _identity_names():
-    # 根文档只需配置身份；Bot 与预览无需能力快照、连接设置或密钥。
+    # 根规则使用配置中的角色名；Bot 和规则预览无需读取模型能力数据、连接设置或密钥。
     return [player["name"] for player in load_players(resolve_capabilities=False)]
 
 
@@ -85,7 +85,7 @@ def _write_if_changed(text):
 
 
 def sync_root_rules(game=None):
-    """公共启动屏障：模型与场次创建之前完成，配置身份不被 Bot 名单覆盖。"""
+    """启动比赛前同步根规则；在调用模型和创建场次之前完成，始终使用配置中的角色名。"""
     try:
         return _write_if_changed(render_rules(game if game is not None else load_game_settings(), _identity_names()))
     except (OSError, UnicodeError, ValueError, KeyError, IndexError, TypeError) as exc:

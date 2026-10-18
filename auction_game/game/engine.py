@@ -272,7 +272,7 @@ def run_match(
             winner = None
             winning_bid = None
             auction_score = 0
-            rollover = pool  # 流局：奖池整体并入次日（末日流局则随循环结束作废）
+            rollover = pool  # 流局：奖池整体并入次日；本局最后一天流局则随循环结束作废
             is_void = True
 
         # 金币结算：获胜与撞车的正常出价全额扣除（流局日必然全员撞车，

@@ -99,7 +99,7 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
     entry = json.loads(player.log_path.read_text(encoding="utf-8").splitlines()[-1])
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 2
-    assert audit[0].parts[-1].content.startswith("speech\n\n当前输出要求：调用 `speech`")
+    assert audit[0].parts[-1].content.startswith("speech\n\n请调用 `speech` 工具提交结果")
 
 
 def test_blank_summary_uses_output_correction_not_infrastructure_retry():
@@ -179,9 +179,9 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
     for player, planned, fallback in ((a, (2, 6), (1, None)), (b, (3, 6), (0, None))):
         assert len(player.task_runner.calls) == 2
         plan_input = player.task_runner.calls[-1][-1].parts[-1].content
-        for fact in ("你的金币 13", "今日奖池 2 分",
-                     "本局含今天还剩 3 天，拍卖奖池 6 分",
-                     "每人理论最多再得 6 命中分"):
+        for fact in ("你有 13 枚金币", "今日奖池为 2 分",
+                     "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
+                     "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
         assert plan_input.count("全员累计总分：全员 0 分。") == 1
         obs = make_ai_obs(game=game, coins=game.initial_coins)
