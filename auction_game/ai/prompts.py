@@ -39,21 +39,26 @@ def build_system_prompt(
     predictions: list[tuple[str, int]],
     all_names: list[str],
     game: GameSettings,
+    *, enable_predictions: bool = True, enable_personas: bool = True,
 ) -> str:
-    """系统提示包含规则、身份、人设和向全员公布的赛前预测。
+    """保留规则与身份，按独立开关加入人设和全员公开的赛前预测。
 
     人设只影响公开发言的口吻；分析出价和规划策略时仍需认真思考。
     predictions 是 players.yaml 中的虚构数字，不是模型的真实表现统计。
     """
     others = "、".join(n for n in all_names if n != name)
-    prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
-    return (
+    text = (
         f"{render_rules(game, all_names, include_note=False)}\n"
         f"【你的身份】\n你叫 {name}，其他 {len(all_names) - 1} 位玩家是：{others}。\n"
-        f"【你的人设】\n{persona_title}：{persona_text}\n"
-        f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
-        "请在游戏过程中认真思考，不要被人设的说话方式影响你的思考。"
     )
+    if enable_personas:
+        text += f"【你的人设】\n{persona_title}：{persona_text}\n"
+    if enable_predictions:
+        prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
+        text += f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
+    if enable_personas:
+        text += "请在游戏过程中认真思考，不要被人设的说话方式影响你的思考。"
+    return text
 
 
 def opening_speech_request() -> str:
@@ -310,7 +315,8 @@ def memory_request(others_speeches: dict[str, str]) -> str:
         "这份新记忆会完整替换旧记忆。下一局你看不到之前各局的原始对话和公开发言，"
         "需要继续使用的信息都应保存在这份笔记中。\n\n"
         "- 保留之前仍然有用的经验，修正已经失效的判断，并区分事实与猜测。\n"
-        "- 重点记录对手的行为规律、自己需要调整的策略，以及对后续决策有用的信息，不必逐日复述。\n"
+        "- 重点保留对手的行为判断、自己需要调整的策略，以及支持或推翻判断的关键例子。\n"
+        "- 不要逐日复述或完整抄录出价序列；具体报价仅作为判断的必要证据保留。\n"
         "- 规则与最新成绩会另行提供，无需抄写。\n\n"
         "尽量整理成一页简短笔记，篇幅可以根据有用信息的多少调整，无需凑字数或精确计字。"
         "如果没有值得保留的信息，直接说明即可。"

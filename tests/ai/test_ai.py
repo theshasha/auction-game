@@ -16,6 +16,27 @@ from auction_game.ai import prompts
 from auction_game.reporting.request_records import load_requests
 
 
+@pytest.mark.parametrize("enable_predictions", [False, True])
+@pytest.mark.parametrize("enable_personas", [False, True])
+def test_player_passes_prompt_switches_into_native_request(enable_predictions, enable_personas):
+    from auction_game.ai.ai_player import AIPlayer
+
+    runner = fake_task_runner([bid_reply(1)])
+    player = AIPlayer(
+        "Alpha", "独特人设标题", "独特人设正文", [("Bravo", 73)], ["Alpha", "Bravo"],
+        runner, game=TEST_GAME, enable_predictions=enable_predictions, enable_personas=enable_personas,
+    )
+    assert player.decide_bid(make_ai_obs()) == (1, None)
+    system = next(part.content for message in runner.calls[0] for part in message.parts
+                  if isinstance(part, SystemPromptPart))
+    for marker in ("【赛前预测】", "Bravo 73%", "专家"):
+        assert (marker in system) is enable_predictions
+    for marker in ("【你的人设】", "独特人设标题", "独特人设正文", "认真思考"):
+        assert (marker in system) is enable_personas
+    assert "你叫 Alpha" in system and "Bravo" in system
+    assert player.review_messages[0] == player.messages[0]
+
+
 @pytest.mark.parametrize("invalid", [
     {"strategy": "s", "bid": 2}, bid_reply("2"), bid_reply(True), bid_reply(2.0),
     bid_reply(2, True), bid_reply(2, 2.0), bid_reply(2, "None"), bid_reply(2, "3"),

@@ -55,11 +55,13 @@ class AIPlayer(Player):
                  predictions: list[tuple[str, int]], all_names: list[str],
                  task_runner: TaskRunner, log_path: Path | None = None, *, game: GameSettings,
                  readable_path: Path | None = None, capture_path: Path | None = None,
-                 tool_writer=None, player_number=None):
+                 tool_writer=None, player_number=None,
+                 enable_predictions: bool = True, enable_personas: bool = True):
         super().__init__(name)
         self.game = game
         self.messages: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(
-            prompts.build_system_prompt(name, persona_title, persona_text, predictions, all_names, game)
+            prompts.build_system_prompt(name, persona_title, persona_text, predictions, all_names, game,
+                                        enable_predictions=enable_predictions, enable_personas=enable_personas)
         )])]
         self.review_messages = list(self.messages)
         self.memory = ""

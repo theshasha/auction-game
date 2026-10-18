@@ -34,14 +34,18 @@ def demo_configuration(monkeypatch, config_files):
     return load(test_model=True)
 
 
-def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch, capsys, demo_configuration):
+@pytest.mark.parametrize("predictions,personas", [(True, True), (False, True), (True, False), (False, False)])
+def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch, capsys, demo_configuration,
+                                                         predictions, personas):
     game = GameSettings(
         initial_coins=7, daily_salary=3, daily_pool=(1, 1), max_bid=7,
         super_cost=2, super_bounty=3, super_hit_score=2,
         regular_matches=2, max_playoffs=2,
     )
     monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
-    _, configs = demo_configuration
+    config, configs = demo_configuration
+    config["prompts"] = {"enable_predictions": predictions, "enable_personas": personas}
+    monkeypatch.setattr(offline_demo, "load_configuration", lambda **kwargs: deepcopy((config, configs)))
     names = [pc["name"] for pc in configs]
     run_dir = tmp_path / "20261016_120000_ai"
     replay_path, factories = generate_demo(run_dir, test_model=True)
@@ -59,6 +63,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     assert "[本场工具定义](tools.md)" in (run_dir / "README.md").read_text(encoding="utf-8")
     assert snapshot["run_type"] == "offline"
     assert snapshot["mode"] == "test_model"
+    assert snapshot["prompts"] == config["prompts"]
     for pc, saved in zip(configs, snapshot["players"]):
         assert saved["identity_model"] == pc["identity_model"]
         assert saved["execution_model"] == {"key": pc["model_key"], "base_url": "https://offline.invalid/v1",
@@ -101,6 +106,11 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     requests = [entry["requests"][0] for entry in entries]
     assert len(requests) == expected_calls
     for entry, record in zip(entries, requests):
+        system_text = "\n".join(part["content"] for message in record["messages"] for part in message["parts"]
+                                if part["part_kind"] == "system-prompt")
+        assert ("【赛前预测】" in system_text) is predictions
+        assert ("【你的人设】" in system_text) is personas
+        assert ("不要被人设" in system_text) is personas
         assert entry["status"] == "success" and not entry["request_errors"]
         assert record["request"] == 1
         assert record["settings"]["max_tokens"] == configs[0]["max_tokens"]
@@ -118,7 +128,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
             field = "memory" if entry["task"] == "memory" else "strategy"
             description = properties[field]["description"]
             if field == "memory":
-                assert "只有自己能看" in description and "替换旧记忆" in description
+                assert "私人笔记" in description and "替换旧记忆" in description
             else:
                 assert "仅自己可见" in description
             if entry["task"] == "memory":
@@ -226,12 +236,16 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     analyze.analyze(run_dir)
     output = capsys.readouterr().out
     assert "离线演示：全员使用假模型，不调用真实服务，不收费。" in output
+    assert f"提示设置：赛前预测{'开启' if predictions else '关闭'}，人设{'开启' if personas else '关闭'}" in output
     assert f"本场日志目录：{run_dir}" in output
     assert "操作：" not in output and "切换到连续模式" not in output
     assert "测试模型：" not in output and "[预算提醒]" not in output
     # 明确的合成参数覆盖各阶段，不随生产配置缩短而丢失断言。
     assert f"共进行 {game.regular_matches} 局（正赛 {game.regular_matches} 局 + 加赛 0 局）" in output
     assert f"总拍卖天数：{game.regular_matches * game.max_days}" in output
+    for index in range(1, game.regular_matches + 1):
+        for day in range(1, game.max_days + 1):
+            assert output.count(f"===== 第 {index} 局（正赛）第 {day} 天 =====") == 1
     total = game.regular_matches * expected_auction_score
     assert f"\n{selected}\n  总分：{total}分（拍卖{total}分，超级命中0分）\n" in output
     assert "离线假模型结果：实际执行为假模型，无真实模型调用" in output

@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from auction_game.configuration import PROTOCOLS
+from auction_game.configuration import PROMPT_FLAGS, PROTOCOLS
 from auction_game.game.game_rules import GameSettings
 
 FORMAT_VERSION = 3
@@ -22,6 +22,13 @@ def validate_run_config(config):
         raise ValueError("旧格式或不支持的场次版本；仅支持格式版本 3，历史日志原地保留")
     if config.get("mode") not in ("regular", "test_model"):
         raise ValueError("场次缺少有效配置模式")
+    # 提示开关是可选的新增记录；历史缺失保持原样，不能按当前默认值补齐。
+    if "prompts" in config:
+        if not isinstance(config["prompts"], dict):
+            raise ValueError("场次 prompts 必须是键值配置")
+        for field in PROMPT_FLAGS:
+            if field in config["prompts"] and type(config["prompts"][field]) is not bool:
+                raise ValueError(f"场次 prompts.{field} 必须是布尔值")
     try:
         GameSettings.from_dict(config.get("game"))
     except ValueError as exc:

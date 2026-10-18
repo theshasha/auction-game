@@ -1,4 +1,4 @@
-"""运行目录、局末日志与最终结果展示。"""
+"""运行目录、每日战报、局末日志与最终结果展示。"""
 
 from __future__ import annotations
 
@@ -101,6 +101,24 @@ def write_readme(paths, standings=None):
         lines.append("## 私人对话（含私有策略，仅供赛后阅读）")
         lines.extend(f"- [{pc['name']}](players/{pc['number']:03d}.md)" for pc in private)
     (paths.root / "README.md").write_text("\n\n".join(lines) + "\n", encoding="utf-8")
+
+
+def print_day_result(log: MatchLog, standings: list[StandingsEntry], coins: dict[str, int]) -> None:
+    """仅在终端展示已提交的每日结算，不写文件或生成玩家提示。"""
+    day = log.days[-1]
+    kind = "加赛" if log.is_playoff else "正赛"
+    print(f"\n===== 第 {log.match_index} 局（{kind}）第 {day.day} 天 =====")
+    if day.is_void:
+        outcome = "流局，奖池作废" if day.day == log.game.max_days else "流局，奖池滚存至次日"
+    else:
+        outcome = f"{day.winner} 以 {day.winning_bid} 金币获胜"
+    print(f"奖池 {day.pool} 分；{outcome}。")
+    hits = [f"{use['player']} +{log.game.super_hit_score} 分" for use in day.super_uses if use["hit"]]
+    print("超级命中：" + ("；".join(hits) if hits else "无") + "。")
+    print("| 排名 | 玩家 | 累计总分 | 金币（结算后） |")
+    print("| --- | --- | --- | --- |")
+    for entry in standings:
+        print(f"| {entry.rank} | {entry.player} | {entry.total_score} | {coins[entry.player]} |")
 
 
 def print_final_result(result) -> None:

@@ -17,8 +17,43 @@ def test_defaults_and_preserved_values(config_files):
     config, players = load_configuration(*config_files)
     assert config["llm"] == {"max_concurrency": 10, "timeout_seconds": 60, "channels": CHANNELS}
     assert config["test_model"] == "substitute"
+    assert config["prompts"] == {"enable_predictions": True, "enable_personas": True}
     assert [player["predicted_win_rate"] for player in players] == [23, 0]
     assert [p["protocol"] for p in players] == ["chat", "anthropic"]
+
+
+@pytest.mark.parametrize("predictions", [False, True])
+@pytest.mark.parametrize("personas", [False, True])
+def test_prompt_switches_are_independent(config_files, predictions, personas):
+    path = config_files[0]
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["prompts"] = {"enable_predictions": predictions, "enable_personas": personas}
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    config, _ = load_configuration(*config_files)
+    assert config["prompts"] == data["prompts"]
+
+
+@pytest.mark.parametrize("field", ["enable_predictions", "enable_personas"])
+def test_missing_prompt_switch_defaults_to_true(config_files, field):
+    path = config_files[0]
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["prompts"] = {field: False}
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    config, _ = load_configuration(*config_files)
+    assert config["prompts"][field] is False
+    assert all(value is True for key, value in config["prompts"].items() if key != field)
+
+
+@pytest.mark.parametrize("field", ["enable_predictions", "enable_personas"])
+@pytest.mark.parametrize("value", [None, "true", "false", 0, 1, [], {}])
+def test_prompt_switches_require_boolean(config_files, field, value):
+    path = config_files[0]
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["prompts"] = {field: value}
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match=f"prompts.{field}.*布尔值") as exc:
+        load_configuration(*config_files)
+    assert str(path) in str(exc.value)
 
 
 def test_default_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
@@ -62,6 +97,8 @@ def test_valid_max_concurrency(config_files, value):
 @pytest.mark.parametrize("file_index,text,field", [
     (0, "[]", "根节点"),
     (0, "llm: []", "llm"),
+    (0, "prompts: []", "prompts"),
+    (0, "prompts: null", "prompts"),
     (0, "players: []", "players"),
     (1, "[]", "根节点"),
     (1, "{}", "players"),

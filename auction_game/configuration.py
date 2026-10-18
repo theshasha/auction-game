@@ -15,6 +15,7 @@ from auction_game.model_capabilities import effective_capabilities, read_snapsho
 from auction_game.paths import ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, MODELS_PATH, GAME_PATH, CAPABILITIES_PATH
 PROTOCOLS = ("chat", "responses", "anthropic")
 EXECUTION_FIELDS = ("model", "provider", "protocol", "max_tokens", "model_settings", "model_profile", "capabilities")
+PROMPT_FLAGS = ("enable_predictions", "enable_personas")
 
 
 class ConfigurationError(ValueError):
@@ -47,6 +48,12 @@ def load_configuration(
     config = _read_mapping(config_path)
     if "players" in config:
         raise ConfigurationError(f"{config_path}：players 请移至 {players_path}")
+    prompts = config.setdefault("prompts", {})
+    if not isinstance(prompts, dict):
+        raise ConfigurationError(f"{config_path}：prompts 必须是键值配置")
+    for field in PROMPT_FLAGS:
+        if type(prompts.setdefault(field, True)) is not bool:
+            raise ConfigurationError(f"{config_path}：prompts.{field} 必须是布尔值")
     llm = config.setdefault("llm", {})
     if not isinstance(llm, dict):
         raise ConfigurationError(f"{config_path}：llm 必须是键值配置")

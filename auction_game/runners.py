@@ -17,7 +17,7 @@ from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.game.players import BOT_NAMES, RandomBot
 from auction_game.game.rules import render_rules, sync_root_rules
-from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_final_result
+from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_day_result, print_final_result
 from auction_game.reporting.tool_records import ToolWriter
 from auction_game.game.tournament import run_tournament
 
@@ -35,7 +35,7 @@ def run_bots(seed) -> int:
     initialize_run(run_dir, {"run_type": "bot", "mode": "regular", "game": game.to_dict(),
                             "players": [{"name": p.name} for p in players]},
                    render_rules(game, [p.name for p in players]))
-    result = run_tournament(players, game, on_match_end=make_publish(run_dir))
+    result = run_tournament(players, game, on_match_end=make_publish(run_dir), on_day_end=print_day_result)
     print_final_result(result)
     return 0
 
@@ -99,6 +99,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         "game": game.to_dict(),
         "timeout_seconds": timeout,
         "max_concurrency": max_concurrency,
+        "prompts": dict(config["prompts"]),
         "players": [{
             "name": pc["name"], "persona_title": pc["persona_title"], "persona_text": pc["persona_text"],
             "predicted_win_rate": pc.get("predicted_win_rate", 0),
@@ -123,6 +124,8 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             persona_title=pc["persona_title"],
             persona_text=pc["persona_text"],
             predictions=predictions,
+            enable_predictions=config["prompts"]["enable_predictions"],
+            enable_personas=config["prompts"]["enable_personas"],
             all_names=all_names,
             task_runner=task_runners[pc["name"]],
             game=game,
@@ -145,6 +148,9 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         for pc in player_configs:
             print(f"  {pc['name']}：{pc['model']}")
     print(f"并发上限：{max_concurrency}")
+    prompt_options = config["prompts"]
+    print(f"提示设置：赛前预测{'开启' if prompt_options['enable_predictions'] else '关闭'}，"
+          f"人设{'开启' if prompt_options['enable_personas'] else '关闭'}")
     if run_type != "offline":
         warned = set()
         for pc in player_configs:
@@ -182,6 +188,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             players,
             game,
             on_match_end=make_publish(run_dir),
+            on_day_end=print_day_result,
             director=director,
             bid_collector=bid_collector,
         )

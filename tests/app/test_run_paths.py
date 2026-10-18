@@ -92,6 +92,36 @@ def test_snapshot_requires_only_consumed_model_fields(run_type):
     assert validate_run_config(config) is config
 
 
+@pytest.mark.parametrize("flags", [
+    None, {}, {"enable_predictions": False}, {"enable_personas": True},
+    {"enable_predictions": False, "enable_personas": False},
+    {"enable_predictions": False, "enable_personas": True},
+    {"enable_predictions": True, "enable_personas": False},
+    {"enable_predictions": True, "enable_personas": True},
+])
+def test_prompt_snapshot_preserves_recorded_flags_without_filling_missing(tmp_path, flags):
+    config = snapshot()
+    if flags is not None:
+        config["prompts"] = flags.copy()
+    paths = run_output.initialize_run(tmp_path, config, "rules")
+    assert paths.read_config() == config
+    assert ("prompts" in paths.read_config()) is (flags is not None)
+
+
+@pytest.mark.parametrize("flags,error", [
+    (None, "prompts"), ([], "prompts"),
+    *[({field: value}, f"prompts.{field}")
+      for field in ("enable_predictions", "enable_personas")
+      for value in (None, 0, 1, "false", [], {})],
+])
+def test_prompt_snapshot_rejects_invalid_present_fields(tmp_path, flags, error):
+    config = snapshot()
+    config["prompts"] = flags
+    with pytest.raises(ValueError, match=error):
+        run_output.initialize_run(tmp_path, config, "rules")
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize("run_type", ["ai", "ai-test", "offline"])
 @pytest.mark.parametrize("field", ["timeout_seconds", "identity_model", "execution_model"])
 def test_model_run_rejects_missing_source_before_read_or_write(tmp_path, run_type, field):

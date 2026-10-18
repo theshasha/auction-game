@@ -9,8 +9,42 @@ import pytest
 
 from auction_game.ai import prompts
 from auction_game.game.rules import render_rules
-from auction_game.reporting.run_output import initialize_run, make_publish, print_final_result
-from tests.support.factories import NAMES, TEST_GAME, make_standings, run_scenario
+from auction_game.game.players import ScriptedPlayer
+from auction_game.game.tournament import run_tournament
+from auction_game.reporting.run_output import initialize_run, make_publish, print_day_result, print_final_result
+from tests.support.factories import NAMES, TEST_GAME, bids_by_day, make_standings, run_scenario
+
+
+def test_daily_report_shows_winner_hits_rollover_void_and_settled_balances(capsys):
+    game = replace(TEST_GAME, initial_coins=20, max_bid=9, super_bounty=5,
+                   super_hit_score=3, daily_pool=(1, 2, 3), regular_matches=1, max_playoffs=0)
+    strategy = bids_by_day({1: [4, 4, 9, 2, 1, 0], 2: [2, 2, 1, 1, 0, 0], 3: [0] * 6})
+    supers = {"丁": lambda obs: {1: 4, 2: 2}.get(obs.day),
+              "己": lambda obs: 4 if obs.day == 1 else None}
+    players = [ScriptedPlayer(name, strategy, supers.get(name)) for name in NAMES]
+    reports = []
+
+    def report(log, standings, coins):
+        before = deepcopy(log.to_dict())
+        print_day_result(log, standings, coins)
+        assert log.to_dict() == before
+        reports.append(capsys.readouterr().out)
+
+    run_tournament(players, game, on_day_end=report)
+    first, second, last = reports
+    assert "第 1 局（正赛）第 1 天" in first
+    assert "奖池 1 分；丙 以 9 金币获胜。" in first
+    assert "超级命中：丁 +3 分；己 +3 分。" in first
+    assert "| 排名 | 玩家 | 累计总分 | 金币（结算后） |" in first
+    assert "| 1 | 丁 | 3 | 23 |" in first
+    assert "| 1 | 己 | 3 | 23 |" in first
+    assert "| 3 | 丙 | 1 | 11 |" in first
+    assert first.index("| 1 | 丁") < first.index("| 3 | 丙")
+    assert "奖池 2 分；流局，奖池滚存至次日。" in second
+    assert "超级命中：丁 +3 分。" in second
+    assert "奖池 5 分；流局，奖池作废。" in last
+    assert "超级命中：无。" in last
+    assert all(word not in "".join(reports) for word in ["争冠", "上限", "锁冠", "私有分析"])
 
 
 @pytest.mark.parametrize("tied", [False, True])

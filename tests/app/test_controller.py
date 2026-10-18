@@ -55,9 +55,10 @@ def make_named_player(name, task_runner):
 
 @pytest.mark.parametrize("failure", [False, True], ids=["paused-success", "failed-task"])
 @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
-def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, failure, command):
+def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, capsys, failure, command):
     from auction_game.game import engine
     from auction_game.game.tournament import run_tournament
+    from auction_game.reporting.run_output import print_day_result
 
     game = replace(TEST_GAME, daily_pool=(3,), super_hit_score=1, regular_matches=1, max_playoffs=0)
     gate = threading.Event()
@@ -76,7 +77,7 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, fail
         player.game = game
     alpha.plan_strategy("首日规划", "opening_plan")
     before = [player.checkpoint() for player in (alpha, bravo)]
-    settlements, published = [], []
+    settlements, published, day_reports = [], [], []
     calculate = engine.calculate_day_scores
 
     def count_settlement(*args, **kwargs):
@@ -89,26 +90,37 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, fail
         results = run_parallel_round(tasks, controller, "测试出价")
         return [results[player.name] for player, _ in observations]
 
+    def report_day(log, standings, coins):
+        day_reports.append((log.days[-1], standings, coins))
+        print_day_result(log, standings, coins)
+
     monkeypatch.setattr(engine, "calculate_day_scores", count_settlement)
     with running(controller, lambda: run_tournament(
         [alpha, bravo], game, bid_collector=collect,
         on_match_end=lambda log, standings: published.append(log),
+        on_day_end=report_day,
     )) as (thread, outcome):
         assert gate.wait(timeout=5)
-        assert settlements == published == []
+        assert settlements == published == day_reports == []
+        assert capsys.readouterr().out == ""
         assert alpha._pending_day1_bid is None
         controller.offer_command(command)
         thread.join(timeout=5)
         assert not thread.is_alive()
         if command == "q":
             assert isinstance(outcome.get("error"), TournamentAborted)
-            assert settlements == published == []
+            assert settlements == published == day_reports == []
+            assert capsys.readouterr().out == ""
             assert [player.checkpoint() for player in (alpha, bravo)] == before
         else:
             assert settlements == [True]
             assert len(published) == 1
             assert published[0].scores == {"Alpha": 4, "Bravo": 0}
             assert outcome["result"].final_standings[0].total_score == 4
+            assert len(day_reports) == 1
+            output = capsys.readouterr().out
+            assert output.count("===== 第 1 局（正赛）第 1 天 =====") == 1
+            assert "超级命中：Alpha +1 分" in output
         assert len(alpha.task_runner.calls) == 1
         assert len(bravo.task_runner.calls) == (2 if failure and command != "q" else 1)
 

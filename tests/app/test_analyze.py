@@ -126,6 +126,8 @@ def test_player_detail_metrics():
     assert rows["乙"]["super_uses"] == 1 and rows["乙"]["super_hits"] == 1
     assert rows["乙"]["super_net_coins"] == 1
     assert rows["乙"]["collision_burn"] == 3
+    assert rows["乙"]["normal_collision_burn"] == 3
+    assert rows["乙"]["unique_sniped_burn"] == 0
     assert rows["乙"]["avg_bid"] == 3.5
     assert rows["乙"]["end_coins"] == [4, 6]  # 局1: 7-4-2+3=4→+3-3=4；局2: 7→+3-4=6
     assert rows["乙"]["illegal"] == 0 and rows["乙"]["zero_bids"] == 0
@@ -133,6 +135,8 @@ def test_player_detail_metrics():
     assert rows["甲"]["super_uses"] == 0 and rows["甲"]["super_hits"] == 0
     assert rows["甲"]["super_net_coins"] == 0
     assert rows["甲"]["collision_burn"] == 8
+    assert rows["甲"]["normal_collision_burn"] == 3
+    assert rows["甲"]["unique_sniped_burn"] == 5
     assert rows["甲"]["avg_bid"] == 2.0
     assert rows["甲"]["end_coins"] == [2, 10]  # 局1: 7-5=2→+3-3=2；局2: 7→+3=10
     assert rows["甲"]["illegal"] == 1 and rows["甲"]["zero_bids"] == 2
@@ -172,7 +176,8 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     for text in ["总分：4分（拍卖2分，超级命中2分）", "各局总分：3 / 1", "各局拍卖分：1 / 1",
                  "单局最高总分：独占1局，并列1局",
                  "超级出价：使用1次，命中1次（100%）", "超级出价净金币变化：+1金币",
-                 "撞车损失：3金币", "平均正常出价（不含流局日）：3.50", "各局结束余额：4 / 6 金币",
+                 "撞车损失：3金币（正常报价互撞3，唯一报价被狙0）",
+                 "平均正常出价（不含流局日）：3.50", "各局结束余额：4 / 6 金币",
                  "非法出价：0次", "正常出价为零（含非法转0）：0次"]:
         assert text in yi
     jia = output.split("\n甲\n", 1)[1].split("\n\n", 1)[0]
@@ -180,7 +185,8 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "%" not in jia
     assert "非法出价：1次" in jia
     assert "正常出价为零（含非法转0）：2次" in jia
-    assert "撞车损失：15 金币（只计正常出价）" in output
+    assert "撞车损失：8金币（正常报价互撞3，唯一报价被狙5）" in jia
+    assert "撞车损失：15 金币（正常报价互撞 10，唯一报价被狙 5；只计正常出价）" in output
     assert "成本消耗：4 金币" in output
     assert "悬赏发放：3 金币" in output
     assert "超级出价净金币变化：-1 金币" in output
@@ -192,19 +198,21 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "获胜价平均" in output
 
 
-@pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed,collision_hits", [
-    ([5, 4, 3], {"乙": (6, False)}, "甲", 5, [], 0, 0),  # 落空
-    ([5, 4, 3], {"乙": (3, True)}, "甲", 5, [3], 0, 0),  # 命中低价
-    ([5, 5, 3], {"丙": (5, True)}, "丙", 3, [5], 0, 1),  # 原本就互撞
-    ([5, 5, 3, 2], {"丙": (5, True), "丁": (5, True)}, "丙", 3, [5], 0, 2),
-    ([5, 4, 3], {"乙": (5, True), "丙": (5, True)}, "乙", 4, [5], 1, 0),
+@pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed,collision_hits,"
+                         "normal_burn,sniped_burn", [
+    ([5, 4, 3], {"乙": (6, False)}, "甲", 5, [], 0, 0, 0, 0),  # 落空
+    ([5, 4, 3], {"乙": (3, True)}, "甲", 5, [3], 0, 0, 0, 3),  # 命中低价
+    ([5, 5, 3], {"丙": (5, True)}, "丙", 3, [5], 0, 1, 10, 0),  # 原本就互撞
+    ([5, 5, 3, 2], {"丙": (5, True), "丁": (5, True)}, "丙", 3, [5], 0, 2, 10, 0),
+    ([5, 5, 3, 1], {"丙": (5, True), "丁": (3, True)}, "丁", 1, [3, 5], 1, 1, 10, 3),
+    ([5, 4, 3], {"乙": (5, True), "丙": (5, True)}, "乙", 4, [5], 1, 0, 0, 5),
     ([5, 3, 1], {"甲": (3, True), "乙": (1, True), "丙": (5, True)},
-     None, None, [1, 3, 5], 1, 0),  # 全部被狙后流局
-    ([2, 2, 1, 1], {"甲": (5, False)}, None, None, [1, 2], 0, 0),
-    ([0, 2, 2], {"乙": (0, True)}, None, None, [0, 2], 1, 0),  # 移除后 0 也能获胜
+     None, None, [1, 3, 5], 1, 0, 0, 9),  # 全部被狙后流局
+    ([2, 2, 1, 1], {"甲": (5, False)}, None, None, [1, 2], 0, 0, 6, 0),
+    ([0, 2, 2], {"乙": (0, True)}, None, None, [0, 2], 1, 0, 4, 0),  # 移除后 0 也能获胜
 ])
 def test_super_result_days_compare_all_supers_once_without_changing_logs(
-    bids, super_bids, winner, winning_bid, collisions, changed, collision_hits,
+    bids, super_bids, winner, winning_bid, collisions, changed, collision_hits, normal_burn, sniped_burn,
 ):
     days = [
         make_day(1, bids, 1, winner, winning_bid, collisions, int(winner is not None),
@@ -223,6 +231,11 @@ def test_super_result_days_compare_all_supers_once_without_changing_logs(
     assert stats["super_days"] == 1
     assert stats["super_changed_days"] == changed
     assert stats["super_collision_hits"] == collision_hits
+    assert sum(row["normal_collision_burn"] for row in stats["rows"]) == normal_burn
+    assert sum(row["unique_sniped_burn"] for row in stats["rows"]) == sniped_burn
+    assert sum(row["collision_burn"] for row in stats["rows"]) == normal_burn + sniped_burn
+    for row in stats["rows"]:
+        assert row["collision_burn"] == row["normal_collision_burn"] + row["unique_sniped_burn"]
     assert matches == original
 
 
@@ -258,7 +271,9 @@ def test_super_collision_hits_include_void_days_and_illegal_effective_zero(tmp_p
     assert stats["super_changed_days"] == 0
     write_matches(tmp_path, matches)
     analyze(tmp_path)
-    assert "命中原本互撞价 3 次（按超级使用笔数计，包含流局）" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "命中原本互撞价 3 次（按超级使用笔数计，包含流局）" in output
+    assert "撞车损失：6 金币（正常报价互撞 6，唯一报价被狙 0；只计正常出价）" in output
 
 
 def test_super_result_days_keep_effective_bids_and_do_not_simulate_future():
@@ -554,6 +569,8 @@ def test_mean_bids_exclude_void_days_but_include_illegal_zero(tmp_path, capsys):
     assert rows["乙"]["avg_bid"] == 3
     assert rows["甲"]["illegal"] == 1
     assert rows["甲"]["collision_burn"] == 2  # 流局日撞车仍然扣币
+    assert rows["甲"]["normal_collision_burn"] == 2
+    assert rows["甲"]["unique_sniped_burn"] == 0
     write_matches(tmp_path, [{"match": match}])
     analyze(tmp_path)
     output = capsys.readouterr().out

@@ -33,6 +33,22 @@ class TestSystemPrompt:
         system = prompts.build_system_prompt("甲", "人设", "正文", predictions, NAMES, TEST_GAME)
         assert "乙、丙、丁、戊、己" in system  # 其他五位玩家名单
 
+    @pytest.mark.parametrize("enable_predictions", [False, True])
+    @pytest.mark.parametrize("enable_personas", [False, True])
+    def test_independent_switches_remove_entire_sections(self, enable_predictions, enable_personas):
+        from auction_game.game.rules import render_rules
+
+        text = prompts.build_system_prompt(
+            "甲", "独特人设标题", "独特人设正文", [("乙", 73)], NAMES, TEST_GAME,
+            enable_predictions=enable_predictions, enable_personas=enable_personas,
+        )
+        for marker in ("【赛前预测】", "专家", "夺冠率预测", "乙 73%"):
+            assert (marker in text) is enable_predictions
+        for marker in ("【你的人设】", "独特人设标题", "独特人设正文", "人设", "认真思考"):
+            assert (marker in text) is enable_personas
+        assert "你叫 甲" in text and "乙、丙、丁、戊、己" in text
+        assert text.startswith(render_rules(TEST_GAME, NAMES, include_note=False))
+
 
 class TestSpeechFields:
     """公开字段边界；观众总结提示信息不变。"""
@@ -96,6 +112,18 @@ def test_memory_body_keeps_task_boundaries_without_tool_instruction():
                      "篇幅可以根据有用信息的多少调整，无需凑字数或精确计字",
                      "只填写 memory", "规则与最新成绩会另行提供"):
         assert required in text
+    assert "支持或推翻判断的关键例子" in text
+    assert "不要逐日复述或完整抄录出价序列" in text
+    assert "具体报价仅作为判断的必要证据保留" in text
+
+
+def test_memory_tool_descriptions_keep_replacement_without_full_record_instruction():
+    from auction_game.ai.agent_tasks import MemoryOutput, OUTPUT_TOOLS
+
+    descriptions = [MemoryOutput.model_fields["memory"].description, OUTPUT_TOOLS["memory"].description]
+    for text in descriptions:
+        assert "私人笔记" in text and "替换旧记忆" in text
+        assert "完整" not in text
 
 class TestPlayoffNotice:
     """加赛预告只在正赛打完（或加赛后）且第一名仍并列时出现。"""

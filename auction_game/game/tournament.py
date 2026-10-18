@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
-from auction_game.game.engine import compute_standings, run_match
+from auction_game.game.engine import DayEndCallback, compute_standings, run_match
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.game.players import Player
@@ -44,6 +44,8 @@ def run_tournament(
     on_match_end: Optional[Callable[[MatchLog, list[StandingsEntry]], None]] = None,
     director: Optional[SpeechDirector] = None,
     bid_collector=None,
+    *,
+    on_day_end: DayEndCallback | None = None,
 ) -> TournamentResult:
     """跑完整场比赛。
 
@@ -51,6 +53,7 @@ def run_tournament(
     累计排名——这两者即规则要求局末向全体玩家公开的信息。
     director: 发言编排（开局发言、局末发言+下局规划、终局感言+观众总结）。
     bid_collector: AI 模式的并行出价收集器，透传给 engine.run_match。
+    on_day_end: 每日结算后的观众展示回调，透传给 engine.run_match。
     """
     names = [player.name for player in players]
     if len(names) < 2:
@@ -79,6 +82,7 @@ def run_tournament(
             past_logs=result.match_logs,
             game=game,
             bid_collector=bid_collector,
+            on_day_end=on_day_end,
         )
         for name, auction_score in log.auction_scores.items():
             auction_scores_history[name].append(auction_score)

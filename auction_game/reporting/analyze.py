@@ -284,6 +284,8 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
     super_days = 0
     super_changed_days = 0
     collision_burn = {name: 0 for name in player_names}
+    normal_collision_burn = {name: 0 for name in player_names}
+    unique_sniped_burn = {name: 0 for name in player_names}
     normal_bids: dict[str, list[int]] = {name: [] for name in player_names}
     end_coins: dict[str, list[int]] = {name: [] for name in player_names}
     illegal_counts = {name: 0 for name in player_names}
@@ -309,6 +311,7 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
             for name in champions:
                 top_matches[name] += 1
         for day in days:
+            normal_bid_counts = Counter(bid["bid"] for bid in day["bids"] if not bid["is_super"])
             if day["super_uses"]:
                 super_days += 1
                 # 固定当天有效正常报价，移除全部超级后重新判定；不推演未来。
@@ -316,7 +319,6 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
                     BidRecord(player=bid["player"], raw_bid=bid["raw_bid"], bid=bid["bid"], status=bid["status"])
                     for bid in day["bids"] if not bid["is_super"]
                 ]
-                normal_bid_counts = Counter(bid.bid for bid in effective_normal_bids)
                 super_collision_hits += sum(
                     use["hit"] and normal_bid_counts[use["value"]] >= 2
                     for use in day["super_uses"]
@@ -336,6 +338,11 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
                     zero_bid_counts[name] += 1
                 if bid["bid"] in burned_values:
                     collision_burn[name] += bid["bid"]
+                    # 原本互撞的价位即使同时被狙，也只归入正常报价互撞。
+                    if normal_bid_counts[bid["bid"]] >= 2:
+                        normal_collision_burn[name] += bid["bid"]
+                    else:
+                        unique_sniped_burn[name] += bid["bid"]
                 if not day["is_void"]:
                     normal_bids[name].append(bid["bid"])
             for use in day["super_uses"]:
@@ -360,6 +367,8 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
             "super_hits": super_hits[name],
             "super_net_coins": super_hits[name] * game.super_bounty - super_uses_count[name] * game.super_cost,
             "collision_burn": collision_burn[name],
+            "normal_collision_burn": normal_collision_burn[name],
+            "unique_sniped_burn": unique_sniped_burn[name],
             "avg_bid": sum(bids) / len(bids) if bids else None,
             "end_coins": end_coins[name],
             "illegal": illegal_counts[name],
@@ -391,7 +400,8 @@ def print_player_stats(stats: dict) -> None:
             super_text += f"（{row['super_hits'] / row['super_uses']:.0%}）"
         print(f"  超级出价：{super_text}")
         print(f"  超级出价净金币变化：{row['super_net_coins']:+d}金币")
-        print(f"  撞车损失：{row['collision_burn']}金币")
+        print(f"  撞车损失：{row['collision_burn']}金币"
+              f"（正常报价互撞{row['normal_collision_burn']}，唯一报价被狙{row['unique_sniped_burn']}）")
         avg_bid_text = f"{row['avg_bid']:.2f}" if row["avg_bid"] is not None else "—"
         print(f"  平均正常出价（不含流局日）：{avg_bid_text}")
         end_coins_text = " / ".join(str(coins) for coins in row["end_coins"])
@@ -430,6 +440,8 @@ def analyze(run_dir: Path) -> None:
     zero_bids = 0
     zero_bid_wins = 0
     collision_burn = sum(row["collision_burn"] for row in player_stats["rows"])
+    normal_collision_burn = sum(row["normal_collision_burn"] for row in player_stats["rows"])
+    unique_sniped_burn = sum(row["unique_sniped_burn"] for row in player_stats["rows"])
     super_uses = sum(row["super_uses"] for row in player_stats["rows"])
     super_hits = sum(row["super_hits"] for row in player_stats["rows"])
     super_bounty_minted = super_hits * game.super_bounty
@@ -465,7 +477,8 @@ def analyze(run_dir: Path) -> None:
     print("经济与超级出价")
     print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
           f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
-    print(f"撞车损失：{collision_burn} 金币（只计正常出价）")
+    print(f"撞车损失：{collision_burn} 金币"
+          f"（正常报价互撞 {normal_collision_burn}，唯一报价被狙 {unique_sniped_burn}；只计正常出价）")
     print(f"  每局平均：{collision_burn / len(matches):.1f} 金币")
     hit_rate = f"（命中率 {super_hits / super_uses:.0%}）" if super_uses else ""
     print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次{hit_rate}")

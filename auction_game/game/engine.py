@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from auction_game.game.game_rules import GameSettings, validate_submission as submission_error
 from auction_game.game.models import (
@@ -15,6 +15,9 @@ from auction_game.game.models import (
     StandingsEntry,
 )
 from auction_game.game.players import Player
+
+
+DayEndCallback = Callable[[MatchLog, list[StandingsEntry], dict[str, int]], None]
 
 
 def validate_submission(
@@ -125,6 +128,7 @@ def run_match(
     bid_collector=None,
     *,
     scores_history: dict[str, list[int]],
+    on_day_end: DayEndCallback | None = None,
 ) -> MatchLog:
     """按本场参数运行一局（正赛局或加赛局规则相同），返回完整局日志。
 
@@ -134,6 +138,8 @@ def run_match(
     每个提交为 (正常出价, 超级出价) 二元组），AI 模式注入并行收集；
     默认逐个顺序调用 decide_bid。暂停/失败的重跑由 run_parallel_round
     内部处理，对本函数透明。
+    on_day_end: 出价整轮已提交并结算后，收到截至当日的局日志、累计排名和
+    结算后余额快照；仅供观众展示，不加入玩家输入。局日志会随后续天数增长。
     """
     coins = {player.name: game.initial_coins for player in players}
     match_auction_scores = {player.name: 0 for player in players}
@@ -312,7 +318,15 @@ def run_match(
                 is_void=is_void,
             )
         )
+        log.auction_scores = dict(match_auction_scores)
+        log.scores = dict(match_scores)
+        if on_day_end is not None:
+            standings = compute_standings(
+                auction_scores_history,
+                scores_history=scores_history,
+                current_match_auction_scores=match_auction_scores,
+                current_match_scores=match_scores,
+            )
+            on_day_end(log, standings, dict(coins))
 
-    log.auction_scores = match_auction_scores
-    log.scores = match_scores
     return log

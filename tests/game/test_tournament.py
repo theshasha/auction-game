@@ -1,6 +1,7 @@
 """整场流程：拍卖分与总分分别累计，按总分排名并决定加赛和发言。"""
 
 from dataclasses import replace
+from copy import deepcopy
 
 import pytest
 
@@ -295,6 +296,60 @@ class TestDirectorWillContinue:
         _, final_log = director.final_calls[0]
         assert final_log.match_index == 7
         assert final_log is result.match_logs[-1]
+
+
+def test_daily_callback_reports_cumulative_scores_and_settled_coin_snapshots(capsys):
+    game = replace(TEST_GAME, initial_coins=12, daily_salary=7, daily_pool=(3, 3),
+                   super_cost=3, super_bounty=5, super_hit_score=2,
+                   regular_matches=2, max_playoffs=0)
+    table = {
+        (1, 1): {"甲": (2, None), "乙": (0, 1), "丙": (1, None)},
+        (1, 2): {"乙": (3, None)},
+        (2, 1): {"甲": (1, None)},
+        (2, 2): {"乙": (1, None)},
+    }
+    reports, observations = [], []
+
+    def report(log, standings, coins):
+        reports.append((log.to_dict(), standings, coins))
+
+    result = run_tournament(make_bid_players(table, observations), game, on_day_end=report)
+    assert [(log["match_index"], len(log["days"])) for log, _, _ in reports] == [
+        (1, 1), (1, 2), (2, 1), (2, 2),
+    ]
+    assert [{entry.player: entry.total_score for entry in standings} for _, standings, _ in reports] == [
+        {"甲": 3, "乙": 2, "丙": 0}, {"甲": 3, "乙": 5, "丙": 0},
+        {"甲": 6, "乙": 5, "丙": 0}, {"甲": 6, "乙": 8, "丙": 0},
+    ]
+    assert [coins for _, _, coins in reports] == [
+        {"甲": 10, "乙": 14, "丙": 11}, {"甲": 17, "乙": 18, "丙": 18},
+        {"甲": 11, "乙": 12, "丙": 12}, {"甲": 18, "乙": 18, "丙": 19},
+    ]
+    assert reports[0][0]["scores"] == {"甲": 3, "乙": 2, "丙": 0}
+    assert reports[2][0]["scores"] == {"甲": 3, "乙": 0, "丙": 0}
+    assert reports[2][1][0].scores_per_match == [3]
+    assert [(entry.player, entry.rank, entry.total_score) for entry in reports[3][1]] == [
+        (entry.player, entry.rank, entry.total_score) for entry in result.final_standings
+    ]
+
+    # 展示回调不改变玩家观察，未注入展示的流程（包括 benchmark）保持静默。
+    without_report = []
+    silent_result = run_tournament(make_bid_players(table, without_report), game)
+    assert observations == without_report
+    assert result == silent_result
+    assert capsys.readouterr().out == ""
+
+
+def test_daily_callback_also_runs_for_playoffs_and_preserves_tied_ranks():
+    game = replace(TEST_GAME, daily_pool=(3,), regular_matches=1, max_playoffs=1)
+    reports = []
+
+    def report(log, standings, coins):
+        reports.append((deepcopy(log), standings, coins))
+
+    run_tournament(make_bid_players({}), game, on_day_end=report)
+    assert [(log.match_index, log.is_playoff) for log, _, _ in reports] == [(1, False), (2, True)]
+    assert all(entry.rank == 1 for _, standings, _ in reports for entry in standings)
 
 
 class TestPublicationOnMatchEnd:

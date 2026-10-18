@@ -157,7 +157,8 @@ def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, er
 
 def test_ai_success_returns_zero_with_mocked_tournament(monkeypatch, tmp_path, game):
     monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"max_concurrency": 10, "timeout_seconds": 30, "channels": {"test": {"base_url": "https://offline.invalid/v1"}}}},
+        {"llm": {"max_concurrency": 10, "timeout_seconds": 30, "channels": {"test": {"base_url": "https://offline.invalid/v1"}}},
+         "prompts": {"enable_predictions": True, "enable_personas": True}},
         [dict(name=name, provider="test", model="test", protocol="chat", max_tokens=123,
               model_settings={}, capabilities={"reasoning_status": "unknown", "reasoning_detail": "synthetic",
                                                "output_fallback_reason": None},
