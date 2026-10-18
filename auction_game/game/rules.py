@@ -13,35 +13,36 @@ from auction_game.paths import TEMPLATE_PATH, RULES_PATH
 GENERATED_NOTE = "<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动预览：python -m auction_game.game.rules -->\n"
 
 
-def render_rules(game: GameSettings, player_names: list[str]) -> str:
-    """使用实际参赛名单生成完整规则；模板缺值或格式错误直接抛出。"""
-    if len(player_names) < 2:
+def render_rules(game: GameSettings, names: list[str], *, include_note: bool = True) -> str:
+    """按实际名单渲染规则；文件保留生成说明，模型可仅取正文。"""
+    if len(names) < 2:
         raise ValueError("参赛名单至少需要两名玩家")
-    if any(not isinstance(name, str) or not name.strip() for name in player_names):
+    if any(not isinstance(name, str) or not name.strip() for name in names):
         raise ValueError("玩家名字必须是非空字符串")
-    if len(set(player_names)) != len(player_names):
+    if len(set(names)) != len(names):
         raise ValueError("玩家名字不能重复")
     if len(set(game.daily_pool)) == 1:
         pool_description = (
-            f"每天拍卖 {game.daily_pool[0]} 个胜场，每局共 {game.wins_per_match} 个胜场。"
+            f"每天拍卖 {game.daily_pool[0]} 分，每局共 {game.auction_pool_per_match} 分拍卖奖池。"
         )
     else:
         daily_amounts = "、".join(
-            f"第 {day} 天 {amount} 个胜场"
+            f"第 {day} 天 {amount} 分"
             for day, amount in enumerate(game.daily_pool, 1)
         )
         pool_description = (
-            f"各日基础奖池依次为：{daily_amounts}；每局计划共 {game.wins_per_match} 个胜场。"
+            f"各日基础奖池依次为：{daily_amounts}；每局计划共 {game.auction_pool_per_match} 分拍卖奖池。"
         )
     values = {
         **game.to_dict(),
         "max_days": game.max_days,
-        "player_count": len(player_names),
-        "player_names": "、".join(player_names),
+        "player_count": len(names),
+        "player_names": "、".join(names),
         "pool_description": pool_description,
     }
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    return GENERATED_NOTE + template.format_map(values).strip() + "\n"
+    body = template.format_map(values).strip() + "\n"
+    return GENERATED_NOTE + body if include_note else body
 
 
 def main() -> int:

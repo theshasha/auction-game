@@ -8,6 +8,7 @@ from auction_game.ai import ai_speech
 from auction_game.cli import offline_demo
 from auction_game.configuration import load_configuration
 from auction_game.controller import run_parallel_round
+from auction_game.game.game_rules import GameSettings
 from auction_game.reporting.run_paths import RunPaths
 
 
@@ -26,6 +27,10 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
 
     monkeypatch.setattr(runners, "load_configuration", load)
     monkeypatch.setattr(offline_demo, "load_configuration", load)
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: GameSettings(
+        initial_coins=7, daily_salary=3, daily_pool=(3, 3), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=1, regular_matches=2, max_playoffs=1,
+    ))
     monkeypatch.setattr("auction_game.ai.llm_client._require_env",
                         lambda *args: pytest.fail("离线赛禁止读取真实密钥"))
     rounds = []
@@ -49,6 +54,6 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
     assert any("局末发言" in label for label in rounds)
     assert any("天出价" in label for label in rounds)
     assert "最终感言" in rounds
-    assert "观众总结（不回喂）" in rounds
+    assert "观众总结（仅观众可见）" in rounds
     assert RunPaths(run_dir).read_config()["max_concurrency"] == limit
     assert f"并发上限：{limit}" in capsys.readouterr().out

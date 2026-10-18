@@ -18,7 +18,11 @@ from tests.support.wire import Harness, PROTOCOLS, reply
 
 def setup_run(tmp_path):
     paths = initialize_run(tmp_path / "run", {"run_type": "ai", "mode": "regular", "game": TEST_GAME.to_dict(),
-                           "players": [{"name": "Alpha"}, {"name": "Bravo"}]}, "rules")
+                           "timeout_seconds": 3,
+                           "players": [{"name": name, "identity_model": {"model": "identity"},
+                                        "execution_model": {"protocol": "chat", "model": "execution", "max_tokens": 100,
+                                                            "base_url": "https://offline.invalid/v1"}}
+                                       for name in ("Alpha", "Bravo")]}, "rules")
     return paths, ToolWriter(paths)
 
 
@@ -64,6 +68,12 @@ def test_actual_http_definition_retry_failure_summary_and_dedup(protocol, tmp_pa
     assert [ref["definition_id"] for ref in refs[1:]] == [e["tool_definitions"][0] for e in entries]
     text = paths.tools.read_text(encoding="utf-8")
     assert "发送前实际请求定义" in text and "无输出工具" in text
+    assert "offline_sdk_generated" in text and "无真实服务调用" in text
+    for ref in refs:
+        assert f'<a id="{ref["definition_id"]}"></a>' in text
+        assert (f'`{ref["task_id"]}` · {ref["task"]} / {ref["phase"]} / {ref["context"]} · '
+                f'request {ref["request"]} / attempt {ref["attempt"]} · '
+                f'{ref["source"]} · `{ref["model"]}`') in text
     assert text.count('"name": "bid"') == 1
     assert "[本场工具定义](tools.md)" in (paths.root / "README.md").read_text(encoding="utf-8")
     readable = paths.player(1, readable=True).read_text(encoding="utf-8")

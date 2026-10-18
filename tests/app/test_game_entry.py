@@ -21,7 +21,11 @@ from auction_game.game.rules import render_rules
 
 @pytest.fixture
 def game():
-    return GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
+    return GameSettings(
+        initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
+        super_cost=1, super_bounty=5, super_hit_score=2,
+        regular_matches=2, max_playoffs=0,
+    )
 
 
 def test_bots_load_once_and_save_actual_rules(monkeypatch, tmp_path, game):
@@ -77,7 +81,8 @@ def test_ai_single_player_stops_before_clients_or_logs(monkeypatch, capsys, game
 
     assert runners.run_ai() == 1
 
-    assert "错误：AI 对局至少需要 2 名玩家，请检查 players.yaml" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "至少需要 2 名玩家" in output and "players.yaml" in output
 
 
 @pytest.mark.parametrize("args,expected", [

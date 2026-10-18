@@ -12,8 +12,17 @@ from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import BOT_NAMES
 
 
+@pytest.fixture(autouse=True)
+def isolate_root_rules(tmp_path, monkeypatch):
+    monkeypatch.setattr("auction_game.game.rules.RULES_PATH", tmp_path / "RULES.md")
+
+
 def test_benchmark_uses_one_game_without_logs(monkeypatch, capsys, tmp_path):
-    game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
+    game = GameSettings(
+        initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
+        super_cost=1, super_bounty=5, super_hit_score=2,
+        regular_matches=2, max_playoffs=0,
+    )
     run_tournament = benchmark.run_tournament
     loaded = []
     calls = []
@@ -50,7 +59,7 @@ def test_benchmark_uses_one_game_without_logs(monkeypatch, capsys, tmp_path):
     assert all(record.status == "ok" and not record.is_super for record in strategy_records)
     output = capsys.readouterr().out
     assert "两组各 2 场，共 4 场" in output
-    assert "每日最高可付价（上限 9，不使用超级出价）+ 5 随机" in output
+    assert "最高可付价对照：2 场（上限 9，无超级，5 个随机对手）" in output
     assert "获胜价=9（出价上限）" in output
     assert "以下比较均取第二组" in output
 
@@ -76,18 +85,29 @@ def test_invalid_count_fails_before_loading_configuration(monkeypatch, capsys, c
     assert "场数必须是正整数" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("strategy_wins,comparison", [(6, "高于"), (5, "等于"), (4, "低于")])
-def test_comparison_describes_only_second_group(monkeypatch, capsys, strategy_wins, comparison):
-    game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
+@pytest.mark.parametrize("strategy_score,rank", [
+    pytest.param(26, 1, id="higher"),
+    pytest.param(25, 1, id="equal"),
+    pytest.param(24, 6, id="lower"),
+])
+def test_comparison_describes_only_second_group(monkeypatch, capsys, strategy_score, rank):
+    game = GameSettings(
+        initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
+        super_cost=1, super_bounty=5, super_hit_score=2,
+        regular_matches=2, max_playoffs=0,
+    )
     monkeypatch.setattr(benchmark, "load_game_settings", lambda: game)
     calls = []
 
     def tournament(players, actual_game):
         calls.append([p.name for p in players])
-        wins = {p.name: [100] for p in players}
+        auction_scores = {p.name: [100] for p in players}
+        scores = {p.name: [400] for p in players}
         if players[0].name == "最高可付价玩家":
-            wins = {p.name: [5] for p in players}
-            wins[players[0].name] = [strategy_wins]
+            auction_scores = {p.name: [5] for p in players}
+            auction_scores[players[0].name] = [6]
+            scores = {p.name: [25] for p in players}
+            scores[players[0].name] = [strategy_score]
         return SimpleNamespace(
             playoff_count=0,
             match_logs=[
@@ -99,19 +119,20 @@ def test_comparison_describes_only_second_group(monkeypatch, capsys, strategy_wi
                     make_day(1, [9] * 6, 9, None, None, [9], is_void=True),
                 ]),
             ],
-            final_standings=make_standings(wins),
+            final_standings=make_standings(auction_scores, scores_history=scores),
         )
 
     monkeypatch.setattr(benchmark, "run_tournament", tournament)
     assert benchmark.run_benchmark(1) == 0
     assert len(calls) == 2
     output = capsys.readouterr().out
-    assert f"最高可付价玩家平均总胜场 {strategy_wins:.2f}" in output
-    assert "随机对手平均 5.00" in output
-    explanation = "每日统计口径：非流局日全部有效出价均值（含超级出价数值）；奖池均值包含全部日期（含流局日）。"
+    assert f"最高可付价玩家平均总分 {strategy_score:.2f} 分（平均排名 {rank:.2f}）" in output
+    assert "随机对手平均总分 25.00 分" in output
+    explanation = "均价不含流局日，含超级数值；奖池均值含流局日。"
     assert output.count(explanation) == 1
     assert output.index(explanation) < output.index("===== 纯随机对照")
-    assert output.count("第 1 天：平均出价 4.00，平均奖池 6.00") == 2
-    assert output.count("第 2 天：平均出价 —（全流局），平均奖池 12.00") == 2
-    assert f"本批样本中，最高可付价玩家平均胜场{comparison}随机对手。" in output
+    assert output.count("第 1 天：平均出价 4.00，平均拍卖奖池 6.00 分") == 2
+    assert output.count("第 2 天：平均出价 —（全流局），平均拍卖奖池 12.00 分") == 2
+    assert "本批样本" not in output
+    assert "胜场" not in output
     assert all(term not in output for term in ["显著", "占优", "规则需要", "极点", "Whale", "鲸鱼"])

@@ -144,7 +144,11 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, c
     monkeypatch.setattr(entry, "load_configuration", load)
     monkeypatch.setattr(entry, "make_model_factory", make_model_factory)
     if entry is runners:
-        game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
+        game = GameSettings(
+            initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
+            super_cost=1, super_bounty=5, super_hit_score=2,
+            regular_matches=2, max_playoffs=0,
+        )
         games_loaded = []
 
         def load_game():

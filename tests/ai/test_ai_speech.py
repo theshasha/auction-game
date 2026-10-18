@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -9,13 +10,17 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.ai import ai_speech
 from auction_game.ai.agent_execution import OutputFailedError
-from tests.support.factories import bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply
+from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import ScriptedPlayer
 
 
 def test_director_passes_game_to_both_plans(monkeypatch, tmp_path):
-    game = GameSettings(13, 4, (2, 1, 3), 9, 1, 5, 2, 0)
+    game = GameSettings(
+        initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
+        super_cost=1, super_bounty=5, super_hit_score=2,
+        regular_matches=2, max_playoffs=0,
+    )
     players = [ScriptedPlayer.constant(name, 0) for name in ("甲", "乙")]
     director = ai_speech.AISpeechDirector(players, None, tmp_path, game=game)
     plans = []
@@ -157,10 +162,12 @@ def test_rollback_new_plan_removes_new_cache():
     assert player._pending_day1_bid is None and len(player.messages) == 1
 
 
-def test_director_only_delivers_public_fields_to_other_players(tmp_path):
+def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(tmp_path):
     from auction_game.controller import Controller
-    a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(1)]))
-    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(2)]))
+    game = replace(TEST_GAME, initial_coins=13, daily_pool=(2, 1, 3), max_bid=9,
+                   super_cost=1, super_hit_score=2, regular_matches=1)
+    a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6), bid_reply(1)]), game=game)
+    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), game=game)
     b.name = "Bravo"
     director = ai_speech.AISpeechDirector([a, b], Controller(mode="continuous", announce=lambda _: None),
                                         tmp_path, game=a.game)
@@ -169,3 +176,16 @@ def test_director_only_delivers_public_fields_to_other_players(tmp_path):
     assert "public-B" in request and "烟雾弹" not in request
     public_log = director.speeches_log.read_text(encoding="utf-8")
     assert "public-A" in public_log and "烟雾弹" not in public_log
+    for player, planned, fallback in ((a, (2, 6), (1, None)), (b, (3, 6), (0, None))):
+        assert len(player.task_runner.calls) == 2
+        plan_input = player.task_runner.calls[-1][-1].parts[-1].content
+        for fact in ("你的金币 13", "今日奖池 2 分",
+                     "本局含今天还剩 3 天，拍卖奖池 6 分",
+                     "每人理论最多再得 6 命中分"):
+            assert fact in plan_input
+        assert plan_input.count("全员累计总分：全员 0 分。") == 1
+        obs = make_ai_obs(game=game, coins=game.initial_coins)
+        assert player.decide_bid(obs) == planned
+        assert len(player.task_runner.calls) == 2
+        assert player.decide_bid(obs) == fallback
+        assert len(player.task_runner.calls) == 3

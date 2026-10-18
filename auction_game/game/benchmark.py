@@ -14,7 +14,7 @@ def run_benchmark(count: int) -> int:
     """策略对照（不写日志）：两组各 count 场，共 2 × count 场。
 
     第二组为 1 个每日出最高可付价、不使用超级出价的玩家对 5 个随机玩家。
-    策略与随机对手的平均胜场比较均取第二组，第一组仅作过程统计参考。
+    策略与随机对手的平均总分比较均取第二组，第一组仅作过程统计参考。
     """
     from collections import Counter
 
@@ -75,40 +75,33 @@ def run_benchmark(count: int) -> int:
             bids = stats["bids_by_day"].get(day_index, [])
             pools = stats["pools_by_day"][day_index]
             avg_bid = f"{sum(bids) / len(bids):.2f}" if bids else "—（全流局）"
-            print(f"  第 {day_index} 天：平均出价 {avg_bid}，平均奖池 {sum(pools) / len(pools):.2f}")
+            print(f"  第 {day_index} 天：平均出价 {avg_bid}，平均拍卖奖池 {sum(pools) / len(pools):.2f} 分")
         win_dist = dict(sorted(stats["winning_bids"].items()))
         cap_wins = stats["winning_bids"][game.max_bid]
         print(f"获胜价分布：{win_dist}")
         print(f"获胜价={game.max_bid}（出价上限）占比：{cap_wins}/{decided}（{cap_wins / max(decided, 1):.1%}）")
 
     print(f"两组各 {count} 场，共 {2 * count} 场；第一组仅作过程统计参考。")
-    print("每日统计口径：非流局日全部有效出价均值（含超级出价数值）；奖池均值包含全部日期（含流局日）。")
+    print("均价不含流局日，含超级数值；奖池均值含流局日。")
     baseline = [play_tournament(seed=1000 + i, with_affordable_max=False) for i in range(count)]
     print_stats(f"纯随机对照：{count} 场随机 Bot 对战", aggregate(baseline))
 
     strategy_results = [play_tournament(seed=2000 + i, with_affordable_max=True) for i in range(count)]
-    print_stats(f"最高可付价策略对照：{count} 场「每日最高可付价（上限 {game.max_bid}，不使用超级出价）+ 5 随机」",
+    print_stats(f"最高可付价对照：{count} 场（上限 {game.max_bid}，无超级，5 个随机对手）",
                 aggregate(strategy_results))
-    strategy_wins = []
-    opponent_wins = []
+    strategy_scores = []
+    opponent_scores = []
     strategy_ranks = []
     for result in strategy_results:
         for entry in result.final_standings:
             if entry.player == "最高可付价玩家":
-                strategy_wins.append(entry.total_wins)
+                strategy_scores.append(entry.total_score)
                 strategy_ranks.append(entry.rank)
             else:
-                opponent_wins.append(entry.total_wins)
-    avg_strategy = sum(strategy_wins) / len(strategy_wins)
-    avg_opponent = sum(opponent_wins) / len(opponent_wins)
-    avg_rank = sum(strategy_ranks) / len(strategy_ranks)
-    print(f"以下比较均取第二组：最高可付价玩家平均总胜场 {avg_strategy:.2f}（平均排名 {avg_rank:.2f}），"
-          f"随机对手平均 {avg_opponent:.2f}")
-    if avg_strategy > avg_opponent:
-        comparison = "高于"
-    elif avg_strategy == avg_opponent:
-        comparison = "等于"
-    else:
-        comparison = "低于"
-    print(f"本批样本中，最高可付价玩家平均胜场{comparison}随机对手。")
+                opponent_scores.append(entry.total_score)
+    avg_strategy_score = sum(strategy_scores) / len(strategy_scores)
+    avg_opponent_score = sum(opponent_scores) / len(opponent_scores)
+    avg_strategy_rank = sum(strategy_ranks) / len(strategy_ranks)
+    print(f"以下比较均取第二组：最高可付价玩家平均总分 {avg_strategy_score:.2f} 分（平均排名 {avg_strategy_rank:.2f}），"
+          f"随机对手平均总分 {avg_opponent_score:.2f} 分")
     return 0

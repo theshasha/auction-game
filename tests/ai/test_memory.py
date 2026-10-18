@@ -13,7 +13,7 @@ from auction_game.ai.agent_execution import OutputFailedError
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.ai.ai_speech import AISpeechDirector
 from auction_game.controller import Controller
-from tests.support.factories import (bid_reply, fake_task_runner, make_ai_obs, make_log,
+from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log,
                                      make_player, make_standings, speech_reply)
 from tests.support.wire import Harness, PROTOCOLS, reply
 
@@ -186,8 +186,11 @@ def test_failed_memory_does_not_commit_context_review_cache_or_memory(fault, tmp
     assert player.checkpoint() == before
 
 
-@pytest.mark.parametrize("playoff", [False, True])
-def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path, playoff):
+@pytest.mark.parametrize("match_index, playoff", [(1, False), (2, False), (3, True)],
+                         ids=["next-regular", "first-playoff", "next-playoff"])
+def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path, match_index, playoff):
+    game = replace(TEST_GAME, initial_coins=13, daily_pool=(2, 1, 3), max_bid=9,
+                   super_hit_score=2, regular_matches=2)
     players = []
     for name in ("Alpha", "Bravo"):
         def memory(messages, name=name):
@@ -202,17 +205,37 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             assert "public-" + ("Bravo" if name == "Alpha" else "Alpha") in prompt
             assert "private-" not in text
             return {"memory": "private-" + name}
-        p = make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1)]))
+        p = make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6),
+                                         bid_reply(0)]), game=game)
         p.name = name
         players.append(p)
     director = AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None), tmp_path, game=players[0].game)
-    director.on_match_end(make_log(is_playoff=playoff), make_standings({"Alpha": [2], "Bravo": [0]}), True)
+    # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。
+    standings = make_standings({"Alpha": [2] * match_index, "Bravo": [1] * match_index},
+                              scores_history={"Alpha": [2] * match_index, "Bravo": [3] * match_index})
+    director.on_match_end(make_log(match_index=match_index, is_playoff=playoff, game=game), standings, True)
     for p in players:
         text = encoded(p.task_runner.calls[-1])
         assert "private-" + p.name in text
         assert "private-" + ("Bravo" if p.name == "Alpha" else "Alpha") not in text
         assert "public-Alpha" not in text and "public-Bravo" not in text
         assert len(p.task_runner.calls) == 3
+        plan_input = p.task_runner.calls[-1][-1].parts[-1].content
+        for entry in standings:
+            row = next(line for line in plan_input.splitlines() if f"| {entry.player} |" in line)
+            assert row.split(" | ")[:3] == [f"| {entry.rank}", entry.player, str(entry.total_score)]
+        assert "全员累计总分：" not in plan_input
+        for fact in (f"第 {match_index + 1} 局第 1 天的出价", "你的金币 13",
+                     "今日奖池 2 分", "本局含今天还剩 3 天，拍卖奖池 6 分",
+                     "每人理论最多再得 6 命中分"):
+            assert fact in plan_input
+        obs = replace(make_ai_obs(game=game, coins=game.initial_coins),
+                      past_match_logs=[make_log(match_index=i, game=game).to_dict()
+                                       for i in range(1, match_index + 1)])
+        assert p.decide_bid(obs) == (1, 6)
+        assert len(p.task_runner.calls) == 3
+        assert p.decide_bid(obs) == (0, None)
+        assert len(p.task_runner.calls) == 4
     assert "private-" not in (tmp_path / "speeches.md").read_text(encoding="utf-8")
 
 

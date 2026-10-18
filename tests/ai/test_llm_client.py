@@ -86,7 +86,7 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     assert [record["errors"] for record in entry["requests"]] == [[error] for error in entry["request_errors"]]
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "网络尝试" not in markdown
-    assert f"输出纠错 1 次，{'最终通过校验' if succeeds else '最终失败'}" in markdown
+    assert f"纠错 1 次，{'已通过' if succeeds else '仍失败'}" in markdown
     assert all(s.closed for s in h.streams)
 
 
@@ -135,7 +135,7 @@ def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol,
     assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(2, 1), (2, 2)]
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "网络尝试" not in markdown
-    assert "输出纠错 1 次，最终失败" in markdown
+    assert "纠错 1 次，仍失败" in markdown
     assert len(h.requests) == 3 and len(player.messages) == 1 and h.closes == 1
 
 
@@ -170,7 +170,8 @@ def test_player_task_chain_replays_native_tool_pairs_on_wire(protocol, tmp_path)
         assert [t.get("function", t)["name"] for t in tools] == names[index:index + 1]
         if tools:
             tool = tools[0].get("function", tools[0])
-            assert "提交当前" in tool["description"]
+            expected_description = {"bid": "提交今日出价", "speech": "提交公开发言"}
+            assert tool["description"] == expected_description[names[index]]
             assert f"调用 `{names[index]}` 工具提交" in encoded_body
         if protocol == "chat":
             messages = request_body["messages"]

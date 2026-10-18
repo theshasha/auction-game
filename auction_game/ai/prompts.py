@@ -8,26 +8,20 @@ from __future__ import annotations
 
 from typing import Optional
 
+from auction_game.game.engine import calculate_day_scores
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
 
 
 def bid_format_hint(game: GameSettings) -> str:
-    """业务要求；输出格式由任务 schema 唯一声明。"""
-    return (
-        "请分析当前局势并决定今日出价。"
-        f"正常出价与超级出价须为 0 到 {game.max_bid} 的整数；正常出价不得超过余额。"
-        f"使用超级出价时，两笔出价不得同值，正常出价加 {game.super_cost} 金币成本不得超过余额。"
-    )
+    """合法性由 system 规则与任务 schema 声明，参数保留兼容。"""
+    return "请分析局势并提交今日出价。"
 
 
 def speech_format_hint() -> str:
     """保持私有策略与公开信号的业务边界。"""
-    return (
-        "只有 speech 会给其他玩家看，strategy 仅自己可见。"
-        "注意：公开发言只是对其他玩家释放的信号，不构成对你后续出价的任何约束。"
-    )
+    return "speech 公开，strategy 仅自己可见。"
 
 
 def with_output_requirement(prompt: str, tool_name: str | None) -> str:
@@ -55,7 +49,7 @@ def build_system_prompt(
     others = "、".join(n for n in all_names if n != name)
     prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
     return (
-        f"{render_rules(game, all_names)}\n"
+        f"{render_rules(game, all_names, include_note=False)}\n"
         f"【你的身份】\n你叫 {name}，其他 {len(all_names) - 1} 位玩家是：{others}。\n"
         f"【你的人设】\n{persona_title}：{persona_text}\n"
         f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
@@ -70,21 +64,33 @@ def opening_speech_request() -> str:
     )
 
 
-def _remaining_wins_info(game: GameSettings, match_index: int, day: int, today_pool: int) -> str:
-    """最后一局正赛与各局加赛展示本局余量，包含今日已滚存奖池。"""
+def _remaining_scores_info(game: GameSettings, match_index: int, day: int, today_pool: int) -> str:
+    """最后一局正赛与各局加赛展示余量；命中分按每人独立计算。"""
     if match_index < game.regular_matches:
         return ""
-    remaining = today_pool + sum(game.daily_pool[day:])
-    return f"\n本局剩余可分配胜场：{remaining}（含今日奖池；末日流局的胜场作废）。"
+    remaining_auction_score = today_pool + sum(game.daily_pool[day:])
+    remaining_days = game.max_days - day + 1
+    return (
+        f"\n本局含今天还剩 {remaining_days} 天，拍卖奖池 {remaining_auction_score} 分，"
+        f"每人理论最多再得 {remaining_days * game.super_hit_score} 命中分。"
+    )
+
+
+def _total_scores_line(standings: list[StandingsEntry]) -> str:
+    """每日直接使用结算后的累计分数，不从历史重新计算。"""
+    return "全员累计总分：" + "、".join(
+        f"{entry.player} {entry.total_score} 分" for entry in standings
+    ) + "。"
 
 
 def _day1_constant_info(game: GameSettings, match_index: int = 1) -> str:
     """第 1 天信息由本场参数确定，各信息行在此完成句末标点。"""
-    final_note = "；本局最后一天，结束后金币清零。" if game.max_days == 1 else ""
+    final_note = "\n本局最后一天，结束后金币清零。" if game.max_days == 1 else ""
     return (
-        f"（第 1 天：你的金币 {game.initial_coins}，本局已获胜场 0，"
-        f"今日奖池 {game.daily_pool[0]} 个胜场，规则出价上限 {game.max_bid}{final_note}）。"
-        + _remaining_wins_info(game, match_index, 1, game.daily_pool[0])
+        f"（第 1 天：你的金币 {game.initial_coins}；"
+        f"今日奖池 {game.daily_pool[0]} 分）。"
+        + final_note
+        + _remaining_scores_info(game, match_index, 1, game.daily_pool[0])
     )
 
 
@@ -94,18 +100,13 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) ->
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价"
         + _day1_constant_info(game)
-        + "\n全员实时总胜场：全员 0 胜。\n\n"
+        + "\n全员累计总分：全员 0 分。\n\n"
         + bid_format_hint(game)
     )
 
 
 def _my_last_day_line(obs: Observation) -> Optional[str]:
-    """「昨日你的结果」行：直接告知昨日自己的出价、结局与扣款。
-
-    这些结果都能从公开记录中得知。明确列出扣款，避免模型误以为撞车后会退款。
-    正常出价与超级出价的结局分段给出：正常段只含正常出价的扣款，
-    超级段单独表述本场固定成本与命中悬赏。
-    """
+    """只解释本人金币结算；报价与得分由公开明细提供。"""
     if obs.my_last_bid is None:
         return None
     yesterday = obs.today_history[-1]
@@ -115,33 +116,23 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
     if obs.my_last_bid_illegal:
         segments = ["提交非法，按规则整单记为正常出价 0"]
     else:
-        segments = [f"正常出价 {obs.my_last_bid}"]
+        segments = []
     if is_void:
-        segments.append(f"当天流局（正常出价全部撞车），扣除 {obs.my_last_deduction}")
+        segments.append(f"正常出价全部撞车流局，扣除 {obs.my_last_deduction} 金币")
     elif won:
-        segments.append(
-            f"唯一最高出价获胜，赢得 {yesterday['wins_taken']} 个胜场，"
-            f"扣除 {obs.my_last_deduction}"
-        )
+        segments.append(f"正常出价获胜，扣除 {obs.my_last_deduction} 金币")
     elif obs.my_last_sniped:
-        segments.append(f"被超级出价狙中，扣除 {obs.my_last_deduction}")
+        segments.append(f"正常出价被狙中，扣除 {obs.my_last_deduction} 金币")
     elif obs.my_last_collided:
-        segments.append(f"与他人撞车，扣除 {obs.my_last_deduction}")
+        segments.append(f"正常出价撞车，扣除 {obs.my_last_deduction} 金币")
     else:
-        segments.append("未撞车但也不是最高，全额退还")
+        segments.append("正常出价未撞车但非最高，全额退还")
 
     if obs.my_last_super_bid is not None:
-        # 超级出价的结局只有命中/落空两种，两种都扣本场固定成本
+        segments.append(f"超级出价成本 {obs.game.super_cost} 金币")
         if obs.my_last_super_hit:
-            segments.append(
-                f"超级出价 {obs.my_last_super_bid} 命中，"
-                f"扣除 {obs.game.super_cost} 金币成本，获得 {obs.game.super_bounty} 金币悬赏"
-            )
-        else:
-            segments.append(
-                f"超级出价 {obs.my_last_super_bid} 落空，扣除 {obs.game.super_cost} 金币成本"
-            )
-    return "昨日你的结果：" + "，".join(segments) + "。"
+            segments.append(f"获得 {obs.game.super_bounty} 金币悬赏")
+    return "昨日你的金币结算：" + "，".join(segments) + "。"
 
 
 def _bid_detail_text(detail: dict, super_hit_by_player: dict[str, bool]) -> str:
@@ -164,29 +155,38 @@ def bid_request(obs: Observation) -> str:
         status_notes.append("已含今日工资")
     status_notes.append(f"正常出价上限：{min(obs.game.max_bid, obs.my_coins)}")
     status_line = (
-        f"今日奖池：{obs.today_pool} 个胜场；"
+        f"今日奖池：{obs.today_pool} 分；"
         f"你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）；"
-        f"本局已获胜场：{obs.my_match_wins}；你的累计总胜场：{obs.my_total_wins}。"
+        f"本局得分：{obs.my_match_score} 分。"
     )
     if obs.day == obs.game.max_days:
         status_line += "\n本局最后一天，结束后金币清零。"
-    status_line += "\n全员实时总胜场：" + "、".join(
-        f"{entry.player} {entry.total_wins} 胜" for entry in obs.standings
-    ) + "。"
-    status_line += _remaining_wins_info(obs.game, match_index, obs.day, obs.today_pool)
+    status_line += "\n" + (
+        _total_scores_line(obs.standings)
+        if obs.standings
+        else f"你的累计总分：{obs.my_total_score} 分。"
+    )
+    status_line += _remaining_scores_info(obs.game, match_index, obs.day, obs.today_pool)
     if not obs.today_history:
         return f"当前是第 {match_index} 局第 {obs.day} 天。{status_line}\n\n{bid_format_hint(obs.game)}"
 
     yesterday = obs.today_history[-1]
-    if yesterday["winner"] == "流局":
-        announcement = f"昨日公布：流局，奖池 {yesterday['pool']} 个胜场并入今日。"
+    winner = None if yesterday["winner"] == "流局" else yesterday["winner"]
+    if winner is None:
+        announcement = f"昨日公布：流局，奖池 {yesterday['pool']} 分并入今日。"
     else:
         announcement = (
-            f"昨日公布：{yesterday['winner']} 以 {yesterday['winning_bid']} 获胜，"
-            f"赢得 {yesterday['pool']} 个胜场。"
+            f"昨日公布：{winner} 以 {yesterday['winning_bid']} 获胜，"
+            f"拍卖得分 {yesterday['auction_score']} 分。"
         )
-    # 规则四.1：昨日完整出价明细（含各人超级出价数值）+ 全场每人当前余额
+    # 保留含 0 出价与超级出价命中状态的完整明细。
     super_hit_by_player = {use["player"]: use["hit"] for use in yesterday["super_uses"]}
+    hit_scores = "、".join(
+        f"{name} {obs.game.super_hit_score} 分"
+        for name, hit in super_hit_by_player.items()
+        if hit
+    )
+    announcement += f"昨日命中得分：{hit_scores}。" if hit_scores else "昨日无人命中。"
     announcement += (
         "昨日出价明细："
         + "、".join(
@@ -210,12 +210,16 @@ def bid_request(obs: Observation) -> str:
 
 
 def render_match_log(log: MatchLog) -> str:
-    """共用局末表：保留报价与结算结果，固定扣款规则不在单元格重复。"""
+    """共用局末表：逐日分数复用引擎计算，局末总分读取结算产物。"""
+    summary = [
+        "本局得分：" + "、".join(f"{name} {score} 分" for name, score in log.scores.items()),
+        "本局拍卖分：" + "、".join(f"{name} {score} 分" for name, score in log.auction_scores.items()),
+    ]
     if not log.days:
-        return "  （本局未进行任何拍卖）"
+        return "\n".join(["  （本局未进行任何拍卖）", "", *summary])
     player_names = [record.player for record in log.days[0].bids if not record.is_super]
-    header = "| 天 | 奖池 | " + " | ".join(player_names) + " | 结果 | 撞车价位 |"
-    separator = "|" + " --- |" * (len(player_names) + 4)
+    header = "| 天 | 奖池（分） | " + " | ".join(player_names) + " | 结果 | 撞车价位 | 当日得分（分） |"
+    separator = "|" + " --- |" * (len(player_names) + 5)
     rows = []
     for day in log.days:
         hit_by_player = {use["player"] for use in day.super_uses if use["hit"]}
@@ -245,29 +249,39 @@ def render_match_log(log: MatchLog) -> str:
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 获胜"
         collision_text = "、".join(str(value) for value in day.collision_values) or "—"
-        rows.append(
-            f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {collision_text} |"
+        day_scores = calculate_day_scores(
+            player_names,
+            winner=day.winner,
+            auction_score=day.auction_score,
+            super_uses=day.super_uses,
+            game=log.game,
         )
-    wins_text = "、".join(f"{name} {w} 胜" for name, w in log.wins.items())
-    lines = [header, separator, *rows, "", f"本局胜场：{wins_text}"]
+        score_text = "、".join(f"{name} {score}" for name, score in day_scores.items() if score) or "—"
+        rows.append(
+            f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {collision_text} | {score_text} |"
+        )
+    scoring_note = "当日得分仅列非零玩家，未列者为 0 分。"
+    lines = [header, separator, *rows, "", scoring_note, *summary]
     return "\n".join(lines)
 
 
 def render_standings(standings: list[StandingsEntry]) -> str:
-    """累计排名渲染为 markdown 表格：局数列随已结束场次动态增长。"""
-    match_count = max((len(entry.wins_per_match) for entry in standings), default=0)
-    match_headers = [f"第{i + 1}局" for i in range(match_count)]
-    header = "| 排名 | 玩家 | 总胜场 |"
+    """按总分展示累计排名及已结束局分数，拍卖分作为辅助信息。"""
+    match_count = max((len(entry.scores_per_match) for entry in standings), default=0)
+    match_headers = [f"第{i + 1}局（分）" for i in range(match_count)]
+    header = "| 排名 | 玩家 | 总分（分） |"
     if match_headers:
         header += " " + " | ".join(match_headers) + " |"
-    separator = "|" + " --- |" * (3 + match_count)
+    header += " 拍卖分（分） |"
+    separator = "|" + " --- |" * (4 + match_count)
     rows = []
     for entry in standings:
-        row = f"| {entry.rank} | {entry.player} | {entry.total_wins} |"
+        row = f"| {entry.rank} | {entry.player} | {entry.total_score} |"
         if match_count:
-            cells = [str(w) for w in entry.wins_per_match]
+            cells = [str(score) for score in entry.scores_per_match]
             cells += [""] * (match_count - len(cells))
             row += " " + " | ".join(cells) + " |"
+        row += f" {entry.total_auction_score} |"
         rows.append(row)
     return "\n".join([header, separator, *rows])
 
@@ -277,11 +291,11 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], wil
     lines = [
         f"第 {log.match_index} 局（{kind}）结束。",
         f"本局完整出价日志：\n{render_match_log(log)}",
-        f"截至当前的累计排名与胜场明细：\n{render_standings(standings)}",
+        f"截至当前的累计排名与分数明细：\n{render_standings(standings)}",
     ]
     # 只有正赛打完（或加赛后）第一名仍并列才有信息增量，其余局数无需预告
     if will_continue and log.match_index >= log.game.regular_matches:
-        lines.append("第一名出现并列，按规则全员将进入加赛局，加赛局胜场计入总胜场。")
+        lines.append("第一名总分并列，全员进入加赛。")
     lines.append("请向全体玩家发表你的局末发言（不超过 300 字）。")
     lines.append(speech_format_hint())
     return "\n\n".join(lines)
@@ -292,12 +306,12 @@ def memory_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家的局末公开发言：\n"
         + "\n".join(f"【{name}】{text}" for name, text in others_speeches.items())
-        + "\n\n请整理一份累计私有记忆，综合旧记忆、本局经历及公开发言。"
-        "新记忆会整体替换旧记忆；下一局看不到历局原始对话与原始公开发言。"
-        "保留仍有用的早期经验，更新失效判断，区分已观察事实与待验证猜测。"
-        "优先记下影响未来决策的对手规律、自身策略修正和有用的公开信号，避免逐日流水账。"
-        "规则与最新成绩由程序可靠提供，无需抄写。篇幅以一页简短笔记为软目标，"
-        "无需精确计算字数或填满栏目，没有有用信息可明确说明。只填写 memory，不生成额外策略或公开发言。"
+        + "\n\n请综合旧记忆、本局经历与公开发言，写累计私有记忆，只填写 memory。"
+        "新记忆整体替换旧记忆，下局看不到历局原始对话与公开发言。"
+        "保留早期有效经验，修正失效判断，区分事实与猜测；"
+        "重点记对手规律、自身修正和有用信号，避免流水账。"
+        "规则与最新成绩会另行提供，无需抄写。以一页简短笔记为软目标，"
+        "无需填满或精确计字；无有效信息可直说。"
     )
 
 
@@ -317,7 +331,7 @@ def final_speech_request(standings: list[StandingsEntry], log: MatchLog) -> str:
     return (
         f"第 {log.match_index} 局（{kind}）结束，这也是最后一局。本局完整出价日志：\n"
         f"{render_match_log(log)}\n\n"
-        f"比赛全部结束。最终排名与胜场明细：\n{render_standings(standings)}\n\n"
+        f"比赛全部结束。最终排名与分数明细：\n{render_standings(standings)}\n\n"
         "请向全体玩家发表你的最终感言。\n\n"
         + speech_format_hint()
     )

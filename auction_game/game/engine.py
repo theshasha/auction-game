@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from typing import Any, Optional
 
 from auction_game.game.game_rules import GameSettings, validate_submission as submission_error
@@ -64,27 +65,50 @@ def resolve_bids(bids: list[BidRecord]) -> tuple[Optional[BidRecord], set[int], 
     return winning_record, burned_values, sniped_values
 
 
-def compute_standings(
-    wins_history: dict[str, list[int]],
-    current_match_wins: dict[str, int] | None = None,
-) -> list[StandingsEntry]:
-    """根据各局胜场分布计算累计排名（并列同名次，取最高名次）。
+def calculate_day_scores(
+    player_names: Iterable[str],
+    *,
+    winner: str | None,
+    auction_score: int,
+    super_uses: list[dict],
+    game: GameSettings,
+) -> dict[str, int]:
+    """直接累加已判定的拍卖分与逐人命中分，返回全员单日总分。"""
+    scores = {name: 0 for name in player_names}
+    if winner is not None:
+        scores[winner] += auction_score
+    for use in super_uses:
+        if use["hit"]:
+            scores[use["player"]] += game.super_hit_score
+    return scores
 
-    current_match_wins：进行中的本局已决出胜场，仅影响总胜场，
-    不进各局明细（明细在局末写入 wins_history）。
+
+def compute_standings(
+    auction_scores_history: dict[str, list[int]],
+    *,
+    scores_history: dict[str, list[int]],
+    current_match_auction_scores: dict[str, int] | None = None,
+    current_match_scores: dict[str, int] | None = None,
+) -> list[StandingsEntry]:
+    """按累计总分排名，同分并列；进行中的本局成绩只计入累计值。
+
+    各局明细只包含已完成局，拍卖分单独保留，不用于破同分。
     """
-    current_match_wins = current_match_wins or {}
+    current_match_auction_scores = current_match_auction_scores or {}
+    current_match_scores = current_match_scores or {}
     entries = [
         StandingsEntry(
             player=name,
-            total_wins=sum(per_match) + current_match_wins.get(name, 0),
-            wins_per_match=list(per_match),
+            total_auction_score=sum(per_match) + current_match_auction_scores.get(name, 0),
+            auction_scores_per_match=list(per_match),
+            total_score=sum(scores_history[name]) + current_match_scores.get(name, 0),
+            scores_per_match=list(scores_history[name]),
         )
-        for name, per_match in wins_history.items()
+        for name, per_match in auction_scores_history.items()
     ]
-    entries.sort(key=lambda entry: (-entry.total_wins, entry.player))
+    entries.sort(key=lambda entry: (-entry.total_score, entry.player))
     for index, entry in enumerate(entries):
-        if index > 0 and entry.total_wins == entries[index - 1].total_wins:
+        if index > 0 and entry.total_score == entries[index - 1].total_score:
             entry.rank = entries[index - 1].rank
         else:
             entry.rank = index + 1
@@ -95,14 +119,16 @@ def run_match(
     players: list[Player],
     match_index: int,
     is_playoff: bool,
-    wins_history: dict[str, list[int]],
+    auction_scores_history: dict[str, list[int]],
     past_logs: list[MatchLog],
     game: GameSettings,
     bid_collector=None,
+    *,
+    scores_history: dict[str, list[int]],
 ) -> MatchLog:
     """按本场参数运行一局（正赛局或加赛局规则相同），返回完整局日志。
 
-    wins_history: 每名玩家在已结束各局的胜场分布，用于构造 Observation 中的排名。
+    auction_scores_history / scores_history: 每名玩家在已结束各局的拍卖分与总分。
     past_logs: 已结束各局的完整日志，局末公开后玩家可见。
     bid_collector: 可选，签名为 list[(player, obs)] -> list[出价提交]（顺序对齐，
     每个提交为 (正常出价, 超级出价) 二元组），AI 模式注入并行收集；
@@ -110,8 +136,9 @@ def run_match(
     内部处理，对本函数透明。
     """
     coins = {player.name: game.initial_coins for player in players}
-    match_wins = {player.name: 0 for player in players}
-    rollover = 0  # 流局并入次日奖池的胜场数
+    match_auction_scores = {player.name: 0 for player in players}
+    match_scores = {player.name: 0 for player in players}
+    rollover = 0  # 流局并入次日奖池的拍卖分
     log = MatchLog(match_index=match_index, is_playoff=is_playoff, game=game)
     past_log_dicts = [past_log.to_dict() for past_log in past_logs]
 
@@ -157,7 +184,12 @@ def run_match(
         # 同一天内全场玩家的排名快照完全相同，循环外算一次；全场每人余额
         # （规则四.1，第 2 天起公布）同理，取工资发放后的值，快照防当日结算后漂移
         all_coins_snapshot = dict(coins) if day >= 2 else None
-        standings_snapshot = compute_standings(wins_history, match_wins)
+        standings_snapshot = compute_standings(
+            auction_scores_history,
+            scores_history=scores_history,
+            current_match_auction_scores=match_auction_scores,
+            current_match_scores=match_scores,
+        )
         observations = []
         for player in players:
             (
@@ -175,8 +207,10 @@ def run_match(
                     Observation(
                         my_name=player.name,
                         my_coins=coins[player.name],
-                        my_match_wins=match_wins[player.name],
-                        my_total_wins=sum(wins_history[player.name]) + match_wins[player.name],
+                        my_match_auction_score=match_auction_scores[player.name],
+                        my_total_auction_score=sum(auction_scores_history[player.name]) + match_auction_scores[player.name],
+                        my_match_score=match_scores[player.name],
+                        my_total_score=sum(scores_history[player.name]) + match_scores[player.name],
                         day=day,
                         today_pool=pool,
                         today_history=[day_result.public_view() for day_result in log.days],
@@ -230,14 +264,14 @@ def run_match(
         if winning_record is not None:
             winning_bid = winning_record.bid
             winner = winning_record.player
-            wins_taken = pool  # 任何价位获胜都拿全部奖池
-            match_wins[winner] += wins_taken
+            auction_score = pool  # 任何价位获胜都拿全部拍卖分
+            match_auction_scores[winner] += auction_score
             rollover = 0
             is_void = False
         else:
             winner = None
             winning_bid = None
-            wins_taken = 0
+            auction_score = 0
             rollover = pool  # 流局：奖池整体并入次日（末日流局则随循环结束作废）
             is_void = True
 
@@ -255,6 +289,16 @@ def run_match(
             if use["hit"]:
                 coins[use["player"]] += game.super_bounty
 
+        day_scores = calculate_day_scores(
+            match_scores,
+            winner=winner,
+            auction_score=auction_score,
+            super_uses=super_uses,
+            game=game,
+        )
+        for name, score in day_scores.items():
+            match_scores[name] += score
+
         log.days.append(
             DayResult(
                 day=day,
@@ -262,12 +306,13 @@ def run_match(
                 pool=pool,
                 winner=winner,
                 winning_bid=winning_bid,
-                wins_taken=wins_taken,
+                auction_score=auction_score,
                 super_uses=super_uses,
                 collision_values=sorted(burned_normal_values),
                 is_void=is_void,
             )
         )
 
-    log.wins = match_wins
+    log.auction_scores = match_auction_scores
+    log.scores = match_scores
     return log

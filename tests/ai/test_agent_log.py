@@ -97,8 +97,7 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "首次无效策略" not in markdown
     assert markdown.count("最终策略原文") == 1
-    assert "输出纠错 1 次，最终通过校验" in markdown
-    assert "原因：bid 必须是整数" in markdown
+    assert "纠错 1 次，已通过（bid 必须是整数）。" in markdown
     assert "网络尝试" not in markdown
     audit = player.log_path.read_text(encoding="utf-8")
     assert "首次无效策略" in audit and "最终策略原文" in audit and "retry-prompt" in audit
@@ -124,8 +123,7 @@ def test_correction_reason_is_short_and_does_not_include_invalid_input(content, 
         entry["error"] = {"type": "OutputFailedError", "message": "budget exhausted"}
     before = deepcopy(entry)
     markdown = render_markdown_entry(entry)
-    assert f"原因：{reason}" in markdown
-    assert f"输出纠错 1 次，{'最终通过校验' if success else '最终失败'}" in markdown
+    assert f"纠错 1 次，{'已通过' if success else '仍失败'}（{reason}）。" in markdown
     assert "无效私有策略" not in markdown and "retry-prompt" not in markdown
     assert entry == before
 
@@ -150,7 +148,7 @@ def test_wrong_tool_correction_uses_actual_sdk_retry_prompt(tmp_path):
     assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "误用工具 plan，提示改用 bid" in markdown
-    assert "输出纠错 1 次，最终通过校验" in markdown
+    assert "纠错 1 次，已通过" in markdown
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     retry = next(part for message in entry["messages"] for part in message["parts"]
                  if part["part_kind"] == "retry-prompt")
@@ -160,13 +158,25 @@ def test_wrong_tool_correction_uses_actual_sdk_retry_prompt(tmp_path):
 @pytest.mark.parametrize("phase,title", [
     ("match_2_speech", "第2局局末发言"),
     ("match_2_plan", "第3局策略规划（含首日出价）"),
-    ("final_speech", "最终感言"), ("final_summary", "观众总结（不回喂）"),
+    ("final_speech", "最终感言"), ("final_summary", "观众总结（仅供观众）"),
     ("bid", "第3局第2天 · 每日出价"),
 ])
 def test_phase_titles(phase, title):
     entry = {"task_id": "task-0001", "phase": phase, "context": "第3局第2天", "task": "bid",
              "status": "success", "messages": [], "request_errors": [], "result": "原文"}
     assert f"## {title}" in render_markdown_entry(entry)
+
+
+def test_summary_heading_is_readable_without_changing_saved_title():
+    entry = {"phase": "final_summary", "status": "success", "messages": [],
+             "readable_title": "观众总结不回喂", "first_title": "观众总结不回喂",
+             "previous_title": "观众总结不回喂补跑1"}
+    markdown = render_markdown_entry(entry)
+    assert "## 观众总结仅供观众" in markdown
+    assert "首次输入](#观众总结仅供观众)" in markdown
+    assert "上次记录](#观众总结仅供观众补跑1)" in markdown
+    assert "不回喂" not in markdown
+    assert entry["readable_title"] == entry["first_title"] == "观众总结不回喂"
 
 
 def test_tool_audit_does_not_clutter_readable_markdown():

@@ -102,7 +102,7 @@ class AISpeechDirector:
         self._publish_speeches("最终感言", speeches)
         summaries = self._run_round(
             {p: (prompts.final_summary_request(self._others(speeches, p.name)), "final_summary") for p in self.players},
-            "观众总结（不回喂）",
+            "观众总结（仅观众可见）",
         )
         lines = ["\n===== 观众总结（仅观众可见）====="]
         for name, text in summaries.items():

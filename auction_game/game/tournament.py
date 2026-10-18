@@ -31,11 +31,11 @@ class TournamentResult:
 
 
 def first_place_tied(standings: list[StandingsEntry]) -> bool:
-    """第一名是否有并列。"""
+    """第一名总分是否有并列。"""
     if not standings:
         return False
-    top_wins = standings[0].total_wins
-    return sum(1 for entry in standings if entry.total_wins == top_wins) >= 2
+    top_score = standings[0].total_score
+    return sum(1 for entry in standings if entry.total_score == top_score) >= 2
 
 
 def run_tournament(
@@ -60,7 +60,8 @@ def run_tournament(
     if len(set(names)) != len(names):
         raise ValueError("玩家名字必须唯一")
     result = TournamentResult()
-    wins_history = {player.name: [] for player in players}
+    auction_scores_history = {player.name: [] for player in players}
+    scores_history = {player.name: [] for player in players}
     match_index = 0
 
     if director:
@@ -73,15 +74,18 @@ def run_tournament(
             players,
             match_index=match_index,
             is_playoff=is_playoff,
-            wins_history=wins_history,
+            auction_scores_history=auction_scores_history,
+            scores_history=scores_history,
             past_logs=result.match_logs,
             game=game,
             bid_collector=bid_collector,
         )
-        for name, wins in log.wins.items():
-            wins_history[name].append(wins)
+        for name, auction_score in log.auction_scores.items():
+            auction_scores_history[name].append(auction_score)
+        for name, score in log.scores.items():
+            scores_history[name].append(score)
         result.match_logs.append(log)
-        standings = compute_standings(wins_history)
+        standings = compute_standings(auction_scores_history, scores_history=scores_history)
         if on_match_end:
             on_match_end(log, standings)
         if director:
@@ -98,14 +102,14 @@ def run_tournament(
     for _ in range(game.regular_matches):
         play_one_match(is_playoff=False)
 
-    while first_place_tied(compute_standings(wins_history)):
+    while first_place_tied(compute_standings(auction_scores_history, scores_history=scores_history)):
         if result.playoff_count >= game.max_playoffs:
             result.playoff_cap_hit = True
             break
         play_one_match(is_playoff=True)
         result.playoff_count += 1
 
-    result.final_standings = compute_standings(wins_history)
+    result.final_standings = compute_standings(auction_scores_history, scores_history=scores_history)
     if director:
         director.on_final(result.final_standings, result.match_logs[-1])
     return result

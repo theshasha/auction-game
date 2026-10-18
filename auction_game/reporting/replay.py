@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import threading
 from pathlib import Path
 from importlib.metadata import version
@@ -17,6 +18,8 @@ from pydantic_ai.models import ModelRequestParameters, override_allow_model_requ
 
 from auction_game.reporting.analyze import load_match_logs
 from auction_game.ai.llm_client import ModelFactory
+from auction_game.game.engine import calculate_day_scores
+from auction_game.game.game_rules import GameSettings
 from auction_game.reporting.run_paths import RunPaths
 from auction_game.reporting.request_records import load_requests, digest
 from auction_game.reporting.run_output import write_readme
@@ -105,7 +108,7 @@ def _response_lines(response):
         kind = part["part_kind"]
         if kind == "tool-call":
             args = part["args"]
-            lines.append(f"调用工具 `{part['tool_name']}`，原始业务参数（strategy 仅自己可见）：")
+            lines.append(f"调用工具 `{part['tool_name']}`：")
             # 字符串原样保留，真实无效 JSON 同样可读，不以最终合法结果替换。
             lines.append("```json\n" + args + "\n```" if isinstance(args, str) else _json(args))
         elif kind == "text":
@@ -117,72 +120,139 @@ def _response_lines(response):
     return lines
 
 
+def _entry_day(entry):
+    """规划缓存用于下一局首日，日常出价的局日取实际审计上下文。"""
+    if entry["task"] == "plan":
+        if entry["phase"] == "opening_plan":
+            return 1, 1
+        match = re.fullmatch(r"match_(\d+)_plan", entry["phase"])
+        if match:
+            return int(match[1]) + 1, 1
+    if entry["task"] == "bid":
+        match = re.search(r"第(\d+)局第(\d+)天", entry["context"])
+        if match:
+            return tuple(map(int, match.groups()))
+    return None
+
+
+def _select_entries(entries, matches):
+    """保留阶段骨架，每类结算事件只取首次，同一请求合并展示。"""
+    phases = {"opening_speech": "比赛开头 · 开局发言",
+              "opening_plan": "第一局规划 · 首日缓存",
+              "match_1_speech": "第一局结束 · 局末发言",
+              "match_1_memory": "第一局结束 · 累计私有记忆",
+              "match_1_plan": "第二局规划 · 接收实际反馈",
+              "final_speech": "实际比赛结尾 · 最终感言",
+              "final_summary": "实际比赛结尾 · 观众总结"}
+    selected = {i: phases[entry["phase"]] for i, entry in enumerate(entries) if entry["phase"] in phases}
+    nodes = {}
+    first_bid = True
+    for i, entry in enumerate(entries):
+        key = _entry_day(entry)
+        if key is not None:
+            # 失败后补跑可能使用同一局日；有结算时优先展示成功请求。
+            if key not in nodes or entry["status"] == "success":
+                nodes[key] = i
+        if entry["task"] == "bid" and first_bid:
+            title = "第一局第二天" if key == (1, 2) else entry["context"]
+            selected[i] = f"{title} · 正常出价"
+            first_bid = False
+        if entry["status"] != "success":
+            selected.setdefault(i, f"{entry['context']} · 失败审计")
+    seen = set()
+    for payload in matches:
+        match = payload["match"]
+        for day in match["days"]:
+            events = []
+            uses = day["super_uses"]
+            if any(not use["hit"] for use in uses):
+                events.append("首次超级落空")
+            if any(use["hit"] for use in uses):
+                events.append("首次超级命中")
+            if day["is_void"]:
+                events.append("首次流局")
+            if day["winner"] is not None and day["pool"] > match["game"]["daily_pool"][day["day"] - 1]:
+                events.append("首次滚存获胜")
+            if match["is_playoff"] and (day["winner"] is not None or any(use["hit"] for use in uses)):
+                events.append("加赛关键日")
+            i = nodes.get((match["match_index"], day["day"]))
+            if i is None:
+                continue
+            fresh = [event for event in events if event not in seen]
+            if fresh:
+                selected.setdefault(i, f"第{match['match_index']}局第{day['day']}天 · 出价")
+                selected[i] += " · " + " / ".join(fresh)
+                seen.update(fresh)
+    return selected
+
+
+def _settlement_lines(match, day, player):
+    game = GameSettings.from_dict(match["game"])
+    scores = calculate_day_scores(
+        match["auction_scores"], winner=day["winner"], auction_score=day["auction_score"],
+        super_uses=day["super_uses"], game=game,
+    )
+    result = (f"获胜者 {day['winner']}，拍卖得分 {day['auction_score']} 分。" if day["winner"] is not None
+              else "当日流局，拍卖得分 0 分。")
+    lines = [result]
+    if day["super_uses"]:
+        lines.append("超级出价：" + "；".join(
+            f"{use['player']} 出 {use['value']}，{'命中' if use['hit'] else '落空'}，"
+            f"命中得分 {game.super_hit_score if use['hit'] else 0} 分" for use in day["super_uses"]) + "。")
+    lines.append("当日总分（拍卖分 + 命中分）：" + "；".join(
+        f"{name} {score} 分" for name, score in scores.items() if score or name == player) + "。")
+    return lines
+
+
 def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debug=False) -> Path:
     """读取实际日志；模拟标签取场次类型，重新导出复用原 SDK 定义。"""
     paths = RunPaths(run_dir)
     config = paths.read_config()
     number = paths.number(player)
     audit = paths.player(number)
+    capture_path = paths.capture(number)
     entries = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
     load_requests(paths.capture(number), entries)
     pc = next(pc for pc in config["players"] if pc["name"] == player)
-    matches = load_match_logs(run_dir)
+    matches = load_match_logs(run_dir) if any((paths.data / "matches").glob("*.json")) else []
+    days = {(payload["match"]["match_index"], day["day"]): (payload["match"], day)
+            for payload in matches for day in payload["match"]["days"]}
     if not entries or not all(entry.get("requests") for entry in entries):
         raise ValueError("该玩家缺少完整模型边界记录，请启动比赛时指定 record_player")
     protocol_path = paths.definitions(number)
     snapshots = _protocol_records(entries, player, protocol_path, config, capture=capture_definitions)
 
-    selected = {"opening_speech": "比赛开头 · 开局发言",
-                "opening_plan": "第一局规划 · 首日缓存",
-                "match_1_speech": "第一局结束 · 局末发言",
-                "match_1_memory": "第一局结束 · 累计私有记忆",
-                "match_1_plan": "第二局规划 · 接收实际反馈",
-                "final_speech": "实际比赛结尾 · 最终感言",
-                "final_summary": "实际比赛结尾 · 观众总结"}
+    selected = _select_entries(entries, matches)
     debug_path = run_dir / "debug" / f"{number:03d}.md"
     debug_lines = [f"# {player} · 调试记录", "逻辑请求来源：运行时模型边界捕获，包含框架内部字段。",
              f"协议请求来源：[离线 SDK 捕获](../{protocol_path.relative_to(run_dir).as_posix()})；仅必要定义，无鉴权头。",
-             "本场执行能力与有效设置：", _json(pc["execution_model"])]
+             "本场配置模型能力与有效设置：", _json(pc["execution_model"])]
     simulated = config["run_type"] == "offline"
     label = "模拟离线运行（FunctionModel，无真实服务调用）" if simulated else "已记录的模型运行"
-    lines = [f"# {player} · 单玩家关键节点回放", f"> {label}。所有回复来自本次运行记录。",
-              f"运行模式：{config['mode']}；身份模型：{pc['identity_model']['model']}；"
-              f"实际执行：{pc['execution_model']['protocol']} / {pc['execution_model']['model']}。",
-              "参数与名单来自本场 [run_config.json](data/run_config.json)；规则见 [RULES.md](RULES.md)。",
-              *(["[本场默认工具记录](tools.md)保留发送前定义或明确标注的离线 SDK 定义与任务引用。"]
-                if paths.tools.exists() else []),
-              f"[增量模型边界捕获]({paths.capture(number).relative_to(run_dir).as_posix()})"
-              f"包含框架传给模型的参数，不含 HTTP 报文。[任务结果与工具应答]({audit.relative_to(run_dir).as_posix()})保留完整记录。",
-              f"工具定义来自[SDK 离线捕获]({protocol_path.relative_to(run_dir).as_posix()})：SDK 在离线模拟传输中生成的请求定义，"
-              "未发送到真实中转。使用本场执行配置的生产适配器与假密钥，按定义及设置复用捕获；"
-              "它与上述运行时逻辑记录分开保存，捕获过程不生成或替换比赛回复。",
-              "本文件仅选关键节点，完整比赛已照常执行。完整调试 Markdown 仅按需使用 --debug 导出。",
-             "## 系统规则与人设（全文仅一次）"]
+    execution = (f"实际执行：假模型 FunctionModel；配置模型：{pc['execution_model']['protocol']} / "
+                 f"{pc['execution_model']['model']}。" if simulated else
+                 f"实际执行：{pc['execution_model']['protocol']} / {pc['execution_model']['model']}。")
+    lines = [f"# {player} · 单玩家关键节点回放", f"> {label}。回复均为本场原始记录，未重新生成。",
+               f"运行模式：{config['mode']}；身份模型：{pc['identity_model']['model']}；{execution}",
+               "[本场配置与名单](data/run_config.json) · [规则](RULES.md) · [来源与审计](#来源与审计)",
+               "这里只选关键节点；私有策略、思考与记忆在对局中仅本人可见。",
+               "<details>\n<summary>系统规则与人设原文</summary>\n"]
     first_messages = entries[0]["requests"][0]["messages"]
     lines.extend(part["content"] for message in first_messages for part in message["parts"]
                  if part["part_kind"] == "system-prompt")
+    lines.append("</details>")
     schemas = {}
-    for number, entry in enumerate(entries, 1):
-        anchor = f"环节-{number}"
+    for entry_number, entry in enumerate(entries, 1):
+        anchor = f"环节-{entry_number}"
         if debug:
-            debug_lines.extend([f'<a id="{anchor}"></a>', f"## 环节 {number}", _json(entry)])
+            debug_lines.extend([f'<a id="{anchor}"></a>', f"## 环节 {entry_number}", _json(entry)])
         phase = entry["phase"]
-        title = selected.get(phase)
-        if phase == "bid" and entry["context"] == "第1局第2天":
-            title = "第一局第二天 · 正常出价"
+        title = selected.get(entry_number - 1)
         if not title:
             continue
-        if phase == "match_1_speech":
-            lines.append("\n> 跳转：省略第一局第三天起的日常请求；下文局末提示仍保留程序实际给出的整局反馈。")
         if phase == "final_speech":
-            lines.append("\n> 跳转：省略第二局其余日常出价及中间各局，直接到实际最后一局结束。")
-        has_history = any(message["kind"] == "response" for message in entry["requests"][0]["messages"])
-        history = ("沿用系统规则与人设，以及此前原生对话、工具调用和纠错往返；已完成任务的内部 thinking 只保存在日志中。"
-                   if has_history else "沿用系统规则与人设；跨局重置后仅保留最新累计记忆，成绩由本次提示提供。")
-        purpose = {"speech": "根据当前比赛阶段生成私有策略与公开发言。", "plan": "读取本局信息，规划并给出首日出价。",
-                    "bid": "读取昨日结果与当前余额，生成当天出价。", "memory": "读取全部已公布局末发言，整理累计私有记忆。",
-                    "summary": "回顾全场记录（不含内部 thinking），为观众生成总结。"}[entry["task"]]
-        lines.extend([f"## {title}", purpose + history])
+            lines.append("\n> 跳过中间流程中的其余日常请求，进入比赛结尾。")
+        lines.append(f"## {title}")
         for record in entry["requests"]:
             if len(entry["requests"]) > 1:
                 lines.append("### 第一次请求" if record["request"] == 1 else "### 纠正后请求")
@@ -190,14 +260,14 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
             parts = ([part for message in entry["messages"] for part in message["parts"]
                       if part["part_kind"] == "user-prompt"] if record["request"] == 1 else
                      [part for part in record["messages"][-1]["parts"] if part["part_kind"] == "retry-prompt"])
-            lines.append("**渲染后的新增提示全文**")
+            lines.append("**本次新增提示**")
             lines.extend(part["content"] if isinstance(part["content"], str) else _json(part["content"]) for part in parts)
             capture_key = digest([record["parameters"], record["settings"]])
             snapshot = snapshots[capture_key]
             schema = snapshot["definition"]
             key = json.dumps([snapshot["protocol"], schema], ensure_ascii=False, sort_keys=True)
             if not schema.get("tools"):
-                lines.append("**回复方式：直接返回文本，无工具。**")
+                lines.append("**直接回复文本**")
                 if schema:
                     lines.append(_json(schema))
             elif key not in schemas:
@@ -208,50 +278,65 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
                 lines.extend([f'<a id="{schema_anchor}"></a>', f"### {schema_title}", _json(schema)])
             else:
                 schema_title, schema_anchor = schemas[key]
-                lines.append(f"工具定义沿用前文的[{schema_title}](#{schema_anchor})。")
+                lines.append(f"工具：[{schema_title}](#{schema_anchor})。")
             reply_label = "第一次回复" if len(entry["requests"]) > 1 and record["request"] == 1 else "纠正后回复" if record["request"] > 1 else "回复"
             lines.append(f"**{'模拟' if simulated else '记录'}{reply_label}**")
             if "response" in record:
                 lines.extend(_response_lines(record["response"]))
             else:
-                lines.append("本次请求未取得完整回复，失败详情见任务记录；可按需导出完整调试文件。")
+                lines.append("未取得完整回复，失败详情见任务记录。")
             if record.get("errors"):
                 lines.append(_json(record["errors"]))
         lines.append("**程序处理**")
         if entry["status"] != "success":
-            lines.extend(["任务失败，详情已记录；本次结果不加入玩家历史，也不会用作首日出价。", _json(entry.get("error"))])
+            lines.extend(["任务失败，本次结果未加入玩家对话或首日出价缓存。", _json(entry.get("error"))])
         elif entry["task"] == "plan":
-            lines.append("校验通过后保存私有策略与首日缓存。")
-            if phase == "opening_plan":
-                day = matches[0]["match"]["days"][0]
+            lines.append("已保存私有策略与首日出价。")
+            settled = days.get(_entry_day(entry))
+            if settled is not None:
+                match, day = settled
                 bid = next(b for b in day["bids"] if b["player"] == player and not b["is_super"])
-                lines.append(f"第一局第 1 天使用已保存的出价，不重复请求模型；实际正常出价 {bid['bid']}，"
-                             f"当日获胜者：{day['winner']}。")
+                lines.append(f"第 {match['match_index']} 局第 1 天使用已保存的出价，不重复请求模型；"
+                             f"实际正常出价 {bid['bid']}。")
+                lines.extend(_settlement_lines(match, day, player))
             else:
-                lines.append("本节点只展示下一局规划衔接，随后跳过该局的日常流程。")
+                lines.append("尚无对应首日的已结算局日志，缓存的实际执行结果待确认。")
         elif entry["task"] == "bid":
-            day = matches[0]["match"]["days"][1]
-            lines.append(f"按实时余额校验后交给结算：获胜者 {day['winner']}，赢得 {day['wins_taken']} 胜场。")
+            settled = days.get(_entry_day(entry))
+            lines.append("按实时余额校验后交给结算。")
+            if settled is not None:
+                lines.extend(_settlement_lines(*settled, player))
+            else:
+                lines.append("尚无对应日期的已结算局日志。")
         elif entry["task"] == "summary":
-            lines.append("总结只写日志并给观众看，请求与回复不追加玩家历史。")
+            lines.append("总结仅供观众阅读，不加入玩家对话。")
         elif entry["task"] == "memory":
-            lines.append(f"日志成功后整体替换累计私有记忆（{entry['memory_chars']} 字符，非 token），清除历局对话；记忆仅本人可见。")
+            lines.append(f"已更新累计私有记忆（{entry['memory_chars']} 字符），清除历局对话。")
         else:
-            lines.append("私有 strategy 保留在自身历史；仅 speech 投递给其他玩家。")
-            if phase == "match_1_speech":
-                lines.append("本节点的局日志与排名就是实际反馈；全部发言公布后独立整理累计记忆，再带最新成绩进行第二局规划。")
-            if phase == "final_speech":
-                lines.append("最后一局跳过普通局末发言，直接进行本次最终感言；随后只有观众总结。")
-    standings = matches[-1]["standings_after_match"]
-    lines.extend(["## 实际比赛结果", f"共 {len(matches)} 局，最终胜场：" + "；".join(
-        f"{entry['player']} {entry['total_wins']}" for entry in standings),
-        "离线结果只验证流程；真实服务的工具与协议兼容性须另行授权验证。"])
+            lines.append("仅 speech 发给其他玩家，strategy 留在本人对话中。")
+    standings = matches[-1]["standings_after_match"] if matches else None
+    if standings is not None:
+        result_label = "最终总分" if any(entry["phase"] == "final_speech" for entry in entries) else "截至当前总分"
+        lines.extend(["## 实际比赛结果", f"已结算 {len(matches)} 局，{result_label}：" + "；".join(
+            f"{entry['player']} {entry['total_score']} 分" for entry in standings)])
+    else:
+        lines.extend(["## 实际比赛结果", "尚无已结算局日志；本页保留实际请求及失败审计。"])
+    lines.extend(['<a id="来源与审计"></a>', "## 来源与审计",
+                  f"[运行时模型边界捕获]({capture_path.relative_to(run_dir).as_posix()})保存传给模型的参数，非 HTTP 报文；"
+                  f"[任务记录]({audit.relative_to(run_dir).as_posix()})保留完整结果与工具应答。",
+                  *(["[本场工具记录](tools.md)：发送前实际定义或标明来源的离线 SDK 定义，含任务引用。"]
+                    if paths.tools.exists() else []),
+                  f"本页工具定义来自[SDK 离线捕获]({protocol_path.relative_to(run_dir).as_posix()})："
+                  "使用本场配置、生产适配器与假密钥，由 MockTransport 截获，无真实服务调用。"
+                  "它与运行时记录分开保存，重新导出时复用已存定义。",
+                  "玩家局内沿用对话，跨局保留累计私有记忆；已完成任务的思考仅留日志。",
+                  "完整调试记录可用 --debug 导出。"])
     path = run_dir / "replay.md"
     if debug:
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         debug_path.write_text("\n\n".join(debug_lines) + "\n", encoding="utf-8")
     path.write_text("\n\n".join(lines) + "\n", encoding="utf-8")
-    write_readme(paths, matches[-1]["standings_after_match"])
+    write_readme(paths, standings)
     return path
 
 

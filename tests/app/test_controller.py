@@ -3,6 +3,7 @@
 import threading
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -50,6 +51,66 @@ def running(controller, fn, *release_events):
 
 def make_named_player(name, task_runner):
     return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, task_runner, game=TEST_GAME)
+
+
+@pytest.mark.parametrize("failure", [False, True], ids=["paused-success", "failed-task"])
+@pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
+def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, failure, command):
+    from auction_game.game import engine
+    from auction_game.game.tournament import run_tournament
+
+    game = replace(TEST_GAME, daily_pool=(3,), super_hit_score=1, regular_matches=1, max_playoffs=0)
+    gate = threading.Event()
+    controller = Controller(mode="continuous", max_concurrency=1,
+                            announce=lambda text: gate.set() if text.startswith("[单步]") else None)
+
+    def pause_and_reply(messages):
+        controller.offer_command("p")
+        return bid_reply(2)
+
+    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1, 2)]))
+    bravo = make_named_player("Bravo", fake_task_runner(
+        [ModelAPIError("offline", "unavailable"), bid_reply(2)] if failure else [pause_and_reply],
+    ))
+    for player in (alpha, bravo):
+        player.game = game
+    alpha.plan_strategy("首日规划", "opening_plan")
+    before = [player.checkpoint() for player in (alpha, bravo)]
+    settlements, published = [], []
+    calculate = engine.calculate_day_scores
+
+    def count_settlement(*args, **kwargs):
+        settlements.append(True)
+        return calculate(*args, **kwargs)
+
+    def collect(observations):
+        tasks = [RoundTask(player.name, lambda p=player, o=obs: p.decide_bid(o), player)
+                 for player, obs in observations]
+        results = run_parallel_round(tasks, controller, "测试出价")
+        return [results[player.name] for player, _ in observations]
+
+    monkeypatch.setattr(engine, "calculate_day_scores", count_settlement)
+    with running(controller, lambda: run_tournament(
+        [alpha, bravo], game, bid_collector=collect,
+        on_match_end=lambda log, standings: published.append(log),
+    )) as (thread, outcome):
+        assert gate.wait(timeout=5)
+        assert settlements == published == []
+        assert alpha._pending_day1_bid is None
+        controller.offer_command(command)
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        if command == "q":
+            assert isinstance(outcome.get("error"), TournamentAborted)
+            assert settlements == published == []
+            assert [player.checkpoint() for player in (alpha, bravo)] == before
+        else:
+            assert settlements == [True]
+            assert len(published) == 1
+            assert published[0].scores == {"Alpha": 4, "Bravo": 0}
+            assert outcome["result"].final_standings[0].total_score == 4
+        assert len(alpha.task_runner.calls) == 1
+        assert len(bravo.task_runner.calls) == (2 if failure and command != "q" else 1)
 
 
 @pytest.mark.parametrize("command", ["", "q"], ids=["resume-only-failed-memory", "abort-restores-context"])
@@ -249,10 +310,12 @@ class TestParallelRound:
             thread.join(timeout=5)
             assert outcome.get("result") == {"first": 1, "second": 2}
             assert calls == ["first", "second"]
-            assert sum("正在暂停" in message for message in announcements) == 1
+            assert sum("停止新任务" in message for message in announcements) == 1
             assert any("成功 1，失败 0，未启动 1" in message for message in announcements)
-            assert any("不再启动新任务" in message and "任务内部重试可能继续" in message
-                       and "撤销本轮并中止" in message for message in announcements)
+            assert any("停止新任务" in message and "内部重试可能继续" in message
+                       and "成功结果保留" in message and "等待当前 1 项任务结束" in message
+                       and "回车或 c：等任务结束后继续" in message
+                       and "q：等任务结束后撤销本轮并退出比赛" in message for message in announcements)
 
     def test_pause_keeps_success_and_holds_unstarted_until_resume(self):
         release = threading.Event()
@@ -285,7 +348,8 @@ class TestParallelRound:
             assert outcome.get("result") == {"first": 1, "second": 2}
             assert calls == ["first", "second"]
 
-    def test_pause_retries_failed_and_unstarted_only_after_new_confirmation(self):
+    @pytest.mark.parametrize("command", ["", "c"])
+    def test_pause_retries_failed_and_unstarted_only_after_new_confirmation(self, command):
         release = threading.Event()
         first_started = threading.Event()
         pause_requested = threading.Event()
@@ -307,7 +371,7 @@ class TestParallelRound:
                 assert release.wait(timeout=5)
             if index == 1 and calls[index] == 1:
                 controller.offer_command("p")
-                controller.offer_command("c")  # 失败发生前的恢复不足以确认重试
+                controller.offer_command(command)  # 失败前的回车或继续命令不能确认后续重试
                 pause_requested.set()
                 raise CallFailedError("测试失败")
             return index
@@ -321,8 +385,8 @@ class TestParallelRound:
             assert "result" not in outcome
             assert calls == [1, 1, 0]
             assert any("成功 1，失败 1，未启动 1" in message for message in announcements)
-            assert any("按回车或 c 重试失败任务并执行未启动任务" in message
-                       and "成功任务不会重跑" in message for message in announcements)
+            assert any(message.startswith("[失败]") and "回车或 c 只补跑失败和未启动任务" in message
+                       and "成功任务不重跑" in message for message in announcements)
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"0": 0, "1": 1, "2": 2}
@@ -541,7 +605,7 @@ class TestParallelRound:
             assert player._pending_day1_bid is None
             assert player.messages == history
             assert "result" not in outcome
-            assert any("全部成功，确认后继续本轮" in message for message in announcements)
+            assert any("全部成功，确认后继续" in message for message in announcements)
             assert not any("补跑" in message for message in announcements)
             controller.offer_command("")
             thread.join(timeout=5)

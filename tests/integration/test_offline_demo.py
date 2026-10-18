@@ -2,6 +2,8 @@
 
 import json
 import re
+from copy import deepcopy
+from dataclasses import replace
 import pytest
 
 from pydantic_ai.messages import ModelMessagesTypeAdapter
@@ -13,6 +15,8 @@ from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.cli.offline_demo import generate_demo
 from auction_game.ai import prompts
 from auction_game.game.game_rules import GameSettings
+from auction_game.game.engine import run_match
+from auction_game.game.players import Player
 from auction_game.reporting.replay import export_replay, protocol_tools
 from auction_game.reporting.run_paths import RunPaths
 from auction_game.reporting.request_records import load_requests
@@ -31,7 +35,11 @@ def demo_configuration(monkeypatch, config_files):
 
 
 def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch, capsys, demo_configuration):
-    game = GameSettings(7, 3, (1, 1), 7, 2, 3, 2, 2)
+    game = GameSettings(
+        initial_coins=7, daily_salary=3, daily_pool=(1, 1), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=2, max_playoffs=2,
+    )
     monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
     _, configs = demo_configuration
     names = [pc["name"] for pc in configs]
@@ -67,12 +75,13 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     with pytest.raises(SystemExit, match="没有有效"):
         analyze.find_latest_ai_run()
     assert len(matches) == game.regular_matches
-    expected_wins = sum(game.daily_pool)
+    expected_auction_score = sum(game.daily_pool)
     for index, payload in enumerate(matches, 1):
         match = payload["match"]
         assert match["match_index"] == index and not match["is_playoff"]
         assert match["game"] == game.to_dict()
-        assert match["wins"] == {name: expected_wins if i == 0 else 0 for i, name in enumerate(names)}
+        assert match["auction_scores"] == {name: expected_auction_score if i == 0 else 0
+                                            for i, name in enumerate(names)}
         assert len(match["days"]) == game.max_days
         assert all(bid["status"] != "illegal" for day in match["days"] for bid in day["bids"])
         assert paths.match(index, readable=True).exists()
@@ -107,7 +116,11 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
             assert tool["name"] == {"plan": "bid", "memory": "save_memory"}.get(entry["task"], entry["task"])
             properties = tool["parameters_json_schema"]["properties"]
             field = "memory" if entry["task"] == "memory" else "strategy"
-            assert properties[field]["description"].startswith("仅自己可见")
+            description = properties[field]["description"]
+            if field == "memory":
+                assert "私有" in description and "替换旧记忆" in description
+            else:
+                assert "仅自己可见" in description
             if entry["task"] == "memory":
                 assert set(properties) == {"memory"} and entry["memory_chars"] == len(entry["result"]["memory"])
         if entry["task"] == "plan":
@@ -134,7 +147,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         assert not paths.capture(number).exists()
 
     replay = replay_path.read_text(encoding="utf-8")
-    assert "[本场默认工具记录](tools.md)" in replay
+    assert "[本场工具记录](tools.md)" in replay
     assert "tools.md" not in paths.player(1, readable=True).read_text(encoding="utf-8")
     titles = ["比赛开头 · 开局发言", "第一局规划 · 首日缓存", "第一局第二天 · 正常出价",
               "第一局结束 · 局末发言", "第一局结束 · 累计私有记忆", "第二局规划 · 接收实际反馈", "实际比赛结尾 · 最终感言",
@@ -142,10 +155,13 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     positions = [replay.index("## " + title) for title in titles]
     assert positions == sorted(positions)
     assert replay.count("【你的身份】") == 1
-    assert "不重复请求模型" in replay and "跳转：省略" in replay
+    assert "不重复请求模型" in replay and "跳过中间流程" in replay
     assert "## 第1局第3天" not in replay and "## 第2局第2天" not in replay
-    assert "不含 HTTP 报文" in replay and "模拟回复" in replay and "仅 speech 投递" in replay
-    assert "SDK 在离线模拟传输中生成的请求定义，未发送到真实中转" in replay
+    assert "非 HTTP 报文" in replay and "模拟回复" in replay and "仅 speech 发给其他玩家" in replay
+    assert "SDK 离线捕获" in replay and "假密钥" in replay and "无真实服务调用" in replay
+    assert "回复均为本场原始记录，未重新生成" in replay
+    capture_link = paths.capture(1).relative_to(run_dir).as_posix()
+    assert f"]({capture_link})" in replay
     snapshots = json.loads(paths.definitions(1).read_text(encoding="utf-8"))
     assert len(snapshots) == 4  # 共享出价工具、发言、记忆与文本；完整赛不逐请求重复捕获。
     definitions = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", replay, re.S)
@@ -162,7 +178,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
                       '"output_tools"', '"metadata"', '"sequential"', '"timeout"', '"part_kind"'):
         assert forbidden not in replay
     for anchor in re.findall(r"\]\(#([^)]*)\)", replay):
-        assert f'id="{anchor}"' in replay
+        assert f'id="{anchor}"' in replay or f"## {anchor}" in replay
     assert not (run_dir / "debug").exists()
     export_replay(run_dir, selected, debug=True)
     debug = (run_dir / "debug" / "001.md").read_text(encoding="utf-8")
@@ -198,7 +214,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         content = file.read_text(encoding="utf-8")
         assert "offline-demo-not-a-secret" not in content and "offline-capture-not-a-secret" not in content
     stats = analyze.collect_player_stats(matches)
-    assert stats["win_matrix"][selected] == [expected_wins] * game.regular_matches
+    assert stats["auction_score_matrix"][selected] == [expected_auction_score] * game.regular_matches
     assert all(row["illegal"] == 0 for row in stats["rows"])
     # 实际统计入口依赖场次快照：即使当前配置入口损坏仍能完整统计。
     monkeypatch.setattr("auction_game.configuration.load_game_settings", lambda: (_ for _ in ()).throw(AssertionError("应读快照")))
@@ -211,15 +227,32 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     # 明确的合成参数覆盖各阶段，不随生产配置缩短而丢失断言。
     assert f"共进行 {game.regular_matches} 局（正赛 {game.regular_matches} 局 + 加赛 0 局）" in output
     assert f"总拍卖天数：{game.regular_matches * game.max_days}" in output
-    assert f"\n{selected}\n  总胜场：{game.regular_matches * expected_wins}\n" in output
-    assert "测试运行结果（非身份模型成绩）" in output
+    total = game.regular_matches * expected_auction_score
+    assert f"\n{selected}\n  总分：{total}分（拍卖{total}分，超级命中0分）\n" in output
+    assert "离线假模型结果：实际执行为假模型，无真实模型调用" in output
 
 
 @pytest.mark.parametrize("game,first_bids,tied", [
-    (GameSettings(1, 0, (1, 1), 7, 2, 3, 1, 2), [1, 0], False),
-    (GameSettings(4, 0, (1, 1, 1), 7, 2, 3, 1, 2), [3, 1, 0], False),
-    (GameSettings(0, 0, (1,), 7, 2, 3, 1, 2), [0], True),
-    (GameSettings(7, 0, (1,), 0, 2, 3, 1, 2), [0], True),
+    (GameSettings(
+        initial_coins=1, daily_salary=0, daily_pool=(1, 1), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=2,
+    ), [1, 0], False),
+    (GameSettings(
+        initial_coins=4, daily_salary=0, daily_pool=(1, 1, 1), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=2,
+    ), [3, 1, 0], False),
+    (GameSettings(
+        initial_coins=0, daily_salary=0, daily_pool=(1,), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=2,
+    ), [0], True),
+    (GameSettings(
+        initial_coins=7, daily_salary=0, daily_pool=(1,), max_bid=0,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=2,
+    ), [0], True),
 ])
 def test_offline_economic_edges_finish_and_export(game, first_bids, tied, tmp_path,
                                                  monkeypatch, demo_configuration):
@@ -235,7 +268,7 @@ def test_offline_economic_edges_finish_and_export(game, first_bids, tied, tmp_pa
         assert [day["bids"][0]["bid"] for day in match["days"]] == first_bids
         assert all(bid["status"] != "illegal" for day in match["days"] for bid in day["bids"])
     if tied:
-        assert all(wins == 0 for payload in matches for wins in payload["match"]["wins"].values())
+        assert all(score == 0 for payload in matches for score in payload["match"]["auction_scores"].values())
     assert replay.exists()
     assert all(factory.opened == factory.closed == factory.calls for factory in factories)
 
@@ -254,6 +287,124 @@ def test_current_game_configuration_smoke(tmp_path, demo_configuration):
     assert all(factory.opened == factory.closed for factory in factories)
 
 
+@pytest.mark.parametrize("regular_matches,bounty", [(5, 7), (2, 5)])
+def test_rich_demo_rollover_super_hits_and_single_playoff(
+        tmp_path, monkeypatch, demo_configuration, regular_matches, bounty):
+    game = GameSettings(
+        initial_coins=12, daily_salary=6, daily_pool=(3, 3, 3, 3, 3), max_bid=10,
+        super_cost=3, super_bounty=bounty, super_hit_score=1,
+        regular_matches=regular_matches, max_playoffs=5,
+    )
+    config, templates = demo_configuration
+    names = ["甲", "乙", "丙", "丁"]
+    configs = [deepcopy(templates[index % len(templates)]) for index in range(len(names))]
+    for name, pc in zip(names, configs):
+        pc["name"] = pc["identity_model"]["name"] = name
+    monkeypatch.setattr(offline_demo, "load_configuration", lambda **_: (config, configs))
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+    run_dir = tmp_path / "rich"
+    replay_path, factories = generate_demo(run_dir, test_model=True)
+    paths = RunPaths(run_dir)
+    matches = analyze.load_match_logs(run_dir)
+    assert len(matches) == regular_matches + 1
+    assert [payload["match"]["is_playoff"] for payload in matches] == [False] * regular_matches + [True]
+    totals = dict.fromkeys(names, 0)
+    for number, payload in enumerate(matches, 1):
+        match = payload["match"]
+        first, second, *later = match["days"]
+        winner_index = 0 if number > regular_matches else (number - 1) % 2
+        if regular_matches % 2 and number == regular_matches:
+            winner_index = 2
+        winner = names[winner_index]
+        assert all(bid["status"] == "ok" for day in match["days"] for bid in day["bids"])
+        assert first["is_void"] and first["winner"] is None and first["auction_score"] == 0
+        assert first["super_uses"] == [{"player": names[0], "value": 1, "hit": False}]
+        assert second["pool"] == game.daily_pool[0] + game.daily_pool[1]
+        assert second["winner"] == winner and second["auction_score"] == second["pool"]
+        assert second["super_uses"] == [{"player": name, "value": 2, "hit": True} for name in names[:2]]
+        assert all(day["winner"] == winner and not day["super_uses"] for day in later)
+        assert match["auction_scores"] == {name: game.auction_pool_per_match if name == winner else 0
+                                            for name in names}
+        assert match["scores"] == {name: match["auction_scores"][name] + int(name in names[:2])
+                                   for name in names}
+        for name in names:
+            totals[name] += match["scores"][name]
+        if number == regular_matches:
+            assert totals[names[0]] == totals[names[1]] == max(totals.values())
+            if regular_matches == 5:
+                assert [totals[name] for name in names[:3]] == [35, 35, 15]
+    assert totals[names[0]] > max(totals[name] for name in names[1:])
+    if regular_matches == 5:
+        assert [totals[name] for name in names[:3]] == [51, 36, 15]
+    expected_calls = 2 + len(matches) * (game.max_days - 1) + 3 * (len(matches) - 1) + 2
+    assert all(factory.opened == factory.closed == factory.calls == expected_calls for factory in factories)
+    entries = [json.loads(line) for line in paths.player(1).read_text(encoding="utf-8").splitlines()]
+    plans = [entry for entry in entries if entry["task"] == "plan"]
+    assert len(plans) == len(matches)
+    assert all((entry["result"]["bid"], entry["result"]["super_bid"]) == (0, 1) for entry in plans)
+    assert not any(entry["context"].endswith("第1天") for entry in entries if entry["task"] == "bid")
+    assert not any(entry["phase"] == f"match_{len(matches)}_memory" for entry in entries)
+    assert entries[-2]["phase"] == "final_speech" and entries[-1]["phase"] == "final_summary"
+    assert all("昨天" not in entry["result"]["strategy"] and "工资" not in entry["result"]["strategy"]
+               for entry in entries if entry["task"] in ("plan", "bid"))
+    snapshot = paths.read_config()
+    assert snapshot["run_type"] == "offline" and snapshot["mode"] == "test_model"
+    assert all(saved["identity_model"]["model"] != saved["execution_model"]["model"]
+               for saved in snapshot["players"])
+    replay = replay_path.read_text(encoding="utf-8")
+    for event in ("首次超级落空", "首次超级命中", "首次流局", "首次滚存获胜", "加赛关键日"):
+        assert replay.count(event) == 1
+    assert "获胜者 甲，拍卖得分 6 分" in replay
+    assert "甲 出 1，落空，命中得分 0 分" in replay
+    assert "甲 出 2，命中，命中得分 1 分" in replay
+    assert "实际执行：假模型 FunctionModel" in replay
+    assert "实际比赛结尾 · 最终感言" in replay and "实际比赛结尾 · 观众总结" in replay
+    stats = analyze.collect_player_stats(matches)
+    assert stats["auction_score_matrix"][names[0]] == [payload["match"]["auction_scores"][names[0]]
+                                                     for payload in matches]
+    assert all(row["illegal"] == 0 for row in stats["rows"])
+
+
+@pytest.mark.parametrize("player_count,days,cost,initial,salary", [
+    (4, 2, 3, 3, 4), (4, 5, 3, 6, 1), (5, 2, 0, 1, 1),
+])
+@pytest.mark.parametrize("match_index", [1, 2])
+def test_rich_script_is_legal_at_economic_boundary(player_count, days, cost, initial, salary, match_index):
+    game = GameSettings(
+        initial_coins=initial, daily_salary=salary, daily_pool=(3,) * days, max_bid=2,
+        super_cost=cost, super_bounty=0, super_hit_score=1, regular_matches=2, max_playoffs=1,
+    )
+    class ScriptPlayer(Player):
+        def __init__(self, index):
+            super().__init__(f"合成{index}")
+            self.index = index
+
+        def decide_bid(self, obs):
+            return offline_demo.demo_submission(game, self.index, player_count, match_index, obs.day, obs.my_coins)
+
+    players = [ScriptPlayer(index) for index in range(player_count)]
+    log = run_match(players, match_index, False, {player.name: [] for player in players}, [], game,
+                    scores_history={player.name: [] for player in players})
+    assert all(record.status == "ok" for day in log.days for record in day.bids)
+    assert log.days[0].is_void and log.days[1].winner == players[match_index - 1].name
+
+
+@pytest.mark.parametrize("player_count,changes", [
+    (3, {}), (4, {"daily_pool": (3,)}), (4, {"regular_matches": 1}),
+    (4, {"max_playoffs": 0}), (4, {"max_bid": 1}), (4, {"daily_salary": 0}),
+    (4, {"initial_coins": 2}), (4, {"initial_coins": 3, "daily_salary": 3}),
+])
+def test_inapplicable_rich_script_uses_simple_legal_fallback(player_count, changes):
+    game = replace(GameSettings(
+        initial_coins=12, daily_salary=6, daily_pool=(3, 3), max_bid=10,
+        super_cost=3, super_bounty=7, super_hit_score=1, regular_matches=2, max_playoffs=1,
+    ), **changes)
+    for index in range(player_count):
+        for coins in (0, 1, 2, 12):
+            assert offline_demo.demo_submission(game, index, player_count, 1, 1, coins) == (
+                min(3, game.max_bid, coins) if index == 0 else 0, None)
+
+
 @pytest.mark.parametrize("test_model", [False, True])
 def test_offline_model_profile_follows_actual_execution(
         tmp_path, monkeypatch, config_files, demo_configuration, test_model):
@@ -264,7 +415,12 @@ def test_offline_model_profile_follows_actual_execution(
     models["models"]["first"]["model_profile"] = {"supports_forced_tool_choice": True}
     models["models"]["substitute"]["model_profile"] = {"supports_forced_tool_choice": False}
     model_path.write_text(yaml.safe_dump(models), encoding="utf-8")
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: GameSettings(7, 0, (1,), 7, 2, 3, 1, 0))
+    game = GameSettings(
+        initial_coins=7, daily_salary=0, daily_pool=(1,), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=0,
+    )
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
     run_dir = tmp_path / "profiles"
     _, factories = generate_demo(run_dir, test_model=test_model)
     paths = RunPaths(run_dir)
@@ -283,7 +439,11 @@ def test_offline_model_profile_follows_actual_execution(
 
 
 def test_offline_reuses_one_game_and_syncs_once_before_directory(tmp_path, monkeypatch, demo_configuration):
-    game = GameSettings(7, 3, (1,), 7, 2, 3, 1, 0)
+    game = GameSettings(
+        initial_coins=7, daily_salary=3, daily_pool=(1,), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=0,
+    )
     run_dir = tmp_path / "single-load"
     loads, syncs = [], []
     def load_game():
@@ -325,7 +485,11 @@ def test_offline_sync_failure_creates_no_run(tmp_path, monkeypatch, demo_configu
 
 def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, demo_configuration):
     from pydantic_ai.models.function import DeltaToolCall
-    game = GameSettings(7, 3, (1, 1), 7, 2, 3, 1, 0)
+    game = GameSettings(
+        initial_coins=7, daily_salary=3, daily_pool=(1, 1), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=0,
+    )
     monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
     real_stream = offline_demo.DemoFactory.stream
     attempts = []
@@ -340,10 +504,66 @@ def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, 
                 yield part
     monkeypatch.setattr(offline_demo.DemoFactory, "stream", invalid_bid)
     wait = offline_demo.Controller.wait_for_turn
-    def continuous_only(self, label):
+    def continuous_only(self, label, **kwargs):
         assert self._mode == "continuous", "离线失败进入了无人交互闸门"
-        return wait(self, label)
+        assert not kwargs.get("require_confirmation"), "离线失败进入了交互重试"
+        return wait(self, label, **kwargs)
     monkeypatch.setattr(offline_demo.Controller, "wait_for_turn", continuous_only)
-    with pytest.raises(RuntimeError, match="离线任务失败：甲 / plan"):
-        generate_demo(tmp_path / "invalid", test_model=True)
+    run_dir = tmp_path / "invalid"
+    with pytest.raises(RuntimeError, match="离线任务失败：第一局策略规划"):
+        generate_demo(run_dir, test_model=True)
     assert attempts == ["bid", "bid"]  # 共享输出纠错保留，整轮不自动补跑。
+    paths = RunPaths(run_dir)
+    entries = [json.loads(line) for line in paths.player(1).read_text(encoding="utf-8").splitlines()]
+    failed = entries[-1]
+    assert failed["status"] == "failed" and failed["error"]["type"] == "OutputFailedError"
+    assert failed["phase"] == "opening_plan" and failed["reruns"] == 0
+    load_requests(paths.capture(1), entries)
+    assert len(failed["requests"]) == 2
+    assert all(record["response"]["parts"] for record in failed["requests"])
+    for record in failed["requests"]:
+        submitted = json.loads(record["response"]["parts"][0]["args"])
+        assert submitted["bid"] == -1 and submitted["strategy"] == "故意非法出价"
+    replay = export_replay(run_dir, "甲", capture_definitions=True, debug=True)
+    content = replay.read_text(encoding="utf-8")
+    assert "任务失败，本次结果未加入玩家对话或首日出价缓存" in content
+    assert '"status": "failed"' in (run_dir / "debug" / "001.md").read_text(encoding="utf-8")
+
+
+def test_offline_request_failure_is_saved_before_exit_and_exportable(tmp_path, monkeypatch, demo_configuration):
+    from pydantic_ai.exceptions import ModelAPIError
+
+    attempts = []
+    async def unavailable(self, messages, info):
+        attempts.append(self.name)
+        raise ModelAPIError("offline", "离线故障测试")
+        yield  # FunctionModel 的流式接口。
+
+    monkeypatch.setattr(offline_demo.DemoFactory, "stream", unavailable)
+    monkeypatch.setattr(offline_demo.Controller, "start_stdin_reader", lambda *_: pytest.fail("启动键盘读取"))
+    real_wait = offline_demo.Controller.wait_for_turn
+    def no_retry(self, label, **kwargs):
+        assert not kwargs.get("require_confirmation"), "进入交互重试闸门"
+        return real_wait(self, label, **kwargs)
+    monkeypatch.setattr(offline_demo.Controller, "wait_for_turn", no_retry)
+    run_dir = tmp_path / "request-failure"
+    with pytest.raises(RuntimeError, match="离线任务失败：开局发言"):
+        generate_demo(run_dir, test_model=True)
+
+    _, configs = demo_configuration
+    assert sorted(attempts) == sorted(pc["name"] for pc in configs)
+    paths = RunPaths(run_dir)
+    for number in range(1, len(configs) + 1):
+        entries = [json.loads(line) for line in paths.player(number).read_text(encoding="utf-8").splitlines()]
+        assert len(entries) == 1
+        assert entries[0]["status"] == "failed"
+        assert "离线故障测试" in entries[0]["error"]["message"]
+        assert entries[0]["tool_definitions"]
+    entries = [json.loads(line) for line in paths.player(1).read_text(encoding="utf-8").splitlines()]
+    load_requests(paths.capture(1), entries)
+    assert len(entries[0]["requests"]) == 1
+    assert entries[0]["requests"][0]["messages"]
+    replay = export_replay(run_dir, configs[0]["name"], capture_definitions=True)
+    content = replay.read_text(encoding="utf-8")
+    assert "离线故障测试" in content
+    assert "尚无已结算局日志" in content

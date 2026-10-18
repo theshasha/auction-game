@@ -73,6 +73,7 @@ class TestSuperBid:
         assert day1.collision_values == []
         # 落空也扣 2 成本：乙第 1 天 7-2=5，第 2 天工资后为 8（而非 10）
         assert captured["乙"][1].my_coins == 8
+        assert log.scores == {"甲": 4, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
 
     def test_super_bid_requires_balance_headroom(self):
         # 总耗资约束：正常出价 + 2 成本不得超过余额，否则整单作废
@@ -100,7 +101,7 @@ class TestSuperBid:
         day2 = log.days[1]
         assert day2.super_uses == [{"player": "甲", "value": 6, "hit": False}]
         assert day2.is_void and day2.winner is None
-        assert log.days[2].pool == 2
+        assert log.days[2].pool == 8
         assert captured["甲"][2].my_coins == 5  # 7-6+3-2+3，纯狙击仍扣成本
 
     def test_super_bid_equal_to_normal_voids_whole_submission(self):
@@ -139,6 +140,9 @@ class TestSuperBid:
         assert captured["己"][1].my_coins == 11
         assert records["乙"].status == "ok" and records["己"].status == "ok"
         assert records["甲"].status == "illegal"
+        assert log.scores == {"甲": 0, "乙": 2, "丙": 4, "丁": 0, "戊": 0, "己": 2}
+        assert captured["乙"][1].my_match_score == 2
+        assert captured["己"][1].my_match_score == 2
 
     def test_snipe_non_top_unique_also_pays_bounty(self):
         # 命中不限于最高唯一价：乙的超级 0 命中己的唯一 0（扣 0 无实质损失），
@@ -171,6 +175,38 @@ class TestSuperBid:
         assert day1.winner == "丙" and day1.winning_bid == 4
         # 丙：7 - 4（获胜扣款）- 2（成本）+ 3（悬赏）= 4，第 2 天工资后为 7
         assert captured["丙"][1].my_coins == 7
+        assert log.scores == {"甲": 0, "乙": 0, "丙": 6, "丁": 0, "戊": 0, "己": 0}
+        assert captured["丙"][1].my_match_score == 6
+
+    def test_void_hits_score_each_sniper_and_only_auction_pool_rolls_over(self):
+        captured = {}
+        log = run_scenario(
+            {
+                1: [4, 4, 0, 0, 0, 0],
+                2: [0, 0, 0, 1, 0, 0],
+                6: [1, 1, 0, 0, 0, 0],
+            },
+            super_strategies={
+                "甲": super_by_day({1: 0, 6: 0}),
+                "乙": super_by_day({1: 0, 6: 0}),
+                "丙": super_by_day({1: 4, 6: 1}),
+            },
+            capture=captured,
+        )
+        assert all(record.status == "ok" for day in log.days for record in day.bids)
+        assert log.days[0].is_void and log.days[-1].is_void
+        assert log.days[0].super_uses == [
+            {"player": "甲", "value": 0, "hit": True},
+            {"player": "乙", "value": 0, "hit": True},
+            {"player": "丙", "value": 4, "hit": True},
+        ]
+        assert [day.pool for day in log.days] == [4, 8, 4, 8, 12, 16]
+        assert log.auction_scores == {"甲": 0, "乙": 0, "丙": 0, "丁": 8, "戊": 0, "己": 0}
+        assert log.scores == {"甲": 4, "乙": 4, "丙": 4, "丁": 8, "戊": 0, "己": 0}
+        assert captured["甲"][1].my_match_score == 2
+        assert captured["乙"][1].my_match_score == 2
+        assert captured["丙"][1].my_match_score == 2
+        assert captured["丁"][2].my_match_score == 8
 
     def test_super_observation_fields(self):
         # Observation 携带昨日超级出价结局（数值/命中，无次数状态字段）；

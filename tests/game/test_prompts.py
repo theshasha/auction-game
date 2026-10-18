@@ -22,6 +22,8 @@ class TestSystemPrompt:
         assert "傲娇大小姐：自称本小姐。" in system
         # 人设只影响说话方式，思考要求保持认真
         assert "不要被人设的说话方式影响你的思考" in system
+        assert "无规则约束力" in system
+        assert "<!--" not in system and "RULES.template.md" not in system
 
     def test_predictions_public_to_everyone(self):
         predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
@@ -33,19 +35,36 @@ class TestSystemPrompt:
 
 
 class TestSpeechFields:
-    """公开字段边界及发言免责句；观众总结提示信息不变。"""
+    """公开字段边界；观众总结提示信息不变。"""
 
     def test_public_speech_requests_ask_for_speech_block(self):
-        standings = make_standings({n: [0] for n in NAMES})
+        auction_scores = {name: 3 if name == "甲" else 0 for name in NAMES}
+        scores = auction_scores.copy()
+        standings = make_standings({name: [auction_scores[name]] for name in NAMES},
+                                   scores_history={name: [scores[name]] for name in NAMES})
         for text in (
             prompts.opening_speech_request(),
-            prompts.match_end_speech_request(make_log(), standings, True),
-            prompts.final_speech_request(standings, make_log(match_index=5)),
+            prompts.match_end_speech_request(make_log(auction_scores=auction_scores, scores=scores), standings, True),
+            prompts.final_speech_request(standings, make_log(match_index=5, auction_scores=auction_scores, scores=scores)),
         ):
             assert "strategy" in text and "speech" in text
             assert "strategy 仅自己可见" in text
-            assert "只有 speech 会给其他玩家看" in text
-            assert "不构成对你后续出价的任何约束" in text
+            assert "speech 公开" in text
+
+    @pytest.mark.parametrize("final", [False, True], ids=["match-end", "final"])
+    def test_results_show_settled_scores_and_score_based_ranking(self, final):
+        auction_scores = {name: 3 if name == "甲" else 0 for name in NAMES}
+        scores = auction_scores.copy()
+        log = make_log(auction_scores=auction_scores, scores=scores)
+        standings = make_standings({"甲": [2, 1], "乙": [1, 0]},
+                                   scores_history={"甲": [8, 4], "乙": [12, 2]})
+        text = (prompts.final_speech_request(standings, log) if final
+                else prompts.match_end_speech_request(log, standings, will_continue=True))
+        assert "本局得分：甲 3 分、乙 0 分" in text
+        assert "排名与分数明细" in text
+        assert "| 1 | 乙 | 14 | 12 | 2 | 1 |" in text
+        assert "| 2 | 甲 | 12 | 8 | 4 | 3 |" in text
+        assert "胜场" not in text
 
     def test_final_summary_is_private_and_includes_speeches(self):
         text = prompts.final_summary_request({"甲": "感言A", "乙": "感言B"})
@@ -69,9 +88,9 @@ def test_output_reminder_only_names_current_tool(task):
 def test_memory_body_keeps_task_boundaries_without_tool_instruction():
     text = prompts.memory_request({"乙": "公开信号"})
     assert "save_memory" not in text
-    for required in ("【乙】公开信号", "整体替换旧记忆", "下一局看不到历局原始对话",
-                     "保留仍有用的早期经验", "区分已观察事实与待验证猜测", "软目标",
-                     "不生成额外策略或公开发言"):
+    for required in ("【乙】公开信号", "整体替换旧记忆", "下局看不到历局原始对话与公开发言",
+                     "保留早期有效经验", "修正失效判断", "区分事实与猜测", "软目标",
+                     "只填写 memory", "规则与最新成绩会另行提供"):
         assert required in text
 
 class TestPlayoffNotice:
@@ -97,12 +116,17 @@ class TestPlayoffNotice:
             make_log(
                 match_index=match_index, is_playoff=is_playoff,
                 game=replace(TEST_GAME, regular_matches=regular_matches),
+                auction_scores={name: 3 if name == "甲" else 0 for name in NAMES},
+                scores={name: 4 if name == "甲" else 0 for name in NAMES},
             ),
-            make_standings({n: [0] * match_index for n in NAMES}),
+            make_standings(
+                {name: [int(name == "甲")] * match_index for name in NAMES},
+                scores_history={name: [4 if name in ("甲", "乙") else 0] * match_index for name in NAMES},
+            ),
             will_continue=will_continue,
         )
-        notice = "第一名出现并列，按规则全员将进入加赛局，加赛局胜场计入总胜场。"
-        assert ("第一名出现并列" in text) is expected
+        notice = "第一名总分并列，全员进入加赛。"
+        assert ("第一名总分并列" in text) is expected
         if expected:
             assert notice in text
 
@@ -113,19 +137,11 @@ class TestPlanBidMerge:
         assert "本局最后一天，结束后金币清零。" in prompts.opening_plan_request({}, game)
         assert "本局最后一天，结束后金币清零。" in prompts.next_match_plan_request([], game, 2)
 
-    """规划请求保留恒定首日状态与策略要求；schema 定义格式。"""
+    """规划请求保留首日资源、权威分数与策略要求；schema 定义格式。"""
 
-    def test_bid_format_hint_covers_super_bid(self):
+    def test_bid_format_hint_only_requests_current_task(self):
         text = prompts.bid_format_hint(TEST_GAME)
-        assert 'super_bid' not in text and 'strategy' not in text
-        # 提交合法性约束（同值、合计余额——违反即整单作废）放模板防无谓非法提交；
-        # 策略规则细节（命中判定、悬赏、不能获胜等）不在每日消息复述，
-        # 由 system 的实时渲染规则兜底
-        assert "使用超级出价时，两笔出价不得同值" in text
-        assert "2 金币成本不得超过余额" in text
-        assert f"0 到 {TEST_GAME.max_bid} 的整数" in text
-        assert "正常出价不得超过余额" in text
-        assert "```json" not in text
+        assert text == "请分析局势并提交今日出价。"
 
     @pytest.mark.parametrize(
         "build, speech_kind, strategy, bid_task",
@@ -136,17 +152,35 @@ class TestPlanBidMerge:
         ids=["opening", "next-match"],
     )
     def test_plans_use_custom_first_day_values(self, build, speech_kind, strategy, bid_task):
-        game = replace(TEST_GAME, initial_coins=11, daily_pool=(2, 1, 3), max_bid=9, super_cost=3)
+        game = replace(TEST_GAME, initial_coins=11, daily_pool=(2, 1, 3), max_bid=9,
+                       super_cost=3, super_hit_score=2)
         opening = build is prompts.opening_plan_request
-        text = build({"甲": "发言A", "乙": "发言B"}, game) if opening else build([], game, 2)
+        standings = make_standings({"甲": [2], "乙": [1]}, scores_history={"甲": [10], "乙": [11]})
+        text = build({"甲": "发言A", "乙": "发言B"}, game) if opening else build(standings, game, 2)
         assert speech_kind in text
         assert strategy in text and bid_task in text
         if opening:
             assert "【甲】发言A" in text and "【乙】发言B" in text
+            assert text.count("全员累计总分：全员 0 分。") == 1
         else:
             assert "局末发言" not in text and "累计私有记忆" in text
-        assert "你的金币 11，本局已获胜场 0，今日奖池 2 个胜场，规则出价上限 9" in text
-        assert '0 到 9 的整数' in text
-        assert '请分析当前局势并决定今日出价' in text
-        assert "加 3 金币成本" in text
+            assert "| 排名 | 玩家 | 总分（分） | 第1局（分） | 拍卖分（分） |" in text
+            assert "| 1 | 乙 | 11 | 11 | 1 |" in text
+            assert "| 2 | 甲 | 10 | 10 | 2 |" in text
+            assert "全员累计总分：" not in text
+        for fact in ("你的金币 11", "今日奖池 2 分"):
+            assert fact in text
+        assert '请分析局势并提交今日出价' in text
         assert "```json" not in text
+
+    @pytest.mark.parametrize("opening, match_index", [(True, 1), (False, 2), (False, 3), (False, 4)],
+                             ids=["opening", "early-regular", "last-regular", "playoff"])
+    def test_plans_only_show_remaining_scores_in_last_regular_match_and_playoffs(self, opening, match_index):
+        game = replace(TEST_GAME, daily_pool=(2, 1, 3), super_hit_score=2, regular_matches=3)
+        text = (prompts.opening_plan_request({}, game) if opening
+                else prompts.next_match_plan_request([], game, match_index))
+        show_remaining = match_index >= game.regular_matches
+        assert ("本局含今天还剩" in text) is show_remaining
+        assert ("每人理论最多再得" in text) is show_remaining
+        if show_remaining:
+            assert "本局含今天还剩 3 天，拍卖奖池 6 分，每人理论最多再得 6 命中分。" in text

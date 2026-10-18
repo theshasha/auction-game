@@ -14,7 +14,8 @@ from auction_game.game.game_rules import GameSettings, validate_submission
 def settings_data():
     return dict(
         initial_coins=11, daily_salary=4, daily_pool=[2, 1, 3], max_bid=9,
-        super_cost=3, super_bounty=5, regular_matches=2, max_playoffs=0,
+        super_cost=3, super_bounty=5, super_hit_score=2,
+        regular_matches=2, max_playoffs=0,
     )
 
 
@@ -22,7 +23,8 @@ def test_immutable_settings_and_json_snapshot(settings_data):
     game = GameSettings.from_dict(settings_data)
     assert game.daily_pool == (2, 1, 3)
     assert game.max_days == 3
-    assert game.wins_per_match == 6
+    assert game.auction_pool_per_match == 6
+    assert game.super_hit_score == 2
     assert json.loads(json.dumps(game.to_dict())) == settings_data
     assert GameSettings.from_dict(game.to_dict()) == game
     settings_data["daily_pool"][0] = 99
@@ -35,6 +37,7 @@ def test_immutable_settings_and_json_snapshot(settings_data):
 
 @pytest.mark.parametrize("field", [
     "initial_coins", "daily_salary", "max_bid", "super_cost", "super_bounty",
+    "super_hit_score",
     "regular_matches", "max_playoffs",
 ])
 @pytest.mark.parametrize("value", [True, 1.5, -1])
@@ -51,6 +54,7 @@ def test_zero_boundaries(settings_data):
             settings_data[field] = 0
     game = GameSettings.from_dict(settings_data)
     assert game.max_bid == game.super_cost == game.max_playoffs == 0
+    assert game.super_hit_score == 0
     assert validate_submission(0, None, 0, game) is None
     settings_data["regular_matches"] = 0
     with pytest.raises(ValueError, match="regular_matches"):
@@ -74,6 +78,8 @@ def test_constructor_requires_tuple(settings_data):
 
 
 def test_required_and_unknown_fields(settings_data):
+    with pytest.raises(ValueError, match="win_score"):
+        GameSettings.from_dict({**settings_data, "win_score": 4})
     with pytest.raises(ValueError, match="拼写"):
         GameSettings.from_dict({**settings_data, "max_bdi": 9})
     for field in settings_data:

@@ -62,7 +62,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
         print(f"[配置错误] {exc}")
         return 1
     if len(player_configs) < 2:
-        print("错误：AI 对局至少需要 2 名玩家，请检查 players.yaml")
+        print("错误：AI 比赛至少需要 2 名玩家，请检查 players.yaml")
         return 1
     timeout = config["llm"]["timeout_seconds"]
     max_concurrency = config["llm"]["max_concurrency"]
@@ -155,12 +155,12 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
                 label = "测试模型" if test_model else pc["model"]
                 print(f"[预算提醒] {label}：{reason}；暂用 {pc['max_tokens']} tokens。")
         if warned:
-            print("请运行 python -m auction_game.cli.sync_models --write 更新能力快照；"
+            print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
                   "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
 
     if start_reader:
         controller.start_stdin_reader()
-        print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=中止比赛")
+        print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=退出比赛")
 
     def bid_collector(observations):
         sample_obs = observations[0][1]  # 同一轮内所有玩家的局/天相同
@@ -186,7 +186,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             bid_collector=bid_collector,
         )
     except TournamentAborted:
-        print("\n比赛已被用户中止。")
+        print("\n已退出比赛。")
         return 0
     print_final_result(result)
     return 0

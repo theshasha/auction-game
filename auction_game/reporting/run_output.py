@@ -10,7 +10,7 @@ from pathlib import Path
 from auction_game.ai import prompts
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.paths import LOG_DIR
-from auction_game.reporting.run_paths import RunPaths, RUN_TYPES, FORMAT_VERSION
+from auction_game.reporting.run_paths import RunPaths, RUN_TYPES, FORMAT_VERSION, validate_run_config
 from auction_game.reporting.tool_records import ToolWriter
 
 
@@ -66,9 +66,10 @@ def initialize_run(run_dir, snapshot, rules):
     paths = RunPaths(run_dir)
     if run_dir.exists() and any(run_dir.iterdir()):
         raise FileExistsError(f"场次已存在，拒绝覆盖：{run_dir}")
+    snapshot = {**snapshot, "format_version": FORMAT_VERSION,
+                 "players": [{"number": index, **pc} for index, pc in enumerate(snapshot["players"], 1)]}
+    validate_run_config(snapshot)
     paths.prepare()
-    snapshot = {"format_version": FORMAT_VERSION, **snapshot,
-                "players": [{"number": index, **pc} for index, pc in enumerate(snapshot["players"], 1)]}
     paths.config.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (run_dir / "RULES.md").write_text(rules, encoding="utf-8")
     ToolWriter(paths)  # 即使未发请求也有明确的阅读入口。
@@ -78,10 +79,15 @@ def initialize_run(run_dir, snapshot, rules):
 
 def write_readme(paths, standings=None):
     config = paths.read_config()
+    model_note = "全员调用测试模型，角色身份不变。" if config["mode"] == "test_model" else "各玩家使用配置中的模型。"
+    if config["run_type"] == "offline":
+        model_note = "全员使用假模型，无真实调用。"
+    elif config["run_type"] == "bot":
+        model_note = "全员使用本地 Bot，无模型调用。"
     lines = ["# 拍卖个人赛", f"运行类型：{RUN_TYPES[config['run_type']]}。",
-             "测试模型覆盖身份调用配置。" if config["mode"] == "test_model" else "采用常规身份配置。",
+             model_note,
              "[本场规则](RULES.md)", "[本场工具定义](tools.md)",
-             "参数与身份见 [本场快照](data/run_config.json)。统计只读取此场次。"]
+             "本场配置见 [配置快照](data/run_config.json)，统计以此为准。"]
     for name, title in (("speeches.md", "公开发言"), ("replay.md", "关键节点回放")):
         if (paths.root / name).exists():
             lines.append(f"[{title}]({name})")
@@ -101,12 +107,12 @@ def print_final_result(result) -> None:
     regular_count = sum(not log.is_playoff for log in result.match_logs)
     print(f"\n共进行 {len(result.match_logs)} 局（正赛 {regular_count} 局 + 加赛 {result.playoff_count} 局）")
     if result.playoff_cap_hit:
-        print("警告：加赛达到安全上限，第一名仍为并列，按当前总胜场结算")
+        print("加赛已达上限，保留并列冠军。")
     print("\n===== 最终排名 =====")
     print(prompts.render_standings(result.final_standings))
     champions = [e for e in result.final_standings if e.rank == 1]
     if len(champions) > 1:
         names = "、".join(e.player for e in champions)
-        print(f"\n并列冠军: {names}（{champions[0].total_wins} 胜）")
+        print(f"\n并列冠军: {names}（{champions[0].total_score} 分）")
     else:
-        print(f"\n冠军: {champions[0].player}（{champions[0].total_wins} 胜）")
+        print(f"\n冠军: {champions[0].player}（{champions[0].total_score} 分）")

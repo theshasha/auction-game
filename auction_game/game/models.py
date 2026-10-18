@@ -13,7 +13,7 @@ class BidRecord:
     """一笔出价记录（次日即公开，局末再随完整日志公开）。一名玩家一天最多产生两笔：
     正常出价 + 超级出价（is_super=True，狙击工具：不能获胜、不参与撞车笔数，
     每次提交消耗本场配置的固定成本，命中——其数值上 ≥1 笔正常出价——使该数值
-    全部正常出价按撞车处理，并获得本场配置的悬赏）。"""
+    全部正常出价按撞车处理，并获得本场配置的金币悬赏与命中分）。"""
 
     player: str
     raw_bid: Any          # 玩家提交的原始值，用于审计非法出价
@@ -28,12 +28,12 @@ class DayResult:
 
     day: int
     bids: list[BidRecord]
-    pool: int                    # 当天奖池的胜场数（含流局并入）
+    pool: int                    # 当天拍卖分（含流局并入）
     winner: Optional[str]        # None 表示流局
     winning_bid: Optional[int]
-    wins_taken: int              # 获胜者实际获得的胜场数（恒等于 pool；流局为 0）
+    auction_score: int           # 获胜者取得的拍卖分（恒等于 pool；流局为 0）
     # 当天超级出价使用情况；每条 {"player": str, "value": int, "hit": bool}，
-    # 命中即获得本场配置的悬赏；出价明细次日公开，命中与否亦可由明细推出
+    # 命中即获得本场配置的金币悬赏与命中分；出价明细次日公开
     super_uses: list[dict] = field(default_factory=list)
     # 当天撞车价位的具体数值（升序；只含正常出价被扣款的价位：
     # 正常出价互撞 ≥2 笔 + 被超级出价命中（≥1 笔正常出价）的数值）
@@ -64,7 +64,7 @@ class DayResult:
             "winner": self.winner if not self.is_void else "流局",
             "winning_bid": self.winning_bid,
             "pool": self.pool,
-            "wins_taken": self.wins_taken,
+            "auction_score": self.auction_score,
             "bids_detail": bids_detail,
             "super_uses": [dict(use) for use in self.super_uses],
             "collision_values": list(self.collision_values),
@@ -79,14 +79,16 @@ class MatchLog:
     is_playoff: bool
     game: GameSettings
     days: list[DayResult] = field(default_factory=list)
-    wins: dict[str, int] = field(default_factory=dict)   # 本局各人获得的胜场
+    auction_scores: dict[str, int] = field(default_factory=dict)  # 本局各人的拍卖分（含零分）
+    scores: dict[str, int] = field(default_factory=dict)  # 本局总分，结算后覆盖全员（含零分）
 
     def to_dict(self) -> dict:
         return {
             "game": self.game.to_dict(),
             "match_index": self.match_index,
             "is_playoff": self.is_playoff,
-            "wins": dict(self.wins),
+            "auction_scores": dict(self.auction_scores),
+            "scores": dict(self.scores),
             "days": [
                 {
                     "day": day.day,
@@ -103,7 +105,7 @@ class MatchLog:
                     "pool": day.pool,
                     "winner": day.winner,
                     "winning_bid": day.winning_bid,
-                    "wins_taken": day.wins_taken,
+                    "auction_score": day.auction_score,
                     "super_uses": [dict(use) for use in day.super_uses],
                     "collision_values": list(day.collision_values),
                     "is_void": day.is_void,
@@ -115,12 +117,14 @@ class MatchLog:
 
 @dataclass
 class StandingsEntry:
-    """累计排名条目：总胜场 + 各局胜场分布。"""
+    """按总分排名，拍卖分单独统计；同分保持并列。"""
 
     player: str
-    total_wins: int
-    wins_per_match: list[int]    # 第 i 元素 = 第 i+1 局拿到的胜场数
+    total_auction_score: int              # 含当前局的累计拍卖分
+    auction_scores_per_match: list[int]   # 已完成各局取得的拍卖分
     rank: int = 0
+    total_score: int = 0         # 含当前局已结算部分的累计分数
+    scores_per_match: list[int] = field(default_factory=list)  # 仅含已完成各局分数
 
 
 @dataclass
@@ -129,12 +133,12 @@ class Observation:
 
     my_name: str
     my_coins: int
-    my_match_wins: int           # 本局已获胜场
-    my_total_wins: int           # 含本局在内的累计总胜场
+    my_match_auction_score: int  # 本局已取得的拍卖分
+    my_total_auction_score: int  # 含本局在内的累计拍卖分
     day: int                     # 当前第几天（1 起）
-    today_pool: int              # 当天奖池的胜场数（含流局并入）
+    today_pool: int              # 当天拍卖分（含流局并入）
     today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）
-    standings: list[StandingsEntry]   # 截至当前的累计排名（含本局已决出的胜场）
+    standings: list[StandingsEntry]   # 截至昨日结算后的累计排名
     past_match_logs: list[dict]  # 已结束各局的完整公开日志
     game: GameSettings          # 本场不可变规则参数，与裁判和日志共用
     # 昨日自己的结算结果（第 1 天用默认值）。这些信息都来自公开记录；
@@ -145,7 +149,9 @@ class Observation:
     my_last_sniped: bool = False           # 昨日自己的正常出价是否被超级出价狙中
     my_last_bid_illegal: bool = False      # 昨日提交是否非法（整单强制为正常出价 0）
     my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
-    my_last_super_hit: bool = False        # 昨日自己的超级出价是否命中（命中获得悬赏）
+    my_last_super_hit: bool = False        # 昨日自己的超级出价是否命中（金币悬赏与命中分）
     # 全场每人金币余额（含自己，含当日工资）：规则四.1 规定第 2 天起每天
     # 开始时公布；第 1 天为 None（均为本场初始金币，无信息量，不渲染）。
     all_coins: Optional[dict[str, int]] = None
+    my_match_score: int = 0      # 本局截至昨日的得分
+    my_total_score: int = 0      # 全场截至昨日的累计分数

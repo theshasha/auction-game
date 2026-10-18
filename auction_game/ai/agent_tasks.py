@@ -47,14 +47,14 @@ class SpeechOutput(BaseModel):
 
 class MemoryOutput(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
-    memory: str = Field(min_length=1, description="仅自己可见、整体替换旧记忆的累计笔记；篇幅为软目标")
+    memory: str = Field(min_length=1, description="累计私有笔记，整体替换旧记忆")
 
 
 # 唯一任务到输出工具映射；自然语言提醒也从此取得当前名称。
 OUTPUT_TOOLS = {
-    "bid": ToolOutput(BidOutput, name="bid", description="提交当前规划或每日出价任务：填写私有策略、正常出价及必填的超级出价。"),
-    "speech": ToolOutput(SpeechOutput, name="speech", description="提交当前发言任务：分别填写私有发言策略与向其他玩家公开的发言。"),
-    "memory": ToolOutput(MemoryOutput, name="save_memory", description="保存累计私有记忆，综合旧记忆、本局经历及全部已公布局末发言；新笔记整体替换旧笔记。"),
+    "bid": ToolOutput(BidOutput, name="bid", description="提交今日出价"),
+    "speech": ToolOutput(SpeechOutput, name="speech", description="提交公开发言"),
+    "memory": ToolOutput(MemoryOutput, name="save_memory", description="保存累计私有记忆"),
 }
 OUTPUT_TOOLS["plan"] = OUTPUT_TOOLS["bid"]
 
@@ -73,7 +73,7 @@ def render_task_result(result: dict | str) -> list[str]:
     if "strategy" in result:
         lines.append(f"### 私有策略\n\n{result['strategy']}")
     if "memory" in result:
-        lines.append(f"### 累计私有记忆（{len(result['memory'])} 字符，非 token）\n\n{result['memory']}")
+        lines.append(f"### 累计私有记忆\n\n{result['memory']}")
     if "speech" in result:
         lines.append(f"### 公开发言\n\n{result['speech']}")
     elif "bid" in result:

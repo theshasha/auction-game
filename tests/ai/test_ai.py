@@ -49,17 +49,17 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch)
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 2
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
-    assert "输出纠错 1 次，最终失败" in md and "OutputFailedError" in md
+    assert "纠错 1 次，仍失败" in md and "OutputFailedError" in md
     assert "retry-prompt" not in md and "call-1" not in md
     # 同一次真实纠错审计导出后，首次无效回复与纠错输入都必须可见。
     from auction_game.reporting import replay
-    from auction_game.reporting.run_paths import RunPaths
+    from auction_game.reporting.run_paths import FORMAT_VERSION, RunPaths
     paths = RunPaths(tmp_path)
     paths.prepare()
     paths.player(1).write_text(player.log_path.read_text(encoding="utf-8"), encoding="utf-8")
     paths.capture(1).parent.mkdir(parents=True, exist_ok=True)
     paths.capture(1).write_text((tmp_path / "capture.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
-    paths.config.write_text(json.dumps({"format_version": 2, "run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(), "timeout_seconds": 60,
+    paths.config.write_text(json.dumps({"format_version": FORMAT_VERSION, "run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(), "timeout_seconds": 60,
         "players": [{"number": 1, "name": "Alpha", "identity_model": {"model": "identity"},
                      "execution_model": {"protocol": "chat", "model": "fake", "max_tokens": 123,
                                          "base_url": "https://offline.invalid/v1"}}]}), encoding="utf-8")
@@ -67,8 +67,8 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch)
     readable = replay.export_replay(tmp_path, "Alpha", capture_definitions=True).read_text(encoding="utf-8")
     assert "第一次回复" in readable and "纠正后回复" in readable
     assert '"bid": "2"' in readable and '"bid": 7' in readable
-    assert "渲染后的新增提示全文" in readable and "Input should be a valid integer" in readable
-    assert "本次结果不加入玩家历史" in readable
+    assert "本次新增提示" in readable and "Input should be a valid integer" in readable
+    assert "本次结果未加入玩家对话或首日出价缓存" in readable
 
 
 def test_custom_game_and_realtime_balance_use_shared_rules():

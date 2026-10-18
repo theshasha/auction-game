@@ -25,7 +25,11 @@ from auction_game.game.models import BidRecord, DayResult, MatchLog, Observation
 from auction_game.game.players import ScriptedPlayer
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
-TEST_GAME = GameSettings(7, 3, (1,) * 6, 7, 2, 3, 5, 20)
+TEST_GAME = GameSettings(
+    initial_coins=7, daily_salary=3, daily_pool=(4,) * 6, max_bid=7,
+    super_cost=2, super_bounty=3, super_hit_score=2,
+    regular_matches=5, max_playoffs=20,
+)
 
 CHANNELS = {
     "hub": {"base_url": "https://offline.invalid/v1", "api_key_env": "FAKE_KEY",
@@ -38,7 +42,7 @@ CHANNELS = {
 
 # ---------- 1. 通用数据对象工厂 ----------
 
-def make_day(day, bids, pool, winner, winning_bid, collision_values, wins_taken=0,
+def make_day(day, bids, pool, winner, winning_bid, collision_values, auction_score=0,
              is_void=False, super_bids=None):
     """构造一天结果。bids 为六人正常出价；super_bids 为 {玩家: 数值} 或
     {玩家: (数值, 是否命中)}，每个使用者在出价表里追加一笔 is_super=True
@@ -56,32 +60,44 @@ def make_day(day, bids, pool, winner, winning_bid, collision_values, wins_taken=
         pool=pool,
         winner=winner,
         winning_bid=winning_bid,
-        wins_taken=wins_taken,
+        auction_score=auction_score,
         super_uses=super_uses,
         collision_values=list(collision_values),
         is_void=is_void,
     )
 
 
-def make_log(match_index=1, is_playoff=False, days=None, wins=None, game=TEST_GAME):
+def make_log(match_index=1, is_playoff=False, days=None, auction_scores=None, game=TEST_GAME, *, scores=None):
     return MatchLog(
         match_index=match_index,
         is_playoff=is_playoff,
         game=game,
         days=days if days is not None else [make_day(1, [5, 4, 3, 2, 1, 0], 1, "甲", 5, [], 1)],
-        wins=wins if wins is not None else {name: 0 for name in NAMES},
+        auction_scores=auction_scores if auction_scores is not None else {name: 0 for name in NAMES},
+        scores=scores if scores is not None else {name: 0 for name in (auction_scores if auction_scores is not None else NAMES)},
     )
 
 
-def make_standings(wins_history: dict[str, list[int]]):
-    """展示测试复用生产排名；排名算法由独立手写预期验证。"""
-    return compute_standings(wins_history)
+def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None, total_scores=None):
+    """通过生产路径排名；默认总分只含拍卖分，调用方可显式加入命中分。
+
+    显式 scores_history 为已完成局分数；total_scores 与该历史的差额作为
+    当前局分数传给引擎，确保排序和名次也使用指定总分。
+    """
+    if scores_history is None:
+        scores_history = {name: list(scores) for name, scores in auction_scores_history.items()}
+    current_scores = None if total_scores is None else {
+        name: total_scores[name] - sum(scores_history[name]) for name in auction_scores_history
+    }
+    return compute_standings(
+        auction_scores_history, scores_history=scores_history, current_match_scores=current_scores,
+    )
 
 
 def history(**overrides):
     """一日公布（DayResult.public_view 形状）：默认「乙 以 5 获胜、无撞车、
     无人用超级」，用 overrides 覆盖字段。调用方自行包列表作 today_history。"""
-    base = {"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "wins_taken": 1,
+    base = {"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "auction_score": 1,
             "bids_detail": [
                 {"player": name, "bid": bid, "super_bid": None}
                 for name, bid in zip(NAMES, [6, 5, 4, 3, 2, 1])
@@ -91,18 +107,20 @@ def history(**overrides):
     return base
 
 
-def make_obs(my_name="甲", day=1, today_history=None, total_wins=0, pool=1, coins=7,
+def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, pool=1, coins=7,
              my_last_bid=None, my_last_deduction=None,
              my_last_collided=False, my_last_sniped=False, my_last_bid_illegal=False,
              my_last_super_bid=None, my_last_super_hit=False,
              all_coins=None,
-             past_match_logs=None, game=TEST_GAME):
+             past_match_logs=None, game=TEST_GAME, *, match_score=0, total_score=0):
     """全字段 Observation 工厂。past_match_logs 默认空（即当前为第 1 局）。"""
     return Observation(
         my_name=my_name,
         my_coins=coins,
-        my_match_wins=0,
-        my_total_wins=total_wins,
+        my_match_auction_score=0,
+        my_total_auction_score=total_auction_score,
+        my_match_score=match_score,
+        my_total_score=total_score,
         day=day,
         today_pool=pool,
         today_history=today_history or [],
@@ -129,8 +147,11 @@ def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=
     players = [
         ScriptedPlayer(name, strategies[name], super_strategies.get(name)) for name in NAMES
     ]
-    wins_history = {name: [] for name in NAMES}
-    return run_match(players, match_index, is_playoff, wins_history, [], game)
+    auction_scores_history = {name: [] for name in NAMES}
+    return run_match(
+        players, match_index, is_playoff, auction_scores_history, [], game,
+        scores_history={name: [] for name in NAMES},
+    )
 
 
 def constant_by_name(bids_by_name: dict):

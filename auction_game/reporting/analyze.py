@@ -11,9 +11,10 @@ import json
 import re
 import sys
 from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 
-from auction_game.game.engine import resolve_bids
+from auction_game.game.engine import calculate_day_scores, compute_standings, resolve_bids
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import BidRecord
 from auction_game.paths import ROOT_DIR, LOG_DIR
@@ -31,44 +32,113 @@ def _require_fields(record: dict, fields: tuple[str, ...], context: str) -> None
 
 
 def validate_match(match: dict) -> tuple[GameSettings, list[str]]:
-    """只接受含完整参数快照及当前结算明细的日志。"""
-    _require_fields(match, ("game", "match_index", "is_playoff", "wins", "days"), "match")
+    """按有效出价核对当前结算明细；原始提交仅供审计，不重验经济预算。"""
+    _require_fields(match, ("game", "match_index", "is_playoff", "auction_scores", "scores", "days"), "match")
     if type(match["match_index"]) is not int or match["match_index"] < 1:
         raise ValueError(f"日志局号无效：match_index 必须是正整数，实际为 {match['match_index']!r}")
     try:
         game = GameSettings.from_dict(match["game"])
     except ValueError as exc:
         raise ValueError(f"日志 game 参数无效：{exc}") from exc
-    if not isinstance(match["wins"], dict):
-        raise ValueError("日志格式不受支持：match.wins 必须是对象")
+    if type(match["is_playoff"]) is not bool:
+        raise ValueError("日志 is_playoff 必须是布尔值")
+    for field in ("auction_scores", "scores"):
+        if (not isinstance(match[field], dict)
+                or any(type(score) is not int or score < 0 for score in match[field].values())):
+            raise ValueError(f"日志 match.{field} 必须是全员非负整数对象（拒绝 bool）")
     if not isinstance(match["days"], list) or not match["days"]:
         raise ValueError(f"第 {match['match_index']} 局日志数据缺失：match.days 必须包含至少一天")
     player_names = None
     day_indices = []
     for day in match["days"]:
-        _require_fields(day, ("day", "bids", "pool", "winner", "winning_bid", "wins_taken",
+        _require_fields(day, ("day", "bids", "pool", "winner", "winning_bid", "auction_score",
                               "is_void", "collision_values", "super_uses"), "day")
         day_indices.append(day["day"])
         if not all(isinstance(day[field], list) for field in ("bids", "collision_values", "super_uses")):
             raise ValueError("日志格式不受支持：bids、collision_values、super_uses 必须是列表")
         for bid in day["bids"]:
             _require_fields(bid, ("player", "raw_bid", "bid", "status", "is_super"), "bid")
+            if not isinstance(bid["player"], str) or not bid["player"].strip():
+                raise ValueError("日志 bid.player 必须是非空玩家名")
+            if type(bid["is_super"]) is not bool:
+                raise ValueError("日志 bid.is_super 必须是布尔值")
+            if type(bid["bid"]) is not int or not 0 <= bid["bid"] <= game.max_bid:
+                raise ValueError("日志 bid.bid 必须是 0..max_bid 的有效整数（拒绝 bool）")
+            if (bid["status"] not in ("ok", "illegal")
+                    or (bid["status"] == "illegal" and (bid["is_super"] or bid["bid"] != 0))):
+                raise ValueError("日志 bid.status 无效：非法提交只保留正常出价 0")
         names = [bid["player"] for bid in day["bids"] if not bid["is_super"]]
         if (len(names) < 2 or any(not isinstance(name, str) or not name.strip() for name in names)
                 or len(names) != len(set(names))):
             raise ValueError("日志参赛名单无效：每天必须有至少两名不重名玩家的正常出价")
         if player_names is None:
             player_names = names
-        if set(names) != set(player_names) or set(match["wins"]) != set(player_names):
-            raise ValueError("日志参赛名单不一致：每日正常出价与 wins 必须覆盖同一名单")
+        if (set(names) != set(player_names)
+                or any(set(match[field]) != set(player_names) for field in ("auction_scores", "scores"))):
+            raise ValueError("日志参赛名单不一致：每日正常出价、auction_scores 与 scores 必须覆盖同一名单")
         for use in day["super_uses"]:
             _require_fields(use, ("player", "value", "hit"), "super_uses 条目")
+            if not isinstance(use["player"], str) or not use["player"].strip():
+                raise ValueError("日志 super_uses.player 必须是非空玩家名")
+            if type(use["value"]) is not int or not 0 <= use["value"] <= game.max_bid:
+                raise ValueError("日志 super_uses.value 必须是 0..max_bid 的有效整数（拒绝 bool）")
+            if type(use["hit"]) is not bool:
+                raise ValueError("日志 super_uses.hit 必须是布尔值")
         if any(record["player"] not in player_names for record in day["bids"] + day["super_uses"]):
             raise ValueError("日志参赛名单不一致：出价或超级出价含未知玩家")
+        normal_by_player = {bid["player"]: bid for bid in day["bids"] if not bid["is_super"]}
+        super_players = set()
+        for bid in day["bids"]:
+            if not bid["is_super"]:
+                continue
+            if bid["player"] in super_players:
+                raise ValueError("日志超级出价重复：同一玩家每天最多一笔")
+            super_players.add(bid["player"])
+            normal = normal_by_player[bid["player"]]
+            if normal["status"] == "illegal" or normal["bid"] == bid["bid"]:
+                raise ValueError("日志超级出价无效：正常提交须合法且与超级出价异值")
     if (any(type(index) is not int for index in day_indices)
             or day_indices != list(range(1, game.max_days + 1))):
         raise ValueError(f"第 {match['match_index']} 局天序不完整：必须依次为 1..{game.max_days}，"
                          f"实际为 {day_indices}")
+    auction_scores = dict.fromkeys(player_names, 0)
+    scores = dict.fromkeys(player_names, 0)
+    carry = 0
+    for day in match["days"]:
+        expected_pool = game.daily_pool[day["day"] - 1] + carry
+        if type(day["pool"]) is not int or day["pool"] != expected_pool:
+            raise ValueError(f"第 {day['day']} 天 pool 与配置奖池及流局滚存不一致")
+        effective_bids = [BidRecord(player=bid["player"], raw_bid=bid["raw_bid"], bid=bid["bid"],
+                                    status=bid["status"], is_super=bid["is_super"])
+                          for bid in day["bids"]]
+        winner, collision_values, sniped_values = resolve_bids(effective_bids)
+        if (type(day["is_void"]) is not bool or day["is_void"] != (winner is None)
+                or day["winner"] != (winner.player if winner else None)
+                or day["winning_bid"] != (winner.bid if winner else None)
+                or (winner is not None and type(day["winning_bid"]) is not int)):
+            raise ValueError(f"第 {day['day']} 天 winner、winning_bid 或 is_void 与有效出价不一致")
+        if (any(type(value) is not int for value in day["collision_values"])
+                or day["collision_values"] != sorted(collision_values)):
+            raise ValueError(f"第 {day['day']} 天 collision_values 与有效出价不一致")
+        expected_uses = {bid.player: (bid.bid, bid.bid in sniped_values)
+                         for bid in effective_bids if bid.is_super}
+        actual_uses = {use["player"]: (use["value"], use["hit"]) for use in day["super_uses"]}
+        if len(actual_uses) != len(day["super_uses"]) or actual_uses != expected_uses:
+            raise ValueError(f"第 {day['day']} 天 super_uses 与超级出价及实际命中不一致")
+        expected_auction_score = 0 if day["is_void"] else day["pool"]
+        if type(day["auction_score"]) is not int or day["auction_score"] != expected_auction_score:
+            raise ValueError(f"第 {day['day']} 天 auction_score 与实际奖池结算不一致")
+        daily_scores = calculate_day_scores(player_names, winner=day["winner"],
+                                            auction_score=day["auction_score"],
+                                            super_uses=day["super_uses"], game=game)
+        if day["winner"] is not None:
+            auction_scores[day["winner"]] += day["auction_score"]
+        for name in player_names:
+            scores[name] += daily_scores[name]
+        carry = day["pool"] if day["is_void"] else 0
+    for field, expected in (("auction_scores", auction_scores), ("scores", scores)):
+        if match[field] != expected:
+            raise ValueError(f"日志 match.{field} 与每日计分累计不一致")
     return game, player_names
 
 
@@ -148,6 +218,22 @@ def _load_match_logs(run_dir: Path) -> tuple[list[dict], dict, GameSettings, lis
     game, names = _validate_matches(matches, match_files)
     if config.get("game") != game.to_dict() or {pc["name"] for pc in config["players"]} != set(names):
         raise ValueError("场次执行快照与比赛参数或名单不一致")
+    auction_scores_history = {name: [] for name in names}
+    scores_history = {name: [] for name in names}
+    for position, (path, payload) in enumerate(zip(match_files, matches), 1):
+        match = payload["match"]
+        if match["match_index"] != position:
+            raise ValueError(f"{path.name}：累计排名校验要求完整历史，局号必须从 1 连续排列")
+        for name in names:
+            auction_scores_history[name].append(match["auction_scores"][name])
+            scores_history[name].append(match["scores"][name])
+        expected = [asdict(entry) for entry in compute_standings(
+            auction_scores_history, scores_history=scores_history)]
+        actual = payload.get("standings_after_match")
+        # JSON 比较同时保留 bool 与 int 的区别，逐局核对累计值、排名和全部历史。
+        if (not isinstance(actual, list)
+                or json.dumps(actual, sort_keys=True) != json.dumps(expected, sort_keys=True)):
+            raise ValueError(f"{path.name}：standings_after_match 与已完成各局累计排名或历史不一致")
     return matches, config, game, names
 
 
@@ -180,10 +266,7 @@ def _recompute_remaining_coins(match: dict, game: GameSettings, player_names: li
 
 
 def collect_player_stats(matches: list[dict]) -> dict:
-    """按玩家聚合整场统计：每局胜场矩阵 + 玩家明细（均价只计正常出价）。
-
-    返回每局胜场矩阵、玩家明细、超级命中原本互撞价次数及使用/改变当天结果的天数；玩家按总胜场降序。
-    """
+    """聚合各局总分及拍卖分矩阵，玩家按总分降序；均价只计正常出价。"""
     game, player_names = validate_matches(matches)
     return _collect_player_stats(matches, game, player_names)
 
@@ -191,7 +274,8 @@ def collect_player_stats(matches: list[dict]) -> dict:
 def _collect_player_stats(matches: list[dict], game: GameSettings, player_names: list[str]) -> dict:
     """已校验场次的玩家统计，局末余额在此统一重放。"""
     match_labels: list[str] = []
-    win_matrix: dict[str, list[int]] = {name: [] for name in player_names}
+    score_matrix: dict[str, list[int]] = {name: [] for name in player_names}
+    auction_score_matrix: dict[str, list[int]] = {name: [] for name in player_names}
     solo_top_matches = dict.fromkeys(player_names, 0)
     tied_top_matches = dict.fromkeys(player_names, 0)
     super_uses_count = {name: 0 for name in player_names}
@@ -213,13 +297,14 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
                                 f"（总第 {match['match_index']} 局）")
         else:
             match_labels.append(f"正赛第 {match['match_index']} 局")
-        wins = match["wins"]
+        scores = match["scores"]
         for name in player_names:
-            win_matrix[name].append(wins[name])
-        if wins:
-            top_wins = max(wins.values())
-            champions = [name for name, count in wins.items() if count == top_wins]
-            # 全员 0 胜也保留为并列最高；每人计一局，不折算份额。
+            score_matrix[name].append(scores[name])
+            auction_score_matrix[name].append(match["auction_scores"][name])
+        if scores:
+            top_score = max(scores.values())
+            champions = [name for name, score in scores.items() if score == top_score]
+            # 全员 0 分也保留为并列最高；每人计一局，不折算份额。
             top_matches = solo_top_matches if len(champions) == 1 else tied_top_matches
             for name in champions:
                 top_matches[name] += 1
@@ -266,7 +351,9 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
         bids = normal_bids[name]
         rows.append({
             "name": name,
-            "total_wins": sum(win_matrix[name]),
+            "total_score": sum(score_matrix[name]),
+            "auction_score": sum(auction_score_matrix[name]),
+            "super_score": sum(score_matrix[name]) - sum(auction_score_matrix[name]),
             "solo_top_matches": solo_top_matches[name],
             "tied_top_matches": tied_top_matches[name],
             "super_uses": super_uses_count[name],
@@ -278,37 +365,39 @@ def _collect_player_stats(matches: list[dict], game: GameSettings, player_names:
             "illegal": illegal_counts[name],
             "zero_bids": zero_bid_counts[name],
         })
-    rows.sort(key=lambda row: (-row["total_wins"], row["name"]))
-    return {"match_labels": match_labels, "win_matrix": win_matrix, "rows": rows,
+    rows.sort(key=lambda row: (-row["total_score"], row["name"]))
+    return {"match_labels": match_labels, "score_matrix": score_matrix,
+            "auction_score_matrix": auction_score_matrix, "rows": rows,
             "super_collision_hits": super_collision_hits,
             "super_days": super_days, "super_changed_days": super_changed_days}
 
 
 def print_player_stats(stats: dict) -> None:
-    """每玩家一个小块，胜场与余额共用明确标注正赛/加赛的列序。"""
+    """每玩家一个小块，分数与余额共用明确标注正赛/加赛的列序。"""
     match_labels = stats["match_labels"]
-    win_matrix = stats["win_matrix"]
-    print("玩家明细（按总胜场排序）")
+    print("玩家明细（按总分排序）")
     print(f"各局顺序：{' / '.join(match_labels)}")
     for row in stats["rows"]:
         print()
         print(row["name"])
-        print(f"  总胜场：{row['total_wins']}")
-        cells = " / ".join(str(count) for count in win_matrix[row["name"]])
-        print(f"  各局胜场：{cells}")
-        print(f"  单局最高胜场：独占{row['solo_top_matches']}局，并列{row['tied_top_matches']}局")
+        print(f"  总分：{row['total_score']}分（拍卖{row['auction_score']}分，超级命中{row['super_score']}分）")
+        cells = " / ".join(str(score) for score in stats["score_matrix"][row["name"]])
+        auction_cells = " / ".join(str(score) for score in stats["auction_score_matrix"][row["name"]])
+        print(f"  各局总分：{cells}")
+        print(f"  各局拍卖分：{auction_cells}")
+        print(f"  单局最高总分：独占{row['solo_top_matches']}局，并列{row['tied_top_matches']}局")
         super_text = f"使用{row['super_uses']}次，命中{row['super_hits']}次"
         if row["super_uses"]:
             super_text += f"（{row['super_hits'] / row['super_uses']:.0%}）"
         print(f"  超级出价：{super_text}")
-        print(f"  超级净收益：{row['super_net_coins']:+d}金币")
+        print(f"  超级出价净金币变化：{row['super_net_coins']:+d}金币")
         print(f"  撞车损失：{row['collision_burn']}金币")
         avg_bid_text = f"{row['avg_bid']:.2f}" if row["avg_bid"] is not None else "—"
-        print(f"  平均正常出价：{avg_bid_text}")
+        print(f"  平均正常出价（不含流局日）：{avg_bid_text}")
         end_coins_text = " / ".join(str(coins) for coins in row["end_coins"])
         print(f"  各局结束余额：{end_coins_text} 金币")
         print(f"  非法出价：{row['illegal']}次")
-        print(f"  正常出价为零：{row['zero_bids']}次")
+        print(f"  正常出价为零（含非法转0）：{row['zero_bids']}次")
 
 
 def analyze(run_dir: Path) -> None:
@@ -317,11 +406,17 @@ def analyze(run_dir: Path) -> None:
     print("比赛概况")
     print(f"场次目录：{run_dir.name}")
     print(f"运行类型：{RUN_TYPES[snapshot['run_type']]}")
-    print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
+    if snapshot["run_type"] == "offline":
+        print("离线假模型结果：实际执行为假模型，无真实模型调用")
+    elif snapshot["run_type"] == "bot":
+        print("Bot 策略结果：实际执行为本地程序")
+    else:
+        print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
     for pc in snapshot["players"]:
         if "execution_model" not in pc:
             continue
-        print(f"  {pc['name']}：身份 {pc['identity_model']['model']} → 实际 "
+        execution_label = "配置模型" if snapshot["run_type"] == "offline" else "实际"
+        print(f"  {pc['name']}：身份 {pc['identity_model']['model']} → {execution_label} "
               f"{pc['execution_model']['protocol']} / {pc['execution_model']['model']}")
 
     total_days = 0
@@ -331,7 +426,6 @@ def analyze(run_dir: Path) -> None:
     pools_by_day_index: dict[int, list[int]] = {}
     winning_bids: list[int] = []
     remaining_coins_all = [coins for row in player_stats["rows"] for coins in row["end_coins"]]
-    multi_win_matches: list[tuple[str, str, int]] = []  # (正赛/加赛标签, 玩家, 胜场)
     illegal_bids = sum(row["illegal"] for row in player_stats["rows"])
     zero_bids = 0
     zero_bid_wins = 0
@@ -343,12 +437,8 @@ def analyze(run_dir: Path) -> None:
     cap_wins = 0            # 获胜价等于出价上限的天数
     cap_bid = game.max_bid
 
-    for payload, match_label in zip(matches, player_stats["match_labels"]):
+    for payload in matches:
         match = payload["match"]
-        wins = match["wins"]
-        for name, win_count in wins.items():
-            if win_count >= 3:  # 固定统计口径，不随本局计划总胜场改变
-                multi_win_matches.append((match_label, name, win_count))
 
         for day in match["days"]:
             total_days += 1
@@ -381,7 +471,7 @@ def analyze(run_dir: Path) -> None:
     print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次{hit_rate}")
     print(f"  成本消耗：{super_cost_spent} 金币")
     print(f"  悬赏发放：{super_bounty_minted} 金币")
-    print(f"  超级净收益：{super_bounty_minted - super_cost_spent:+d} 金币")
+    print(f"  超级出价净金币变化：{super_bounty_minted - super_cost_spent:+d} 金币")
     print(f"  命中原本互撞价 {player_stats['super_collision_hits']} 次（按超级使用笔数计，包含流局）")
     print(f"  使用超级出价：{player_stats['super_days']} 天")
     print(f"  改变当日结果：{player_stats['super_changed_days']} 天")
@@ -409,14 +499,8 @@ def analyze(run_dir: Path) -> None:
     print()
 
     print("特殊情况")
-    print(f"单局 ≥3 胜场的玩家-局次数：{len(multi_win_matches)}"
-          f"（占 {len(matches)} 局的 {len({m for m, _, _ in multi_win_matches})} 局）")
-    for match_label, name, win_count in multi_win_matches:
-        print(f"  {match_label}：{name} 共 {win_count} 胜场")
-    print()
-
     print(f"非法出价：{illegal_bids} 笔")
-    print(f"出 0 共 {zero_bids} 笔，其中 0 价获胜 {zero_bid_wins} 次")
+    print(f"出 0 共 {zero_bids} 笔（含流局日、超级出价及非法转0），其中 0 价获胜 {zero_bid_wins} 次")
 
 
 def main() -> None:

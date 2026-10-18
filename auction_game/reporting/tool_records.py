@@ -93,11 +93,9 @@ class ToolWriter:
         return key
 
     def _render(self):
-        lines = ["# 本场工具定义", "默认只记录工具字段，不保存鉴权头或完整请求历史。定义按协议与内容去重；"
-                 "每次请求在发送前保存，失败与网络重发也保留引用。",
-                 "来源：`http_pre_send` = 发送前实际请求定义；`offline_sdk_generated` = 离线 SDK 生成（FunctionModel，未发送到真实服务）。",
-                 "每个定义的 JSON 原样保留工具描述、字段说明、完整 schema 及实际工具选择配置。"
-                 "下方引用对应玩家 JSONL 的 task_id；同任务的 request/attempt 是逻辑请求/网络尝试序号。",
+        lines = ["# 本场工具定义", "工具字段原样保存，按协议与内容去重；失败与重发保留引用。无鉴权头或完整请求。",
+                 "来源：`http_pre_send` = 发送前实际请求定义；`offline_sdk_generated` = 离线 SDK 生成（FunctionModel，无真实服务调用）。",
+                 "引用中的 task_id 对应玩家 JSONL；request / attempt 为逻辑请求 / 网络尝试序号。",
                  "[结构化定义](data/tool_definitions.json) · [请求引用与模型/SDK 来源](data/tool_requests.jsonl)"]
         if not self.references:
             lines.append("尚无请求记录。")

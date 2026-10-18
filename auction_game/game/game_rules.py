@@ -15,6 +15,7 @@ class GameSettings:
     max_bid: int
     super_cost: int
     super_bounty: int
+    super_hit_score: int
     regular_matches: int
     max_playoffs: int
 
@@ -39,8 +40,8 @@ class GameSettings:
         return len(self.daily_pool)
 
     @property
-    def wins_per_match(self) -> int:
-        """计划总胜场；末日流局时实际分配数量可能更少。"""
+    def auction_pool_per_match(self) -> int:
+        """计划拍卖总分；末日流局时实际发放分数可能更少。"""
         return sum(self.daily_pool)
 
     @classmethod

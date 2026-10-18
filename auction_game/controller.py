@@ -62,9 +62,9 @@ class Controller:
             inflight = self._inflight
             self._gate.set()
             self._changed.notify_all()
-        self._announce(f"[暂停] {reason}：正在暂停，不再启动新任务，等待 {inflight} 项任务结束。"
-                       "成功结果会保留，任务内部重试可能继续。"
-                       "按回车或 c 可在这些任务结束后继续；q 等任务结束后撤销本轮并中止。")
+        self._announce(f"[暂停] {reason}：停止新任务，等待当前 {inflight} 项任务结束。"
+                       "成功结果保留，内部重试可能继续。"
+                       "回车或 c：等任务结束后继续；q：等任务结束后撤销本轮并退出比赛。")
 
     def offer_command(self, command: str) -> None:
         if command == "p":
@@ -120,7 +120,7 @@ class Controller:
             self._announce(message)
         if not wait:
             return
-        self._announce(f"[单步] 下一步：{label}（回车执行 / c=连续 / p=暂停 / q=中止）")
+        self._announce(f"[单步] 下一步：{label}（回车执行 / c=连续 / p=暂停 / q=退出）")
         while True:
             self._gate.wait()
             with self._lock:
@@ -164,7 +164,7 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
                         raise TournamentAborted
                     if not controller._pause_requested:
                         return results
-                controller.wait_for_turn(f"{label}（全部成功，确认后继续本轮）")
+                controller.wait_for_turn(f"{label}（全部成功，确认后继续）")
                 continue
             failed: dict[str, str] = {}
             unstarted = list(pending)
@@ -206,15 +206,15 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
                     return results  # 提交与暂停共享同步边界。
             notices = []
             if paused:
-                notices.append(f"[暂停] 已暂停：成功 {len(results)}，失败 {len(failed)}，"
+                notices.append(f"[暂停] 成功 {len(results)}，失败 {len(failed)}，"
                                f"未启动 {len(unstarted)}。成功结果已保留。")
             if failed:
-                notices.append(f"[失败] {'、'.join(failed)}：按回车或 c 重试失败任务并执行未启动任务，"
-                               "成功任务不会重跑；q 撤销本轮并中止比赛。")
+                notices.append(f"[失败] {'、'.join(failed)}：回车或 c 只补跑失败和未启动任务，"
+                               "成功任务不重跑；q 撤销本轮并退出比赛。")
                 for detail in failed.values():
                     notices.append(f"  {detail}")
             gate_label = (f"{label}（补跑 {len(pending)} 项）" if pending
-                          else f"{label}（全部成功，确认后继续本轮）")
+                          else f"{label}（全部成功，确认后继续）")
             controller.wait_for_turn(gate_label, notices=tuple(notices),
                                      require_confirmation=bool(failed))
     except TournamentAborted:

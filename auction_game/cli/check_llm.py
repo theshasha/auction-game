@@ -29,9 +29,9 @@ PING_AGENT = Agent(output_type=ToolOutput(PingOutput, name="ping"), retries=0)
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--model", action="append", metavar="KEY", help="只探测指定目录键；可重复")
-    selection.add_argument("--test-model", action="store_true", help="仅探测 config.test_model")
-    parser.add_argument("--max-tokens", type=int, default=2048, help="探测输出预算，默认 2048，不改变比赛预算")
+    selection.add_argument("--model", action="append", metavar="KEY", help="只检查 models.yaml 中指定的模型配置名；可重复")
+    selection.add_argument("--test-model", action="store_true", help="只检查 config.test_model 指定的测试模型")
+    parser.add_argument("--max-tokens", type=int, default=2048, help="检查输出预算，默认 2048，不改变比赛预算")
     args = parser.parse_args(argv)
     if args.max_tokens <= 0:
         parser.error("--max-tokens 必须是正整数")
@@ -41,7 +41,7 @@ def main(argv=None) -> int:
             selected = []
             for key in args.model:
                 if key not in config["models"]:
-                    raise ConfigurationError(f"models.yaml：未知目录键 {key!r}")
+                    raise ConfigurationError(f"models.yaml：未知模型配置名 {key!r}")
                 selected.append({"model_key": key, **config["models"][key]})
             players = selected
     except ConfigurationError as exc:
@@ -58,7 +58,7 @@ def main(argv=None) -> int:
                json.dumps(channel_model_profile(channel, player["protocol"], player.get("model_profile")), sort_keys=True))
         targets.setdefault(key, player)
     failures = 0
-    print(f"连通检查：{len(targets)} 个调用配置，会请求真实服务，可能收费。每个配置至多请求一次，不重试。")
+    print(f"连通检查：{len(targets)} 个检查目标，会请求真实服务，可能收费。每个目标至多请求一次，不重试。")
     for player in targets.values():
         protocol_suffix = f" / {player['protocol']}" if player.get("protocol") else ""
         label = f"{player['model_key']}（{player['provider']}{protocol_suffix} / {player['model']}）"
@@ -68,7 +68,7 @@ def main(argv=None) -> int:
               f"{player['capabilities']['reasoning_detail']}")
         profile = channel_model_profile(config['llm']['channels'][player['provider']],
                                         player['protocol'], player.get('model_profile'))
-        print(f"  生效 profile={json.dumps(profile, sort_keys=True)}")
+        print(f"  生效兼容设置={json.dumps(profile, sort_keys=True)}")
         try:
             executor = AgentExecutor(make_model_factory(
                 provider=player["provider"],
@@ -98,7 +98,7 @@ def main(argv=None) -> int:
         preview = " ".join(reply.split())[:80]
         print(f"[通过] {label}  耗时 {elapsed:.1f}s  回复: {preview}")
 
-    print(f"\n检查完成：共 {len(targets)} 个调用配置，失败 {failures} 个。")
+    print(f"\n检查完成：共 {len(targets)} 个检查目标，失败 {failures} 个。")
     return 1 if failures else 0
 
 

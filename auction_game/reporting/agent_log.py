@@ -92,7 +92,7 @@ def render_result(result) -> list[str]:
 
 def _heading_link(title: str) -> str:
     # 使用纯中文/数字章节名，避免各 Markdown 阅读器对标点的锚点规则差异。
-    return "#" + title
+    return "#" + title.replace("不回喂", "仅供观众")
 
 
 def render_markdown_entry(entry: dict, result_renderer: Callable = render_result) -> str:
@@ -100,7 +100,8 @@ def render_markdown_entry(entry: dict, result_renderer: Callable = render_result
     success = entry["status"] == "success"
     first_title = entry.get("first_title")
     previous_title = entry.get("previous_title")
-    lines = [f"## {entry.get('readable_title', _phase_title(entry))}"]
+    title = entry.get("readable_title", _phase_title(entry)).replace("不回喂", "仅供观众")
+    lines = [f"## {title}"]
     if entry.get("reruns", 0):
         lines.append("补跑后成功。" if success else "补跑仍失败。")
     if first_title:
@@ -113,8 +114,8 @@ def render_markdown_entry(entry: dict, result_renderer: Callable = render_result
     corrections = sum(part["part_kind"] == "retry-prompt"
                       for message in entry["messages"] for part in message["parts"])
     if corrections:
-        lines.append(f"输出纠错 {corrections} 次，{'最终通过校验' if success else '最终失败'}"
-                     f"（原因：{_correction_reason(entry)}）。")
+        lines.append(f"纠错 {corrections} 次，{'已通过' if success else '仍失败'}"
+                     f"（{_correction_reason(entry)}）。")
     if not success:
         lines.append(f"> 失败原因：{_error_reason(entry)}。")
     if "result" in entry:
