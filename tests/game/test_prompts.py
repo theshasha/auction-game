@@ -64,8 +64,8 @@ class TestSpeechFields:
             prompts.final_speech_request(standings, make_log(match_index=5, auction_scores=auction_scores, scores=scores)),
         ):
             assert "strategy" in text and "speech" in text
-            assert "strategy 用来写发言策略，仅自己可见" in text
-            assert "在 speech 中填写公开发言，其他玩家都能看到" in text
+            assert "strategy 块是发言策略，仅自己可见" in text
+            assert "speech 块是公开发言，其他玩家都能看到" in text
 
     @pytest.mark.parametrize("final", [False, True], ids=["match-end", "final"])
     def test_results_show_settled_scores_and_score_based_ranking(self, final):
@@ -93,14 +93,11 @@ class TestSpeechFields:
 
 
 @pytest.mark.parametrize("task", ["plan", "bid", "speech", "memory", "summary"])
-def test_output_reminder_only_names_current_tool(task):
-    from auction_game.ai.agent_tasks import OUTPUT_TOOLS
-    tool = OUTPUT_TOOLS.get(task)
-    text = prompts.with_output_requirement("任务正文", tool.name if tool else None)
-    if tool:
-        assert text == f"任务正文\n\n请调用 `{tool.name}` 工具提交结果，不要只在正文中写出工具调用的样子。"
-    else:
-        assert text == "任务正文"
+def test_output_reminder_uses_current_text_protocol(task):
+    from auction_game.ai.text_output import output_requirement
+    text = prompts.with_output_requirement("任务正文", task)
+    assert text == "任务正文\n\n" + output_requirement(task)
+    assert "工具" not in text
 
 
 def test_memory_body_keeps_task_boundaries_without_tool_instruction():
@@ -110,20 +107,19 @@ def test_memory_body_keeps_task_boundaries_without_tool_instruction():
     for required in ("【乙】公开信号", "完整替换旧记忆", "下一局你看不到之前各局的原始对话和公开发言",
                      "保留之前仍然有用的经验", "修正已经失效的判断", "区分事实与猜测",
                      "篇幅可以根据有用信息的多少调整，无需凑字数或精确计字",
-                     "只填写 memory", "规则与最新成绩会另行提供"):
+                     "直接返回笔记正文", "规则与最新成绩会另行提供"):
         assert required in text
     assert "支持或推翻判断的关键例子" in text
     assert "不要逐日复述或完整抄录出价序列" in text
     assert "具体报价仅作为判断的必要证据保留" in text
 
 
-def test_memory_tool_descriptions_keep_replacement_without_full_record_instruction():
-    from auction_game.ai.agent_tasks import MemoryOutput, OUTPUT_TOOLS
+def test_memory_description_keeps_replacement_without_full_record_instruction():
+    from auction_game.ai.agent_tasks import MemoryOutput
 
-    descriptions = [MemoryOutput.model_fields["memory"].description, OUTPUT_TOOLS["memory"].description]
-    for text in descriptions:
-        assert "私人笔记" in text and "替换旧记忆" in text
-        assert "完整" not in text
+    text = MemoryOutput.model_fields["memory"].description
+    assert "私人笔记" in text and "替换旧记忆" in text
+    assert "完整" not in text
 
 class TestPlayoffNotice:
     """加赛预告只在正赛打完（或加赛后）且第一名仍并列时出现。"""

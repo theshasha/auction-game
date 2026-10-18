@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 import json
 
-from pydantic_ai.models.function import FunctionModel, DeltaToolCall
+from pydantic_ai.models.function import FunctionModel
 from auction_game.ai.agent_tasks import TaskRunner
 
 from auction_game.ai.ai_player import AIPlayer
@@ -212,8 +212,7 @@ def fake_task_runner(script):
         if isinstance(item, Exception):
             raise item
         if isinstance(item, dict):
-            yield {0: DeltaToolCall(name=info.output_tools[0].name, json_args=json.dumps(item, ensure_ascii=False),
-                                   tool_call_id=f"call-{len(calls)}")}
+            yield text_reply(item)
         else:
             yield item
 
@@ -226,6 +225,20 @@ def fake_task_runner(script):
     runner = TaskRunner(SimpleNamespace(open=open_model, settings={}))
     runner.calls = calls
     return runner
+
+
+def text_reply(data):
+    """将测试字段写成模型文本；保留非法字段供生产解析器检查。"""
+    if isinstance(data, str):
+        return data
+    if "memory" in data:
+        return data["memory"]
+    strategy = data.get("strategy", "")
+    if "speech" in data:
+        return f"<strategy>\n{strategy}\n</strategy>\n<speech>\n{data['speech']}\n</speech>"
+    decision = {key: value for key, value in data.items() if key != "strategy"}
+    return (f"<strategy>\n{strategy}\n</strategy>\n<decision>\n"
+            f"{json.dumps(decision, ensure_ascii=False)}\n</decision>")
 
 
 def make_player(task_runner, tmp_path=None, game=TEST_GAME):

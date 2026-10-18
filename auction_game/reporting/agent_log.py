@@ -79,7 +79,8 @@ def _correction_reason(entry: dict) -> str:
             if available:
                 reason += f"，提示改用 {available[1]}"
         else:
-            reason = content
+            # 文本任务后续行是完整重交模板，可读日志只显示当前错误。
+            reason = content.split("\n", 1)[0]
     else:
         reason = "输出未通过校验，已要求重新提交"
     reason = " ".join(reason.split())
@@ -96,7 +97,7 @@ def _heading_link(title: str) -> str:
 
 
 def render_markdown_entry(entry: dict, result_renderer: Callable = render_result) -> str:
-    """正文只展示输入和最终结果；工具协议及完整错误保存在 JSON 记录中。"""
+    """正文只展示输入和最终结果；原始回复及完整错误保存在 JSON 记录中。"""
     success = entry["status"] == "success"
     first_title = entry.get("first_title")
     previous_title = entry.get("previous_title")

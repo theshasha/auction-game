@@ -1,7 +1,7 @@
 """生成模型提示词，以及出价记录和排名表。
 
 规则正文维护于 RULES.template.md，使用本场参数与实际名单生成系统提示。
-工具的输出格式和纠错处理见 agent_tasks。
+文本输出格式见 text_output，业务校验和纠错见 agent_tasks。
 """
 
 from __future__ import annotations
@@ -12,24 +12,22 @@ from auction_game.game.engine import calculate_day_scores
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
+from auction_game.ai.text_output import output_requirement
 
 
 def bid_format_hint(game: GameSettings) -> str:
-    """系统规则与工具字段已说明出价要求，这里只提醒当前任务。"""
+    """系统规则已说明出价要求，这里只提醒当前任务。"""
     return "请分析局势并提交今日出价。"
 
 
 def speech_format_hint() -> str:
     """告诉玩家哪些内容会公开。"""
-    return "在 speech 中填写公开发言，其他玩家都能看到。strategy 用来写发言策略，仅自己可见。"
+    return "speech 块是公开发言，其他玩家都能看到。strategy 块是发言策略，仅自己可见。"
 
 
-def with_output_requirement(prompt: str, tool_name: str | None) -> str:
-    """使用当前任务的工具名，提醒模型通过工具提交结果。"""
-    if tool_name is None:
-        return prompt
-    requirement = f"请调用 `{tool_name}` 工具提交结果，不要只在正文中写出工具调用的样子。"
-    return prompt + "\n\n" + requirement
+def with_output_requirement(prompt: str, task: str) -> str:
+    """每个任务只追加一次权威文本格式。"""
+    return prompt + "\n\n" + output_requirement(task)
 
 
 def build_system_prompt(
@@ -311,7 +309,7 @@ def memory_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家在本局结束后的公开发言：\n\n"
         + "\n\n".join(f"【{name}】{text}" for name, text in others_speeches.items())
-        + "\n\n请结合旧记忆、本局经历和公开发言，整理一份只有自己能看的笔记，只填写 memory。\n\n"
+        + "\n\n请结合旧记忆、本局经历和公开发言，整理一份只有自己能看的笔记，直接返回笔记正文。\n\n"
         "这份新记忆会完整替换旧记忆。下一局你看不到之前各局的原始对话和公开发言，"
         "需要继续使用的信息都应保存在这份笔记中。\n\n"
         "- 保留之前仍然有用的经验，修正已经失效的判断，并区分事实与猜测。\n"

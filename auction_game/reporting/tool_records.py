@@ -101,10 +101,10 @@ class ToolWriter:
             lines.append("尚无请求记录。")
         for key, value in self.definitions.items():
             tools = value["definition"].get("tools") or []
-            names = " / ".join(tool.get("function", tool)["name"] for tool in tools) or "文本总结"
+            names = " / ".join(tool.get("function", tool)["name"] for tool in tools) or "文本任务"
             lines.extend([f'<a id="{key}"></a>', f"## {names} · {value['protocol']} · `{key[:12]}`"])
             if not value["definition"].get("tools"):
-                lines.append("无输出工具：总结直接返回文本。")
+                lines.append("无输出工具：任务直接返回文本。")
             lines.append("```json\n" + json.dumps(value["definition"], ensure_ascii=False, indent=2) + "\n```")
             lines.append("使用引用：")
             for ref in self.references:

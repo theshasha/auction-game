@@ -174,7 +174,7 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, c
     def make_model_factory(**kwargs):
         factories.append(kwargs)
         from tests.support.factories import fake_task_runner
-        runner = fake_task_runner(["测试回复"] if entry is runners else [{"reply": "OK"}])
+        runner = fake_task_runner(["测试回复"] if entry is runners else ["OK"])
         chats.append(runner)
         return runner.executor.factory
 
@@ -415,7 +415,7 @@ def test_probe_selected_catalog_aliases_deduplicate_and_reject_unknown(
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
     monkeypatch.setattr(check_llm, "load_configuration", lambda: load_configuration(*config_files))
     from tests.support.factories import fake_task_runner
-    runner = fake_task_runner([{"reply": "OK"}] * expected_calls)
+    runner = fake_task_runner(["OK"] * expected_calls)
     calls = []
     def factory(**kwargs):
         calls.append(kwargs)

@@ -6,11 +6,11 @@ import json
 
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import ModelMessagesTypeAdapter, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart
 
 from auction_game.ai.agent_execution import CallFailedError, OutputFailedError
 from auction_game.ai.agent_tasks import TaskRunner
-from tests.support.factories import CHANNELS, TEST_GAME, make_player, make_ai_obs
+from tests.support.factories import CHANNELS, TEST_GAME, make_player, make_ai_obs, text_reply
 from auction_game.ai.llm_client import retryable_request_error
 from tests.support.wire import Harness, PROTOCOLS, reply, GOOD
 
@@ -52,7 +52,7 @@ def test_failed_flow_never_commits_partial_messages(protocol, fault, tmp_path):
     assert len(h.requests) == (2 if fault in ("connect", "stream") else 1)
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-    assert not any(isinstance(p, ToolCallPart) for m in audit for p in m.parts)
+    assert not any(isinstance(p, TextPart) for m in audit for p in m.parts)
     assert entry["request_errors"] and h.closes == 1
     assert all(s.closed for s in h.streams)
 
@@ -68,7 +68,8 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     if succeeds:
         assert player.decide_bid(make_ai_obs()) == (2, None)
         parts = [p for m in player.messages for p in m.parts]
-        assert sum(isinstance(p, ToolCallPart) for p in parts) == 2
+        assert [p.content for p in parts if isinstance(p, TextPart)] == [
+            text_reply(dict(GOOD, bid="2")), text_reply(GOOD)]
     else:
         with pytest.raises(OutputFailedError):
             player.decide_bid(make_ai_obs())
@@ -78,7 +79,7 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     assert h.requests[0][1] != h.requests[2][1]
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     if succeeds:
-        assert sum(p["part_kind"] == "tool-call" for m in entry["messages"] for p in m["parts"]) == 2
+        assert sum(p["part_kind"] == "text" for m in entry["messages"] for p in m["parts"]) == 2
     assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(1, 1), (2, 1)]
     from auction_game.reporting.request_records import load_requests
     assert "requests" not in entry
@@ -131,7 +132,8 @@ def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol,
         player.decide_bid(make_ai_obs())
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-    assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 1
+    assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
+        text_reply(dict(GOOD, bid="2"))]
     assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(2, 1), (2, 2)]
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "网络尝试" not in markdown
@@ -145,7 +147,7 @@ def test_non_transport_model_api_error_is_not_retryable():
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_player_task_chain_replays_native_tool_pairs_on_wire(protocol, tmp_path):
+def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_path):
     long_summary = "观众总结" * 200
     h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}), reply(),
                            reply(tool=False, text=long_summary)])
@@ -162,41 +164,40 @@ def test_player_task_chain_replays_native_tool_pairs_on_wire(protocol, tmp_path)
     body = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert body.count("【你的身份】") == 1 and "original summary request" in body
     assert "private" in body and "other players' speeches" in body
-    names = ["bid", "bid", "speech", "bid"]
+    outputs = [text_reply(GOOD), text_reply(GOOD),
+               text_reply({"strategy": "private", "speech": "public"}), text_reply(GOOD)]
     for index, (_, request_body) in enumerate(h.requests):
         encoded_body = json.dumps(request_body, ensure_ascii=False)
         assert encoded_body.count("【你的身份】") == 1
-        tools = request_body.get("tools", [])
-        assert [t.get("function", t)["name"] for t in tools] == names[index:index + 1]
-        if tools:
-            tool = tools[0].get("function", tools[0])
-            expected_description = {"bid": "提交今日出价", "speech": "提交公开发言"}
-            assert tool["description"] == expected_description[names[index]]
-            assert f"调用 `{names[index]}` 工具提交" in encoded_body
+        assert not request_body.get("tools") and "tool_choice" not in request_body
+        assert "response_format" not in request_body and "output_config" not in request_body
+        if index < 4:
+            assert "<strategy>" in encoded_body
+            assert ("<speech>" if index == 2 else "<decision>") in encoded_body
         if protocol == "chat":
             messages = request_body["messages"]
-            calls = [(c["id"], c["function"]["name"]) for m in messages for c in m.get("tool_calls", [])]
-            returns = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
+            assert not any(m.get("tool_calls") or m["role"] == "tool" for m in messages)
         elif protocol == "responses":
             items = request_body["input"]
             messages = [p for p in items if "role" in p]
-            calls = [(p["call_id"], p["name"]) for p in items if p.get("type") == "function_call"]
-            returns = [p["call_id"] for p in items if p.get("type") == "function_call_output"]
+            assert not any(p.get("type") in ("function_call", "function_call_output") for p in items)
         else:
             messages = request_body["messages"]
             parts = [p for m in request_body["messages"] for p in m["content"] if isinstance(p, dict)]
-            calls = [(p["id"], p["name"]) for p in parts if p["type"] == "tool_use"]
-            returns = [p["tool_use_id"] for p in parts if p["type"] == "tool_result"]
-        assert [call_id for call_id, _ in calls] == returns
-        assert [name for _, name in calls] == names[:index]
+            assert not any(p["type"] in ("tool_use", "tool_result") for p in parts)
+        assistant = [m for m in messages if m["role"] == "assistant"]
+        assert len(assistant) == index
+        for message, expected in zip(assistant, outputs):
+            content = message["content"]
+            actual = content if isinstance(content, str) else "".join(p.get("text", "") for p in content)
+            assert actual == expected
         assert "程序提供的已完成任务资料" not in encoded_body
         if protocol != "responses":
             assert any(m["role"] == "assistant" for m in messages) == (index > 0)
     assert body.index("plan\\n") < body.index("当前是第 1 局第 2 天") < body.index("speak\\n")
     assert "public" in body
     parts = [p for m in before for p in m.parts]
-    assert [p.tool_call_id for p in parts if isinstance(p, ToolCallPart)] == [
-        p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
+    assert [p.content for p in parts if isinstance(p, TextPart)] == outputs
     encoded = ModelMessagesTypeAdapter.dump_json(before)
     assert ModelMessagesTypeAdapter.dump_json(ModelMessagesTypeAdapter.validate_json(encoded)) == encoded
     entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
@@ -212,14 +213,14 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     channel = {"base_url": "https://configured.invalid/custom", "api_key_env": "TEST_WIRE_KEY"}
     monkeypatch.setattr(llm_client, "load_dotenv", lambda path: None)
     monkeypatch.setenv(channel["api_key_env"], "fake-key")
-    h = Harness(protocol, [reply(tool=False)])
+    h = Harness(protocol, [reply(text="configured reply")])
     factory = llm_client.make_model_factory(provider="channel-name-is-not-protocol", channel=channel,
                                            model="custom-model-alias", protocol=protocol,
                                            timeout=17, max_tokens=321,
                                            model_settings={"openai_reasoning_effort": "high"} if protocol != "anthropic" else {})
     assert factory.base_url == channel["base_url"]
     factory = replace(factory, base_url=h.factory.base_url, transport=h.factory.transport)
-    assert TaskRunner(factory)("summary", "ping", []).output == "no tool"
+    assert TaskRunner(factory)("summary", "ping", []).output == "configured reply"
     request, body = h.requests[0]
     assert body["model"] == "custom-model-alias"
     assert body["max_output_tokens" if protocol == "responses" else "max_tokens"] == 321
@@ -232,13 +233,13 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     assert request.extensions["timeout"]["read"] == 17 and h.closes == 1
 
 
-@pytest.mark.parametrize("provider,protocol,override,choice", [
-    ("hub", "responses", {}, "auto"), ("hub", "chat", {}, "auto"),
-    ("hub", "chat", {"supports_forced_tool_choice": True}, "required"),
-    ("hub", "responses", {"supports_forced_tool_choice": True}, "required"),
-    ("other", "responses", {}, "required"),
+@pytest.mark.parametrize("provider,protocol,override", [
+    ("hub", "responses", {}), ("hub", "chat", {}),
+    ("hub", "chat", {"supports_forced_tool_choice": True}),
+    ("hub", "responses", {"supports_forced_tool_choice": True}),
+    ("other", "responses", {}),
 ])
-def test_model_profile_overrides_channel_on_wire_and_capture(provider, protocol, override, choice, monkeypatch):
+def test_model_profile_overrides_keep_text_output_on_wire_and_capture(provider, protocol, override, monkeypatch):
     import asyncio
     from auction_game.ai import llm_client
     from auction_game.reporting.replay import capture_protocol_definition
@@ -260,7 +261,7 @@ def test_model_profile_overrides_channel_on_wire_and_capture(provider, protocol,
     result = TaskRunner(factory, capture_requests=True)("bid", "today", [], game=TEST_GAME, coins=6)
     assert result.output.bid == 2
     body = h.requests[0][1]
-    assert body["tool_choice"] == choice and body["tools"]
+    assert "tool_choice" not in body and not body.get("tools")
     assert (body["reasoning"]["effort"] if protocol == "responses" else body["reasoning_effort"]) == "high"
     async def capture():
         if protocol == "responses":
@@ -269,15 +270,15 @@ def test_model_profile_overrides_channel_on_wire_and_capture(provider, protocol,
                 assert model.profile["openai_supports_encrypted_reasoning_content"] is True
         return await capture_protocol_definition(factory, result.requests[0])
     snapshot = asyncio.run(capture())
-    assert snapshot["definition"]["tool_choice"] == choice
+    assert "tool_choice" not in snapshot["definition"] and not snapshot["definition"].get("tools")
     assert snapshot["model_profile"] == factory.model_profile
     if protocol == "responses":
         assert body["include"] == ["reasoning.encrypted_content"]
 
 
-@pytest.mark.parametrize("response,status", [(reply({"reply": "OK"}), 0),
-                                            (503, 1), (reply({"reply": ""}), 1)])
-def test_probe_single_streamed_tool_request_never_retries(response, status, monkeypatch, capsys):
+@pytest.mark.parametrize("response,status", [(reply(text="OK"), 0),
+                                             (503, 1), (reply(text=""), 1)])
+def test_probe_single_streamed_text_request_never_retries(response, status, monkeypatch, capsys):
     from auction_game.cli import check_llm
     h = Harness("responses", [response])
     pc = dict(model_key="fake", provider="fake", model="alias", protocol="responses", max_tokens=4096,
@@ -296,9 +297,9 @@ def test_probe_single_streamed_tool_request_never_retries(response, status, monk
     assert check_llm.main([]) == status
     assert len(h.requests) == h.closes == 1
     body = h.requests[0][1]
-    assert body["stream"] is True and body["tools"][0]["name"] == "ping"
+    assert body["stream"] is True and not body.get("tools")
     assert body["reasoning"]["effort"] == "high"
-    assert body["tool_choice"] == "auto"
+    assert "tool_choice" not in body and "response_format" not in body
     output = capsys.readouterr().out
     assert "比赛预算=4096" in output and "本次探测预算=2048" in output
     assert '"supports_forced_tool_choice": false' in output

@@ -28,7 +28,11 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     assert "Final result processed." not in markdown and '"speech":' not in markdown
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     assert entry["result"] == {"strategy": strategy, "speech": speech}
-    assert any(part["part_kind"] == "tool-return" for msg in entry["messages"] for part in msg["parts"])
+    response = [part for msg in entry["messages"] if msg["kind"] == "response" for part in msg["parts"]]
+    assert len(response) == 1 and response[0]["part_kind"] == "text"
+    assert response[0]["content"] == f"<strategy>\n{strategy}\n</strategy>\n<speech>\n{speech}\n</speech>"
+    assert not any(part["part_kind"] in ("tool-call", "tool-return")
+                   for msg in entry["messages"] for part in msg["parts"])
     assert '<a id=' not in markdown and entry["task_id"] not in markdown
     assert all(text not in markdown for text in ("任务：", "状态：", "任务补跑", "网络尝试", "完整审计"))
     assert entry["reruns"] == 0 and entry["first_task"] is entry["previous_task"] is None
@@ -45,7 +49,8 @@ def test_plan_has_one_human_submission_and_cached_day_one_writes_nothing(tmp_pat
     assert "## 第1局策略规划含首日出价" in markdown
     assert markdown.count("策略原文") == 1
     assert f"正常出价 1；超级出价 {label}" in markdown
-    assert "提交出价" in markdown and "出价结果" not in markdown and '"bid":' not in markdown
+    assert "提交出价" in markdown and "出价结果" not in markdown
+    assert '"bid":' not in markdown.split("### 私有策略", 1)[1]
 
 
 def test_failures_and_recovery_append_links_to_first_input(tmp_path, monkeypatch):
@@ -97,7 +102,7 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "首次无效策略" not in markdown
     assert markdown.count("最终策略原文") == 1
-    assert "纠错 1 次，已通过（bid 必须是整数）。" in markdown
+    assert "纠错 1 次，已通过（bid: Input should be a valid integer）。" in markdown
     assert "网络尝试" not in markdown
     audit = player.log_path.read_text(encoding="utf-8")
     assert "首次无效策略" in audit and "最终策略原文" in audit and "retry-prompt" in audit
@@ -109,6 +114,8 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
     ("正常出价 8 超过当前余额 4", "正常出价 8 超过当前余额 4"),
     ([{"loc": ["bid"], "type": "int_type", "msg": "Input should be a valid integer",
        "input": "无效私有策略", "ctx": {"data": "无效私有策略"}}], "bid 必须是整数"),
+    ("decision 必须是 JSON 对象\n请重新提交完整结果。\n<strategy>\n策略正文\n</strategy>",
+     "decision 必须是 JSON 对象"),
     ("长错误" * 100, "长错误" * 33 + "长…"),
 ])
 def test_correction_reason_is_short_and_does_not_include_invalid_input(content, reason, success):
@@ -125,34 +132,22 @@ def test_correction_reason_is_short_and_does_not_include_invalid_input(content, 
     markdown = render_markdown_entry(entry)
     assert f"纠错 1 次，{'已通过' if success else '仍失败'}（{reason}）。" in markdown
     assert "无效私有策略" not in markdown and "retry-prompt" not in markdown
+    assert "请重新提交完整结果" not in markdown and "策略正文" not in markdown
     assert entry == before
 
 
-def test_wrong_tool_correction_uses_actual_sdk_retry_prompt(tmp_path):
-    from contextlib import asynccontextmanager
-    from types import SimpleNamespace
-    from pydantic_ai.models.function import DeltaToolCall, FunctionModel
-
-    names = iter(["plan", "bid"])
-
-    async def stream(messages, info):
-        yield {0: DeltaToolCall(name=next(names), json_args=json.dumps(bid_reply(2)), tool_call_id="test-call")}
-
-    @asynccontextmanager
-    async def open_model():
-        model = FunctionModel(stream_function=stream)
-        model.request_errors = []
-        yield model
-
-    player = make_player(TaskRunner(SimpleNamespace(open=open_model, settings={})), tmp_path)
+def test_text_format_correction_uses_actual_sdk_retry_prompt(tmp_path):
+    invalid = "<strategy>\n首次私有策略\n</strategy>"
+    player = make_player(fake_task_runner([invalid, bid_reply(2, strategy="最终私有策略")]), tmp_path)
     assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
-    assert "误用工具 plan，提示改用 bid" in markdown
     assert "纠错 1 次，已通过" in markdown
+    assert "首次私有策略" not in markdown and "最终私有策略" in markdown
     entry = json.loads(player.log_path.read_text(encoding="utf-8"))
     retry = next(part for message in entry["messages"] for part in message["parts"]
                  if part["part_kind"] == "retry-prompt")
-    assert "Unknown tool name: 'plan'" in retry["content"]
+    assert "<decision>" in retry["content"]
+    assert any(part.get("content") == invalid for message in entry["messages"] for part in message["parts"])
 
 
 @pytest.mark.parametrize("phase,title", [
@@ -194,7 +189,8 @@ def test_bid_instructions_only_describe_canonical_types():
     from auction_game.ai.agent_tasks import BidOutput
 
     reminder = with_output_requirement("出价", "bid")
-    assert "super_bid" not in reminder and "JSON null" not in reminder
+    assert "<strategy>\n" in reminder and "<decision>\n" in reminder
+    assert '"bid"' in reminder and '"super_bid"' in reminder and "null" in reminder
     text = BidOutput.model_json_schema()["properties"]["super_bid"]["description"]
     assert "必填" in text and "JSON null" in text
     assert all(fragment not in text for fragment in ('"null"', '"None"', "兼容", "类型示例"))

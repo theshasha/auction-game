@@ -57,24 +57,26 @@ def test_actual_http_definition_retry_failure_summary_and_dedup(protocol, tmp_pa
     assert player.final_summary("summary") == "summary"
     definitions = json.loads(paths.tool_definitions.read_text(encoding="utf-8"))
     refs = [json.loads(line) for line in paths.tool_requests.read_text(encoding="utf-8").splitlines()]
-    assert len(refs) == len(h.requests) == 5 and len(definitions) == 2
+    assert len(refs) == len(h.requests) == 5 and len(definitions) == 1
     assert [(ref["task_id"], ref["request"], ref["attempt"]) for ref in refs] == [
         ("task-0001", 1, 1), ("task-0001", 1, 2), ("task-0002", 1, 1),
         ("task-0003", 1, 1), ("task-0004", 1, 1)]
     for ref, (_, body) in zip(refs, h.requests):
+        assert protocol_tools(body) == {}
         assert definitions[ref["definition_id"]] == {"protocol": protocol, "definition": protocol_tools(body)}
         assert ref["source"] == "http_pre_send" and ref["versions"]["openai"]
     entries = [json.loads(line) for line in paths.player(1).read_text(encoding="utf-8").splitlines()]
     assert [ref["definition_id"] for ref in refs[1:]] == [e["tool_definitions"][0] for e in entries]
     text = paths.tools.read_text(encoding="utf-8")
-    assert "发送前实际请求定义" in text and "无输出工具" in text
+    assert "发送前实际请求定义" in text and "无输出工具：任务直接返回文本。" in text
+    assert "文本任务" in text and "文本总结" not in text
     assert "offline_sdk_generated" in text and "无真实服务调用" in text
     for ref in refs:
         assert f'<a id="{ref["definition_id"]}"></a>' in text
         assert (f'`{ref["task_id"]}` · {ref["task"]} / {ref["phase"]} / {ref["context"]} · '
                 f'request {ref["request"]} / attempt {ref["attempt"]} · '
                 f'{ref["source"]} · `{ref["model"]}`') in text
-    assert text.count('"name": "bid"') == 1
+    assert '"name": "bid"' not in text
     assert "[本场工具定义](tools.md)" in (paths.root / "README.md").read_text(encoding="utf-8")
     readable = paths.player(1, readable=True).read_text(encoding="utf-8")
     assert "tools.md" not in readable and "task-0001" not in readable

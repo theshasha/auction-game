@@ -10,7 +10,7 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.ai import ai_speech
 from auction_game.ai.agent_execution import OutputFailedError
-from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply
+from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply, text_reply
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import ScriptedPlayer
 
@@ -71,8 +71,8 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     assert speech in md and "私有策略" in md
 
 
-@pytest.mark.parametrize("invalid", [speech_reply("  "), speech_reply(1),
-                                          {"strategy": "  ", "speech": "public"}, "no tool"])
+@pytest.mark.parametrize("invalid", [speech_reply("  "), "<speech>missing strategy</speech>",
+                                          {"strategy": "  ", "speech": "public"}, "missing sections"])
 def test_speech_schema_failure_gets_one_correction(invalid):
     runner = fake_task_runner([invalid, speech_reply("补上的发言")])
     player = make_player(runner)
@@ -90,7 +90,7 @@ def test_failed_speech_leaves_history_unchanged():
 
 
 def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
-    from pydantic_ai.messages import ToolCallPart
+    from pydantic_ai.messages import TextPart
     runner = fake_task_runner([bid_reply(1), speech_reply(" "), speech_reply(" ")])
     player = make_player(runner, tmp_path)
     player.plan_strategy("plan", "plan")
@@ -98,8 +98,10 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
         player.give_speech("speech", "speech")
     entry = json.loads(player.log_path.read_text(encoding="utf-8").splitlines()[-1])
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-    assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 2
-    assert audit[0].parts[-1].content.startswith("speech\n\n请调用 `speech` 工具提交结果")
+    # SDK 合并历史末尾请求后，失败审计仍只包含本任务的两次原文。
+    assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
+        text_reply(speech_reply(" ")), text_reply(speech_reply(" "))]
+    assert audit[0].parts[-1].content.startswith("speech\n\n请按以下格式提交完整结果")
 
 
 def test_blank_summary_uses_output_correction_not_infrastructure_retry():

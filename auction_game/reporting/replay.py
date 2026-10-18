@@ -323,7 +323,7 @@ def export_replay(run_dir: Path, player: str, *, capture_definitions=False, debu
         lines.extend(["## 实际比赛结果", "尚无已结算局日志；本页保留实际请求及失败审计。"])
     lines.extend(['<a id="来源与审计"></a>', "## 来源与审计",
                   f"[运行时模型边界捕获]({capture_path.relative_to(run_dir).as_posix()})保存传给模型的参数，非 HTTP 报文；"
-                  f"[任务记录]({audit.relative_to(run_dir).as_posix()})保留完整结果与工具应答。",
+                  f"[任务记录]({audit.relative_to(run_dir).as_posix()})保留完整结果与原始回复。",
                   *(["[本场工具记录](tools.md)：发送前实际定义或标明来源的离线 SDK 定义，含任务引用。"]
                     if paths.tools.exists() else []),
                   f"本页工具定义来自[SDK 离线捕获]({protocol_path.relative_to(run_dir).as_posix()})："

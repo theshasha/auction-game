@@ -2,13 +2,13 @@
 
 ## 按任务查代码
 
-- 提示文字在 `prompts.py`，工具定义和业务校验在 `agent_tasks.py`。
+- 提示文字在 `prompts.py`，文本协议与解析在 `text_output.py`，业务校验和 SDK 接入在 `agent_tasks.py`。
 - 通用任务执行在 `agent_execution.py`，协议和网络请求在 `llm_client.py`。
 - 玩家对话历史由 `ai_player.py` 保存，发言、记忆和规划的顺序由 `ai_speech.py` 控制。
 
 ## 校验和请求失败
 
-保持严格校验，工具名、字段类型、必填条件和业务校验逻辑都按现有定义执行。结构错误和业务错误共用一次输出纠错机会，任务内部的纠错由 SDK 管理。即使 SDK 对不同错误分别计数，每个任务仍最多发出两次逻辑请求。
+新任务统一使用普通文本输出。出价与发言按完整标签块解析，长正文保留真实换行；只有出价字段使用 JSON。记忆和总结直接返回正文。标签边界、字段类型、必填条件和业务逻辑保持严格校验，原始回复不做通用反转义。格式错误和业务错误共用一次输出纠错机会，由 SDK 的 TextOutput 与 ModelRetry 管理，每个任务最多发出两次逻辑请求。
 
 网络重试单独计数，每个逻辑请求最多重发一次。完整接收响应并检查到明确的成功结束状态后，才能交付结果；输出截断就直接失败。
 
@@ -16,15 +16,15 @@
 
 ## 协议兼容和输出设置
 
-协议按配置中明确指定的值选择。Hub 对强制工具选择（forced-tool-choice）的兼容通过公开的 profile 配置，覆盖时保留框架推断的上下文容量 `context_window`，以及加密推理所需的 `include: ["reasoning.encrypted_content"]` 请求设置。
+协议按配置中明确指定的值选择。新请求不携带输出工具或原生 JSON schema 约束。既有渠道 profile 继续兼容读取，覆盖时保留框架推断的上下文容量 `context_window`，以及加密推理所需的 `include: ["reasoning.encrypted_content"]` 请求设置。
 
-模型只返回纯文本 JSON 时，仍按工具输出要求进行纠错。`super_bid` 的定义保持为必填的整数或 JSON `null`；现有兼容处理还接受精确字符串 `"null"`，原始输出照常保留在日志中。
+`decision` 块只包含必填的 `bid` 与 `super_bid`，重复 JSON 键也属于格式错误。`super_bid` 为整数或 JSON `null`；兼容处理只额外接受精确字符串 `"null"`，原始输出照常保留在日志中。
 
 Chat 保留明确结束原因检查，并继续使用兼容的 `max_tokens` 设置。输出长度和推理档位的选择规则见根目录 `docs/usage.md`；渠道拒绝请求或输出截断后，保持原输出长度设置。
 
 ## 对话历史和隐私
 
-后续任务继续使用原生 user/assistant/tool 对话，保留纠错往返以及工具调用与结果的配对。成功写完日志后，在对话副本中移除 thinking 和旧响应引用，保留 `phase`、`namespace` 等有语义的字段。原始 thinking 留在审计日志中。
+后续任务继续使用原生 user/assistant 对话，保留完整纠错往返。旧工具消息的读取仍保持调用与结果配对。成功写完日志后，在对话副本中移除 thinking 和旧响应引用，保留 `phase`、`namespace` 等有语义的字段。原始 thinking 留在审计日志中。
 
 `strategy` 和 `memory` 只对玩家自己可见，对手只看到公开发言。观众总结的请求和结果都不写回玩家历史。
 
@@ -36,6 +36,7 @@ Chat 保留明确结束原因检查，并继续使用兼容的 `max_tokens` 设�
 
 ## 回归入口
 
+- `tests/ai/test_text_output.py` 验证文本边界、正文保真与异常 JSON 的纠错审计。
 - `tests/ai/test_pydantic_ai_contract.py` 验证三种协议的真实 SDK 序列化、共享纠错次数和隐私范围。
 - `tests/ai/test_llm_client.py` 验证流式响应、网络重试和资源关闭。
 - `tests/ai/test_ai.py` 与 `tests/ai/test_memory.py` 验证历史更新、失败后的状态恢复和记忆。

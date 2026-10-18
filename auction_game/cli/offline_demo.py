@@ -12,14 +12,14 @@ from pathlib import Path
 import re
 
 from pydantic_ai.models import override_allow_model_requests
-from pydantic_ai.models.function import DeltaToolCall, FunctionModel
-from pydantic_ai.messages import ModelMessagesTypeAdapter, UserPromptPart
+from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_core import to_jsonable_python
 
 from auction_game.configuration import channel_model_profile, load_configuration, load_game_settings
 from auction_game.controller import Controller
-from auction_game.ai.agent_tasks import AuctionDeps, TaskRunner
+from auction_game.ai.agent_tasks import AuctionDeps, Task, TaskRunner
 from auction_game.reporting.replay import export_replay, capture_protocol_definition
 from auction_game.reporting.tool_records import current_tool_task
 from auction_game.reporting.request_records import digest
@@ -30,6 +30,7 @@ from auction_game.game.rules import sync_root_rules
 
 
 _task_deps: ContextVar[AuctionDeps] = ContextVar("offline_auction_deps")
+_task_type: ContextVar[Task] = ContextVar("offline_auction_task")
 
 
 def demo_submission(game, index, player_count, match_index, day, coins):
@@ -100,13 +101,15 @@ class OfflineToolAudit(WrapperModel):
 
 
 class OfflineTaskRunner(TaskRunner):
-    """仅离线使用：显式转交实时任务依赖，保留原异常供玩家落盘。"""
+    """仅离线使用：在线程上下文中显式转交任务类型与实时依赖。"""
 
     def __call__(self, task, prompt, history, *, game=None, coins=0):
         token = _task_deps.set(AuctionDeps(game, coins))
+        task_token = _task_type.set(task)
         try:
             return super().__call__(task, prompt, history, game=game, coins=coins)
         finally:
+            _task_type.reset(task_token)
             _task_deps.reset(token)
 
 
@@ -140,8 +143,8 @@ class DemoFactory:
 
     async def stream(self, messages, info):
         self.calls += 1
-        tool = info.output_tools[0].name if info.output_tools else "summary"
-        if tool == "bid":
+        task = _task_type.get()
+        if task in ("bid", "plan"):
             deps = _task_deps.get()
             match_index, day = _bid_position(current_tool_task.get().entry)
             bid, super_bid = demo_submission(deps.game, self.index, self.player_count,
@@ -151,26 +154,25 @@ class DemoFactory:
                 strategy += f"提交超级出价 {super_bid}，固定成本 {deps.game.super_cost}；命中以实际结算为准。"
             else:
                 strategy += "本次不提交超级出价，结果以公开结算为准。"
-            result = {"strategy": strategy, "bid": bid, "super_bid": super_bid}
-        elif tool == "save_memory":
-            result = {"memory": f"我是{self.name}。本局已经结束，局末公开发言已收到。"
-                                "拍卖得分与超级命中分分别核对；下一局金币重置，按新局实际余额检查报价。"}
-        elif tool == "speech":
-            prompt = next(part.content for message in reversed(messages) for part in reversed(message.parts)
-                          if isinstance(part, UserPromptPart))
-            if "最终感言" in prompt:
+            decision = json.dumps({"bid": bid, "super_bid": super_bid}, ensure_ascii=False)
+            yield f"<strategy>\n{strategy}\n</strategy>\n<decision>\n{decision}\n</decision>"
+        elif task == "memory":
+            yield (f"我是{self.name}。本局已经结束，局末公开发言已收到。"
+                   "拍卖得分与超级命中分分别核对；下一局金币重置，按新局实际余额检查报价。")
+        elif task == "speech":
+            phase = current_tool_task.get().entry["phase"]
+            if phase == "final_speech":
                 speech = f"我是{self.name}。比赛已经结束，最终成绩以公布的排名为准；谢谢大家让我看清了金币分配的重要性。"
-            elif "局末发言" in prompt:
+            elif re.fullmatch(r"match_\d+_speech", phase):
                 speech = f"我是{self.name}。这一局的出价与得分已经公开，我会据此检查资源使用。"
             else:
                 speech = f"我是{self.name}。这场比赛我会观察公开结果，谨慎使用金币。"
-            result = {"strategy": "模拟私有策略：公开表达谨慎态度，不透露具体出价。",
-                      "speech": speech}
-        else:
+            yield ("<strategy>\n模拟私有策略：公开表达谨慎态度，不透露具体出价。\n</strategy>\n"
+                   f"<speech>\n{speech}\n</speech>")
+        elif task == "summary":
             yield f"模拟观众总结：我是{self.name}，本场按离线脚本完成比赛。拍卖得分与超级命中分以实际结算为准。"
-            return
-        yield {0: DeltaToolCall(name=tool, json_args=json.dumps(result, ensure_ascii=False),
-                               tool_call_id=f"demo-{self.index}-{self.calls}")}
+        else:
+            raise ValueError(f"未知离线任务：{task}")
 
     @asynccontextmanager
     async def open(self):

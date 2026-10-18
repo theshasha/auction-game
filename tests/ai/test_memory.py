@@ -65,11 +65,12 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
     player = make_player(TaskRunner(h.factory), tmp_path)
     player.plan_strategy("original task", "opening_plan")
     assert len(h.requests) == 2
-    # SDK 自行重放任务内纠错：thinking 与原工具配对保持完整。
+    # SDK 自行重放任务内纠错：thinking 与错误输出原文保持完整。
     correction = json.dumps(h.requests[1][1])
     if protocol != "responses" or not auto:
         assert "OLD_PRIVATE_THINKING" in correction
-    assert "call_1" in correction
+    if protocol != "responses" or not auto:
+        assert "bad" in correction and "<decision>" in correction
     if protocol == "responses" and auto:
         assert "resp_1" in correction  # 当前任务 SDK auto 链接仍有效
     elif protocol == "responses":
@@ -92,26 +93,24 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
                        "rs_old", "resp_1", "previous_response_id", "fc_1", "fc_2"):
             assert marker not in wire
         assert "original task" in wire
-        from pydantic_ai.messages import ToolCallPart
-        assert any(p.args_as_dict().get("strategy") == "我的私有分析"
-                   for m in player.messages for p in m.parts if isinstance(p, ToolCallPart))
-        assert "call_1" in wire and "call_2" in wire
+        from pydantic_ai.messages import TextPart
+        assert any("我的私有分析" in p.content
+                   for m in player.messages for p in m.parts if isinstance(p, TextPart))
+        assert "bad" in wire and "<decision>" in wire
         assert len(wire) < len(thinking)  # 旧长推理不随独立任务累积
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_sdk_memory_tool_and_cross_match_replacement(protocol):
+def test_sdk_plain_memory_and_cross_match_replacement(protocol):
     h = Harness(protocol, [reply(speech_reply("old public signal")), reply({"memory": "cumulative-v1"}),
                            reply(bid_reply(1)), reply({"memory": "cumulative-v2"}), reply(bid_reply(2))])
     player = make_player(TaskRunner(h.factory))
     player.give_speech("old match raw", "match_1_speech")
     player.save_memory(prompts.memory_request({"Bravo": "other signal"}), "match_1_memory")
     body = h.requests[-1][1]
-    tool = body["tools"][0].get("function", body["tools"][0])
-    assert tool["name"] == "save_memory"
-    schema = tool.get("parameters", tool.get("input_schema"))
-    assert schema["required"] == ["memory"] and set(schema["properties"]) == {"memory"}
-    assert schema["additionalProperties"] is False
+    assert not body.get("tools") and "tool_choice" not in body
+    assert "不加格式标签或 JSON 外壳" in json.dumps(body, ensure_ascii=False)
+    assert player.memory == "cumulative-v1"
     player.plan_strategy(prompts.next_match_plan_request([], player.game, 2), "match_1_plan")
     wire = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert "cumulative-v1" in wire and "最新累计成绩" in wire and "第 2 局" in wire
@@ -158,8 +157,8 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     assert player.memory == "" and player.checkpoint() == checkpoint
 
 
-@pytest.mark.parametrize("invalid", [{"memory": " "}, {"memory": 1}, {}, {"memory": "ok", "strategy": "extra"}])
-def test_memory_uses_strict_nonempty_schema_and_shared_correction(invalid):
+@pytest.mark.parametrize("invalid", ["", " ", "\n\t", "\r\n "])
+def test_memory_requires_nonempty_plain_body_and_shared_correction(invalid):
     runner = fake_task_runner([invalid, {"memory": "saved"}])
     player = make_player(runner)
     player.save_memory("整理", "match_1_memory")

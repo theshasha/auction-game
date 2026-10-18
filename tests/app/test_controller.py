@@ -9,13 +9,14 @@ import pytest
 
 from auction_game.ai.ai_player import AIPlayer
 from pydantic_ai.exceptions import ModelAPIError
-from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import TextPart
 from tests.support.factories import (
     ALL_NAMES,
     TEST_GAME,
     TEST_PREDICTIONS,
     bid_reply,
     fake_task_runner,
+    text_reply,
     make_ai_obs,
 )
 from auction_game.controller import Controller, RoundTask, TournamentAborted, run_parallel_round
@@ -568,7 +569,8 @@ class TestParallelRound:
             assert outcome.get("result") == {"stateless": "ready", "counter": 1}
             assert counter.calls == 2 and stateless_calls == [1]
 
-    def test_pause_keeps_consumed_plan_before_result_collection(self, monkeypatch):
+    @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
+    def test_pause_keeps_consumed_plan_before_result_collection(self, monkeypatch, command):
         ready = threading.Event()
         release_collection = threading.Event()
         gate = threading.Event()
@@ -586,6 +588,7 @@ class TestParallelRound:
         task_runner = fake_task_runner([bid_reply(2, 6)])
         player = make_named_player("Alpha", task_runner)
         player.plan_strategy("请规划", "opening_plan")
+        checkpoint = player.checkpoint()
         history = deepcopy(player.messages)
         bid_calls = []
 
@@ -619,9 +622,14 @@ class TestParallelRound:
             assert "result" not in outcome
             assert any("全部成功，确认后继续" in message for message in announcements)
             assert not any("补跑" in message for message in announcements)
-            controller.offer_command("")
+            controller.offer_command(command)
             thread.join(timeout=5)
-            assert outcome.get("result") == {"Alpha": (2, 6)}
+            if command == "q":
+                assert isinstance(outcome.get("error"), TournamentAborted)
+                assert player.checkpoint() == checkpoint
+            else:
+                assert outcome.get("result") == {"Alpha": (2, 6)}
+                assert player._pending_day1_bid is None
             assert len(task_runner.calls) == 1
             assert bid_calls == [1]
 
@@ -666,11 +674,7 @@ class TestParallelRound:
             assert alpha.messages == alpha_snapshot
             assert bravo.messages[:len(bravo_prefix)] == bravo_prefix
             parts = [p for m in bravo.messages for p in m.parts]
-            calls = [p for p in parts if isinstance(p, ToolCallPart)]
-            returns = [p for p in parts if isinstance(p, ToolReturnPart)]
-            assert len(calls) == len(returns) == 1
-            assert calls[0].args_as_dict()["bid"] == 2
-            assert calls[0].tool_call_id == returns[0].tool_call_id
+            assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(2))]
 
     def test_step_mode_gates_once_and_runs_concurrently(self):
         announcements = []
@@ -705,7 +709,8 @@ class TestParallelRound:
             assert len(step_gates) == 1
             assert "测试轮" in step_gates[0]
 
-    def test_pause_keeps_collected_and_inflight_success(self, monkeypatch):
+    @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
+    def test_pause_keeps_collected_and_inflight_success(self, monkeypatch, command):
         gate_announced = threading.Event()
 
         def announce(msg):
@@ -739,6 +744,7 @@ class TestParallelRound:
             return bid_reply(2)
 
         bravo = make_named_player("Bravo", fake_task_runner([bravo_chat, bravo_chat]))
+        checkpoints = [p.checkpoint() for p in (alpha, bravo)]
         tasks = [
             RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
             RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
@@ -755,16 +761,16 @@ class TestParallelRound:
             assert len(bravo.messages) > 1
             bravo_snapshot = deepcopy(bravo.messages)
 
-            controller.offer_command("")
+            controller.offer_command(command)
             thread.join(timeout=5)
-            assert outcome.get("result") == {"Alpha": (1, None), "Bravo": (2, None)}
             assert len(alpha_chat.calls) == 1
             assert len(bravo_calls) == 1
-            assert alpha.messages == alpha_snapshot
-            assert bravo.messages == bravo_snapshot
-            parts = [p for m in bravo.messages for p in m.parts]
-            calls = [p for p in parts if isinstance(p, ToolCallPart)]
-            returns = [p for p in parts if isinstance(p, ToolReturnPart)]
-            assert len(calls) == len(returns) == 1
-            assert calls[0].args_as_dict()["bid"] == 2
-            assert calls[0].tool_call_id == returns[0].tool_call_id
+            if command == "q":
+                assert isinstance(outcome.get("error"), TournamentAborted)
+                assert [p.checkpoint() for p in (alpha, bravo)] == checkpoints
+            else:
+                assert outcome.get("result") == {"Alpha": (1, None), "Bravo": (2, None)}
+                assert alpha.messages == alpha_snapshot
+                assert bravo.messages == bravo_snapshot
+            parts = [p for m in bravo_snapshot for p in m.parts]
+            assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(2))]

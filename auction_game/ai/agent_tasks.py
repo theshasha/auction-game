@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from pydantic_core import PydanticCustomError
-from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
+from pydantic_ai import Agent, ModelRetry, RunContext, TextOutput
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import UsageLimits
 
@@ -15,6 +15,7 @@ from auction_game.ai.agent_execution import AgentExecutor, ExecutionResult
 from auction_game.game.game_rules import GameSettings, validate_submission
 from auction_game.ai.llm_client import ModelFactory
 from auction_game.ai import prompts
+from auction_game.ai.text_output import OutputFormatError, output_requirement, parse_text_output
 
 Task = Literal["bid", "plan", "speech", "memory", "summary"]
 
@@ -50,13 +51,7 @@ class MemoryOutput(BaseModel):
     memory: str = Field(min_length=1, description="供下一局使用的私人笔记；本次内容会替换旧记忆")
 
 
-# 唯一任务到输出工具映射；自然语言提醒也从此取得当前名称。
-OUTPUT_TOOLS = {
-    "bid": ToolOutput(BidOutput, name="bid", description="提交今日出价"),
-    "speech": ToolOutput(SpeechOutput, name="speech", description="提交公开发言"),
-    "memory": ToolOutput(MemoryOutput, name="save_memory", description="保存供下一局使用的私人笔记，替换旧记忆"),
-}
-OUTPUT_TOOLS["plan"] = OUTPUT_TOOLS["bid"]
+OUTPUT_MODELS = {"bid": BidOutput, "plan": PlanOutput, "speech": SpeechOutput, "memory": MemoryOutput}
 
 
 @dataclass
@@ -85,7 +80,19 @@ def render_task_result(result: dict | str) -> list[str]:
 
 def make_agent(model, task: Task, *, settings=None):
     """组装个人赛任务；比赛参数与实时余额由业务 deps 提供。"""
-    agent = Agent(model, output_type=str if task == "summary" else OUTPUT_TOOLS[task],
+    def parse(text: str) -> BidOutput | SpeechOutput | MemoryOutput | str:
+        try:
+            result = parse_text_output(task, text)
+            return OUTPUT_MODELS[task].model_validate(result) if task in OUTPUT_MODELS else result
+        except (OutputFormatError, ValidationError) as exc:
+            if isinstance(exc, ValidationError):
+                reason = "；".join(f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
+                                  for error in exc.errors(include_input=False, include_context=False))
+            else:
+                reason = str(exc)
+            raise ModelRetry(f"{reason}\n请重新提交完整结果。\n{output_requirement(task)}") from exc
+
+    agent = Agent(model, output_type=TextOutput(parse),
                   deps_type=AuctionDeps, retries=1, model_settings=settings)
 
     @agent.output_validator
@@ -93,11 +100,7 @@ def make_agent(model, task: Task, *, settings=None):
         if isinstance(result, BidOutput):
             reason = validate_submission(result.bid, result.super_bid, ctx.deps.coins, ctx.deps.game)
             if reason:
-                raise ModelRetry(reason)
-        elif isinstance(result, str):
-            if not result.strip():
-                raise ModelRetry("观众总结正文不能为空白，请重新生成完整总结。")
-            return result.strip()
+                raise ModelRetry(f"{reason}\n请按原格式重新提交完整结果。")
         return result
 
     return agent
@@ -113,8 +116,7 @@ class TaskRunner:
                  game: GameSettings | None = None, coins: int = 0) -> ExecutionResult[BidOutput | SpeechOutput | MemoryOutput | str]:
         if task in ("bid", "plan") and game is None:
             raise ValueError("出价及规划任务需要比赛参数")
-        tool = OUTPUT_TOOLS.get(task)
-        prompt = prompts.with_output_requirement(prompt, tool.name if tool else None)
-        # SDK 的文本与工具校验路径可能分别计数；公开请求上限保证混合纠错也共用一次。
+        prompt = prompts.with_output_requirement(prompt, task)
+        # 格式解析与业务校验共用一次纠错，额外用请求上限守住整个任务预算。
         return self.executor(make_agent(None, task), prompt, history, deps=AuctionDeps(game, coins),
                              usage_limits=UsageLimits(request_limit=2))

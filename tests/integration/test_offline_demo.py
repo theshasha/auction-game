@@ -56,12 +56,14 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     snapshot = paths.read_config()
     tool_definitions = json.loads(paths.tool_definitions.read_text(encoding="utf-8"))
     tool_refs = [json.loads(line) for line in paths.tool_requests.read_text(encoding="utf-8").splitlines()]
-    assert len(tool_definitions) == 4 and len(tool_refs) == expected_calls * len(names)
+    assert len(tool_definitions) == 1 and len(tool_refs) == expected_calls * len(names)
+    assert all(snapshot["definition"] == {} for snapshot in tool_definitions.values())
     assert all(ref["source"] == "offline_sdk_generated" and ref["definition_id"] in tool_definitions for ref in tool_refs)
     assert all(ref["versions"]["pydantic-ai-slim"] for ref in tool_refs)
     assert "离线 SDK 生成" in paths.tools.read_text(encoding="utf-8")
     assert "[本场工具定义](tools.md)" in (run_dir / "README.md").read_text(encoding="utf-8")
     assert snapshot["run_type"] == "offline"
+    assert snapshot["format_version"] == 3
     assert snapshot["mode"] == "test_model"
     assert snapshot["prompts"] == config["prompts"]
     for pc, saved in zip(configs, snapshot["players"]):
@@ -121,24 +123,28 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         # Agent 会在接收后补 run_id 等元数据，边界记录的输出正文保持一致。
         assert record["response"]["parts"] in [message["parts"] for message in entry["messages"]
                                                if message["kind"] == "response"]
-        if entry["task"] != "summary":
-            tool = record["parameters"]["output_tools"][0]
-            assert tool["name"] == {"plan": "bid", "memory": "save_memory"}.get(entry["task"], entry["task"])
-            properties = tool["parameters_json_schema"]["properties"]
-            field = "memory" if entry["task"] == "memory" else "strategy"
-            description = properties[field]["description"]
-            if field == "memory":
-                assert "私人笔记" in description and "替换旧记忆" in description
-            else:
-                assert "仅自己可见" in description
-            if entry["task"] == "memory":
-                assert set(properties) == {"memory"} and entry["memory_chars"] == len(entry["result"]["memory"])
+        assert record["parameters"]["output_tools"] == []
+        assert record["parameters"]["function_tools"] == []
+        assert record["parameters"].get("output_object") is None
+        assert all(part["part_kind"] == "text" for part in record["response"]["parts"])
+        text = "".join(part["content"] for part in record["response"]["parts"])
+        result = entry["result"]
+        if entry["task"] in ("bid", "plan"):
+            decision = json.dumps({"bid": result["bid"], "super_bid": result["super_bid"]}, ensure_ascii=False)
+            assert text == f"<strategy>\n{result['strategy']}\n</strategy>\n<decision>\n{decision}\n</decision>"
+        elif entry["task"] == "speech":
+            assert text == f"<strategy>\n{result['strategy']}\n</strategy>\n<speech>\n{result['speech']}\n</speech>"
+        elif entry["task"] == "memory":
+            assert set(result) == {"memory"} and text == result["memory"]
+            assert entry["memory_chars"] == len(result["memory"])
+        else:
+            assert text == result
         if entry["task"] == "plan":
             match_index = 1 if entry["phase"] == "opening_plan" else int(entry["phase"].split("_")[1]) + 1
             actual = matches[match_index - 1]["match"]["days"][0]["bids"][0]
             assert (entry["result"]["bid"], entry["result"]["super_bid"]) == (actual["bid"], None)
         if entry["phase"] == "final_summary":
-            # 总结看到全场原生对话和工具回执，推理仅留原始审计。
+            # 总结看到全场原生文本对话，推理仅留原始审计。
             review = json.dumps(record["messages"], ensure_ascii=False)
             history = [p["content"] for m in record["messages"] for p in m["parts"]
                        if p["part_kind"] == "user-prompt"]
@@ -149,7 +155,9 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
                             assert any(part["content"] in text for text in history)
             assert "程序提供的已完成任务资料" not in review
             assert any(m["kind"] == "response" for m in record["messages"])
-            assert '"part_kind": "thinking"' not in review and '"part_kind": "tool-call"' in review
+            assert '"part_kind": "thinking"' not in review
+            assert '"part_kind": "tool-call"' not in review and '"part_kind": "tool-return"' not in review
+            assert "<strategy>" in review and "<decision>" in review and "<speech>" in review
     # 非选中玩家正常日志不保存重复请求。
     for number, name in enumerate(names[1:], 2):
         assert all("requests" not in json.loads(line) for line in
@@ -178,7 +186,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
     capture_link = paths.capture(1).relative_to(run_dir).as_posix()
     assert f"]({capture_link})" in replay
     snapshots = json.loads(paths.definitions(1).read_text(encoding="utf-8"))
-    assert len(snapshots) == 4  # 共享出价工具、发言、记忆与文本；完整赛不逐请求重复捕获。
+    assert len(snapshots) == 1  # 所有文本任务共用无工具定义；完整赛不逐请求重复捕获。
     definitions = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", replay, re.S)
                    if '"tools"' in block]
     assert definitions == [snapshot["definition"] for snapshot in snapshots.values() if snapshot["definition"].get("tools")]
@@ -187,8 +195,7 @@ def test_complete_ai_tournament_and_selected_player_replay(tmp_path, monkeypatch
         assert snapshot["model"] == configs[0]["model"]
         assert snapshot["protocol"] == configs[0]["protocol"]
         assert snapshot["model_profile"] == {"supports_forced_tool_choice": False}
-        if snapshot["definition"].get("tools"):
-            assert snapshot["definition"]["tool_choice"] == "auto"
+        assert snapshot["definition"] == {}
     for forbidden in ("task-0001", "opening_speech", "request-1", "schema-1", "outer_typed_dict_key",
                       '"output_tools"', '"metadata"', '"sequential"', '"timeout"', '"part_kind"'):
         assert forbidden not in replay
@@ -450,11 +457,8 @@ def test_offline_model_profile_follows_actual_execution(
     refs = [json.loads(line) for line in paths.tool_requests.read_text(encoding="utf-8").splitlines()]
     for number, (factory, saved) in enumerate(zip(factories, snapshot["players"]), 1):
         assert saved["execution_model"]["model_profile"] == factory.model_profile
-        choices = [definitions[ref["definition_id"]]["definition"]["tool_choice"] for ref in refs
-                   if ref["number"] == number and definitions[ref["definition_id"]]["definition"].get("tools")]
-        expected = ("auto" if test_model else "required") if number == 1 else (
-            "auto" if test_model else {"type": "any"})
-        assert choices and all(choice == expected for choice in choices)
+        actual = [definitions[ref["definition_id"]]["definition"] for ref in refs if ref["number"] == number]
+        assert actual and all(definition == {} for definition in actual)
 
 
 def test_offline_reuses_one_game_and_syncs_once_before_directory(tmp_path, monkeypatch, demo_configuration):
@@ -503,7 +507,6 @@ def test_offline_sync_failure_creates_no_run(tmp_path, monkeypatch, demo_configu
 
 
 def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, demo_configuration):
-    from pydantic_ai.models.function import DeltaToolCall
     game = GameSettings(
         initial_coins=7, daily_salary=3, daily_pool=(1, 1), max_bid=7,
         super_cost=2, super_bounty=3, super_hit_score=2,
@@ -513,11 +516,10 @@ def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, 
     real_stream = offline_demo.DemoFactory.stream
     attempts = []
     async def invalid_bid(self, messages, info):
-        tool = info.output_tools[0].name if info.output_tools else "summary"
-        if self.index == 0 and tool == "bid":
-            attempts.append(tool)
-            yield {0: DeltaToolCall(name="bid", json_args=json.dumps(
-                {"strategy": "故意非法出价", "bid": -1, "super_bid": None}), tool_call_id="bad-bid")}
+        task = offline_demo.current_tool_task.get().entry["task"]
+        if self.index == 0 and task in ("plan", "bid"):
+            attempts.append(task)
+            yield '<strategy>\n故意非法出价\n</strategy>\n<decision>\n{"bid": -1, "super_bid": null}\n</decision>'
         else:
             async for part in real_stream(self, messages, info):
                 yield part
@@ -531,7 +533,7 @@ def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, 
     run_dir = tmp_path / "invalid"
     with pytest.raises(RuntimeError, match="离线任务失败：第一局策略规划"):
         generate_demo(run_dir, test_model=True)
-    assert attempts == ["bid", "bid"]  # 共享输出纠错保留，整轮不自动补跑。
+    assert attempts == ["plan", "plan"]  # 共享输出纠错保留，整轮不自动补跑。
     paths = RunPaths(run_dir)
     entries = [json.loads(line) for line in paths.player(1).read_text(encoding="utf-8").splitlines()]
     failed = entries[-1]
@@ -541,8 +543,9 @@ def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, 
     assert len(failed["requests"]) == 2
     assert all(record["response"]["parts"] for record in failed["requests"])
     for record in failed["requests"]:
-        submitted = json.loads(record["response"]["parts"][0]["args"])
-        assert submitted["bid"] == -1 and submitted["strategy"] == "故意非法出价"
+        assert record["parameters"]["output_tools"] == []
+        assert record["response"]["parts"][0]["content"] == (
+            '<strategy>\n故意非法出价\n</strategy>\n<decision>\n{"bid": -1, "super_bid": null}\n</decision>')
     replay = export_replay(run_dir, "甲", capture_definitions=True, debug=True)
     content = replay.read_text(encoding="utf-8")
     assert "任务失败，本次结果未加入玩家对话或首日出价缓存" in content
@@ -586,3 +589,46 @@ def test_offline_request_failure_is_saved_before_exit_and_exportable(tmp_path, m
     content = replay.read_text(encoding="utf-8")
     assert "离线故障测试" in content
     assert "尚无已结算局日志" in content
+
+
+def test_legacy_tool_history_replays_from_copy_without_changing_original(tmp_path):
+    """旧格式回复用真实 SDK 构造；导出仅操作场次临时副本。"""
+    from shutil import copytree
+
+    from pydantic_ai import Agent, ToolOutput
+
+    from auction_game.ai.agent_execution import AgentExecutor
+    from auction_game.ai.agent_tasks import BidOutput
+    from auction_game.reporting.agent_log import AgentLog
+    from auction_game.reporting.run_output import initialize_run
+    from tests.support.factories import TEST_GAME, bid_reply
+    from tests.support.wire import Harness, reply
+
+    original = tmp_path / "historical"
+    paths = initialize_run(original, {
+        "run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(), "timeout_seconds": 3,
+        "players": [{"name": "旧玩家", "identity_model": {"model": "old-identity"},
+                     "execution_model": {"protocol": "chat", "model": "old-execution", "max_tokens": 100,
+                                         "base_url": "https://offline.invalid/v1"}}],
+    }, "历史规则")
+    strategy = r"历史策略\n保持字面反斜杠"
+    h = Harness("chat", [reply(bid_reply(2, strategy=strategy), tool=True)])
+    executor = AgentExecutor(h.factory, capture_requests=True)
+    result = executor(Agent(None, output_type=ToolOutput(BidOutput, name="bid")), "历史工具任务", [])
+    AgentLog("旧玩家", paths.player(1), readable_path=paths.player(1, readable=True),
+             capture_path=paths.capture(1)).success(
+                 {"task": "bid", "phase": "bid", "context": "第1局第2天"}, result)
+    before = {path.relative_to(original): path.read_bytes() for path in original.rglob("*") if path.is_file()}
+    copied = copytree(original, tmp_path / "replay-copy")
+    replay = export_replay(copied, "旧玩家", capture_definitions=True, debug=True)
+    content = replay.read_text(encoding="utf-8")
+    assert "调用工具 `bid`" in content and "出价工具定义（chat）" in content
+    entries = [json.loads(line) for line in RunPaths(copied).player(1).read_text(encoding="utf-8").splitlines()]
+    load_requests(RunPaths(copied).capture(1), entries)
+    assert entries[0]["result"] == bid_reply(2, strategy=strategy)
+    kinds = {part["part_kind"] for message in entries[0]["messages"] for part in message["parts"]}
+    assert {"tool-call", "tool-return"} <= kinds
+    assert entries[0]["requests"][0]["parameters"]["output_tools"][0]["name"] == "bid"
+    raw_args = entries[0]["requests"][0]["response"]["parts"][0]["args"]
+    assert raw_args in content and json.loads(raw_args)["strategy"] == strategy
+    assert {path.relative_to(original): path.read_bytes() for path in original.rglob("*") if path.is_file()} == before

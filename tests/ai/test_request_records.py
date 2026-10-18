@@ -41,6 +41,17 @@ def test_actual_capture_rebuild_after_failure_rollback_and_summary(tmp_path):
     entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
     load_requests(tmp_path / "capture.jsonl", entries)
     assert [record for entry in entries for record in entry["requests"]] == captured
+    for entry in entries:
+        for record in entry["requests"]:
+            assert record["parameters"]["output_tools"] == []
+            assert record["parameters"]["function_tools"] == []
+            assert record["parameters"].get("output_object") is None
+            if "response" in record:
+                assert all(part["part_kind"] == "text" for part in record["response"]["parts"])
+    raw = [part["content"] for entry in entries for record in entry["requests"]
+           for part in record.get("response", {}).get("parts", [])]
+    assert sum('<decision>\n{"bid": "bad", "super_bid": null}\n</decision>' in text for text in raw) == 2
+    assert raw[-1] == "summary"
     rows = [json.loads(line) for line in (tmp_path / "capture.jsonl").read_text(encoding="utf-8").splitlines()]
     assert any(row["prefix"] > 0 for row in rows[1:])
     rows[0]["settings"] = "missing-definition"

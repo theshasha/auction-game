@@ -1,4 +1,4 @@
-"""Offline production Agent / SDK wire contracts; see docs/pydantic-ai-integration.md.
+"""Offline production Agent / SDK wire contracts.
 
 No dotenv, provider discovery or real HTTP: every SDK gets a fake key and MockTransport.
 Successful-stream checking and SDK construction use the production model factory.
@@ -13,7 +13,7 @@ import httpx2 as http
 
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
-from tests.support.factories import TEST_GAME
+from tests.support.factories import TEST_GAME, text_reply
 from auction_game.ai.llm_client import ModelFactory
 from auction_game.ai.agent_tasks import AuctionDeps, make_agent as production_agent
 
@@ -28,8 +28,10 @@ def make_agent(model):
     return production_agent(model, "bid", settings={"timeout": 3.0, "max_tokens": 123})
 
 
-def sse(protocol, data=GOOD, *, ending="ok", tool=True, tool_name="bid", tool_id="call_1", text="no tool", thinking=None):
-    """Small wire fixtures, split JSON arguments across genuine SSE deltas."""
+def sse(protocol, data=GOOD, *, ending="ok", tool=False, tool_name="bid", tool_id="call_1", text=None, thinking=None):
+    """真实 SSE 文本夹具；tool=True 只用于旧工具消息与错误回复。"""
+    if text is None:
+        text = text_reply(data)
     args = json.dumps(data)
     halves = (args[:len(args) // 2], args[len(args) // 2:])
     events = []

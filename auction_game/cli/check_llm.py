@@ -10,20 +10,22 @@ import json
 from auction_game.configuration import ConfigurationError, channel_model_profile, load_configuration
 from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
 from auction_game.ai.agent_execution import AgentExecutor
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic_ai import Agent, ToolOutput
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 from pydantic_ai.usage import UsageLimits
 
 PING_HISTORY = [ModelRequest(parts=[SystemPromptPart("你是一个简洁的助手。")])]
-PING_PROMPT = "调用 ping 工具，reply 填写 OK。"
-
-class PingOutput(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    reply: str = Field(min_length=1)
+PING_PROMPT = "只回复两个大写字母 OK，不要添加空白或其他内容。"
 
 
-PING_AGENT = Agent(output_type=ToolOutput(PingOutput, name="ping"), retries=0)
+PING_AGENT = Agent(output_type=str, retries=0)
+
+
+@PING_AGENT.output_validator
+def validate_ping(reply: str) -> str:
+    if reply != "OK":
+        raise ModelRetry("连通探测要求回复严格为 OK。")
+    return reply
 
 
 def main(argv=None) -> int:
@@ -89,7 +91,7 @@ def main(argv=None) -> int:
         started = time.monotonic()
         try:
             reply = executor(PING_AGENT, PING_PROMPT, PING_HISTORY,
-                             usage_limits=UsageLimits(request_limit=1)).output.reply
+                             usage_limits=UsageLimits(request_limit=1)).output
         except Exception as exc:
             print(f"[调用失败] {label}: {type(exc).__name__}: {exc}")
             failures += 1

@@ -6,12 +6,12 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic_ai.messages import ModelMessagesTypeAdapter, ToolCallPart, ToolReturnPart, RetryPromptPart
+from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPromptPart
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 from pydantic_ai import Agent, ModelRetry, RunContext
 
 from auction_game.ai.agent_execution import AgentExecutor, OutputFailedError
-from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player
+from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, text_reply
 from auction_game.ai import prompts
 from auction_game.reporting.request_records import load_requests
 
@@ -40,7 +40,7 @@ def test_player_passes_prompt_switches_into_native_request(enable_predictions, e
 @pytest.mark.parametrize("invalid", [
     {"strategy": "s", "bid": 2}, bid_reply("2"), bid_reply(True), bid_reply(2.0),
     bid_reply(2, True), bid_reply(2, 2.0), bid_reply(2, "None"), bid_reply(2, "3"),
-    bid_reply(2, strategy="  "), bid_reply(2, strategy=True), dict(bid_reply(2), extra=1),
+    bid_reply(2, strategy="  "), "<strategy>missing standalone tags</strategy>", dict(bid_reply(2), extra=1),
 ])
 def test_invalid_output_uses_one_shared_correction(invalid):
     runner = fake_task_runner([invalid, bid_reply(2)])
@@ -68,7 +68,8 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch)
                for message in entry["requests"][1]["messages"] for part in message["parts"])
     assert all(request["response"] for request in entry["requests"])
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-    assert sum(isinstance(p, ToolCallPart) for m in audit for p in m.parts) == 2
+    assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
+        text_reply(bid_reply("2")), text_reply(bid_reply(7))]
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "纠错 1 次，仍失败" in md and "OutputFailedError" in md
     assert "retry-prompt" not in md and "call-1" not in md
@@ -116,16 +117,11 @@ def test_business_history_and_original_audit_survive_rollback(tmp_path):
     player.rollback(checkpoint)
     assert player.messages == middle
     parts = [p for m in player.messages for p in m.parts]
-    assert [p.tool_call_id for p in parts if isinstance(p, ToolCallPart)] == [
-        p.tool_call_id for p in parts if isinstance(p, ToolReturnPart)]
-    assert any(isinstance(p, ToolCallPart) for p in parts)
+    assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
     entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
     assert entries[0]["result"] == bid_reply(1)
     audit = ModelMessagesTypeAdapter.validate_python(entries[0]["messages"])
-    calls = [p for m in audit for p in m.parts if isinstance(p, ToolCallPart)]
-    returns = [p for m in audit for p in m.parts if isinstance(p, ToolReturnPart)]
-    assert calls[0].args_as_dict() == bid_reply(1)
-    assert calls[0].tool_call_id == returns[0].tool_call_id
+    assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
     assert "我的私有分析" in ModelMessagesTypeAdapter.dump_json(middle).decode()
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert md.startswith("# Alpha · 私人对话") and "tool-return" not in md and "私有策略" in md
