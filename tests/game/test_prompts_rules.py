@@ -58,12 +58,11 @@ class TestRulesText:
         text = render_rules(TEST_GAME, NAMES)
         assert "每局 6 天" in text
         assert f"每天拍卖 {TEST_GAME.daily_pool[0]} 分，每局共 {TEST_GAME.auction_pool_per_match} 分拍卖奖池" in text
-        assert "并入次日奖池" in text
+        assert "当天的拍卖分作废，不计入后续奖池。比赛不延长。" in text
         assert "每局开始时每人发放 7 枚金币" in text
         assert "第 2 天起每天开始时每人发放 3 枚金币" in text
         assert "本局结束后金币清零，下一局重新发放" in text
         assert "0~7 的整数" in text
-        assert "第 6 天未拍出的拍卖分作废" in text
 
     def test_super_bid_rules_present(self):
         text = render_rules(TEST_GAME, NAMES)
@@ -102,8 +101,7 @@ class TestRulesText:
         assert "即使该价位有多笔正常出价也算" in text
         assert "自己的正常出价撞车或被狙击" in text
         assert "不影响自己的超级出价命中和领奖" in text
-        assert "流局照常发放命中奖励，本局最后一天流局也一样" in text
-        assert "命中获得的分数当天计入玩家成绩，不会加入第二天的拍卖奖池" in text
+        assert "流局照常发放命中奖励，命中获得的分数当天计入玩家成绩。" in text
 
     def test_rankings_and_playoffs_only_use_cumulative_scores(self):
         text = render_rules(TEST_GAME, NAMES)
@@ -129,7 +127,7 @@ class TestRulesText:
         assert "最后一局正赛及每局加赛" in text
         assert "本局剩余拍卖分" in text
         assert "每人最多还能获得的命中分：剩余天数 × 2" in text
-        assert "今天的奖池加上本局之后每天的基础奖池，包含之前流局并入的分数" in text
+        assert "今天及本局之后每天的奖池之和。" in text
         assert "剩余天数包含今天" in text
         assert "理论上限，未考虑金币是否够用和命中难度，每人分别计算" in text
         assert "开赛前，每人有一次公开发言" in text
@@ -153,7 +151,8 @@ class TestRulesText:
         assert "3 名玩家参赛（甲、乙、丙）" in text
         assert "共 2 局正赛，每局 3 天" in text
         assert "第 1 天 2 分、第 2 天 1 分、第 3 天 3 分" in text
-        assert "每局基础奖池合计 6 分" in text
+        assert "各日奖池依次为" in text
+        assert "每局奖池合计 6 分" in text
         assert "发放 11 枚金币" in text and "发放 4 枚金币" in text
         assert "0~9 的整数" in text and "固定花费 3 金币" in text
         assert "发放 5 金币悬赏，并获 6 分" in text
@@ -161,7 +160,7 @@ class TestRulesText:
         assert "剩余天数 × 6" in text
         assert "最多加赛 4 局" in text
         assert "他们都是并列冠军" in text
-        assert "第 3 天未拍出的拍卖分作废" in text
+        assert "当天的拍卖分作废，不计入后续奖池。比赛不延长。" in text
         assert "{" not in text and "}" not in text
         system = prompts.build_system_prompt("甲", "人设", "正文", [], names, game)
         assert system.startswith(text)

@@ -13,7 +13,7 @@ from tests.support.factories import (
 def test_events_are_first_only_and_share_the_actual_request():
     days = [
         make_day(1, [0] * 6, 4, None, None, [0], is_void=True, super_bids={NAMES[0]: 1}),
-        make_day(2, [0, 1, 0, 0, 0, 2], 8, NAMES[1], 1, [0, 2], 8,
+        make_day(2, [0, 1, 0, 0, 0, 2], 4, NAMES[1], 1, [0, 2], 4,
                  super_bids={NAMES[0]: (2, True), NAMES[1]: (2, True)}),
     ]
     matches = [{"match": make_log(days=days).to_dict()},
@@ -28,7 +28,8 @@ def test_events_are_first_only_and_share_the_actual_request():
     selected = _select_entries(entries, matches)
     assert set(selected) == {0, 1, 2, 3}
     assert "首次超级落空" in selected[0] and "首次流局" in selected[0]
-    assert "首次超级命中" in selected[1] and "首次滚存获胜" in selected[1]
+    assert "首次超级命中" in selected[1]
+    assert all("滚存" not in title for title in selected.values())
     assert selected[3] == "第2局第2天 · 出价 · 加赛关键日"
     assert _entry_day(entries[2]) == (2, 1)
     assert _entry_day(entries[3]) == (2, 2)
@@ -40,7 +41,7 @@ def test_void_day_still_shows_each_super_hit_score():
                    super_bids={NAMES[0]: (1, True), NAMES[1]: (0, True), NAMES[2]: (2, False)})
     match = make_log(days=[day]).to_dict()
     text = "\n".join(_settlement_lines(match, match["days"][0], NAMES[0]))
-    assert "当日流局，拍卖得分 0 分" in text
+    assert "当日流局，奖池作废，拍卖得分 0 分" in text
     assert f"{NAMES[2]} 出 2，落空，命中得分 0 分" in text
     assert f"{NAMES[1]} 出 0，命中，命中得分 {TEST_GAME.super_hit_score} 分" in text
     assert f"{NAMES[1]} {TEST_GAME.super_hit_score} 分" in text

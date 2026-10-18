@@ -171,8 +171,6 @@ def _select_entries(entries, matches):
                 events.append("首次超级命中")
             if day["is_void"]:
                 events.append("首次流局")
-            if day["winner"] is not None and day["pool"] > match["game"]["daily_pool"][day["day"] - 1]:
-                events.append("首次滚存获胜")
             if match["is_playoff"] and (day["winner"] is not None or any(use["hit"] for use in uses)):
                 events.append("加赛关键日")
             i = nodes.get((match["match_index"], day["day"]))
@@ -193,7 +191,7 @@ def _settlement_lines(match, day, player):
         super_uses=day["super_uses"], game=game,
     )
     result = (f"获胜者 {day['winner']}，拍卖得分 {day['auction_score']} 分。" if day["winner"] is not None
-              else "当日流局，拍卖得分 0 分。")
+              else "当日流局，奖池作废，拍卖得分 0 分。")
     lines = [result]
     if day["super_uses"]:
         lines.append("超级出价：" + "；".join(

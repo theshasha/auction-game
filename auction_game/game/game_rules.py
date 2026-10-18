@@ -41,7 +41,7 @@ class GameSettings:
 
     @property
     def auction_pool_per_match(self) -> int:
-        """本局所有基础奖池的总和；最后一天流局时，实际发放的分数可能更少。"""
+        """本局每日奖池的总和；流局当天的拍卖分作废，实际发放的分数可能更少。"""
         return sum(self.daily_pool)
 
     @classmethod

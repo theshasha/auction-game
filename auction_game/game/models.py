@@ -28,7 +28,7 @@ class DayResult:
 
     day: int
     bids: list[BidRecord]
-    pool: int                    # 当天拍卖分（含流局并入）
+    pool: int                    # 当天配置奖池，流局时仍记录作废前的金额
     winner: Optional[str]        # None 表示流局
     winning_bid: Optional[int]
     auction_score: int           # 获胜者取得的拍卖分（恒等于 pool；流局为 0）
@@ -38,7 +38,7 @@ class DayResult:
     # 当天撞车价位的具体数值（升序；只含正常出价被扣款的价位：
     # 正常出价互撞 ≥2 笔 + 被超级出价命中（≥1 笔正常出价）的数值）
     collision_values: list[int] = field(default_factory=list)
-    is_void: bool = False            # 是否流局（奖池并入次日；本局最后一天流局则作废）
+    is_void: bool = False            # 是否流局（当天拍卖分作废）
 
     def public_view(self) -> dict:
         """规则四.1：第 2 天起每天开始时公布昨日完整出价明细（全场玩家的
@@ -136,7 +136,7 @@ class Observation:
     my_match_auction_score: int  # 本局已取得的拍卖分
     my_total_auction_score: int  # 含本局在内的累计拍卖分
     day: int                     # 当前第几天（1 起）
-    today_pool: int              # 当天拍卖分（含流局并入）
+    today_pool: int              # 当天配置奖池
     today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）
     standings: list[StandingsEntry]   # 截至昨日结算后的累计排名
     past_match_logs: list[dict]  # 已结束各局的完整公开日志

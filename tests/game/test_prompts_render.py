@@ -58,22 +58,21 @@ class TestRenderMatchLog:
         assert "未进行任何拍卖" in prompts.render_match_log(log)
         assert "本局得分：甲 0 分" in prompts.render_match_log(log)
 
-    def test_custom_last_day_void_forfeits_pool(self):
+    def test_each_void_day_forfeits_its_own_pool(self):
         log = make_log(
             days=[
-                make_day(2, [2, 2, 2, 1, 1, 1], 3, None, None, [1, 2], is_void=True),
-                make_day(3, [2, 2, 2, 1, 1, 1], 6, None, None, [1, 2], is_void=True),
+                make_day(2, [2, 2, 2, 1, 1, 1], 1, None, None, [1, 2], is_void=True),
+                make_day(3, [2, 2, 2, 1, 1, 1], 3, None, None, [1, 2], is_void=True),
             ],
             game=replace(TEST_GAME, daily_pool=(2, 1, 3)),
         )
         text = prompts.render_match_log(log)
-        assert "| 流局 | 1、2 |" in text
-        assert "流局（奖池作废） | 1、2 |" in text
+        assert text.count("| 流局（奖池作废） | 1、2 |") == 2
         assert "2（撞车）" in text and "1（撞车）" in text
 
     @pytest.mark.parametrize("hit_score, expected", [(3, 5), (0, 2)])
     def test_custom_hit_score_and_void_hits(self, hit_score, expected):
-        game = replace(TEST_GAME, daily_pool=(1, 1), super_hit_score=hit_score)
+        game = replace(TEST_GAME, daily_pool=(1, 2), super_hit_score=hit_score)
         log = make_log(
             days=[
                 make_day(1, [2, 2, 2, 1, 1, 1], 1, None, None, [1, 2], is_void=True,
@@ -87,7 +86,7 @@ class TestRenderMatchLog:
         )
         text = prompts.render_match_log(log)
         void_scores = f"甲 {hit_score}、乙 {hit_score}" if hit_score else "—"
-        assert f"| 流局 | 1、2 | {void_scores} |" in text
+        assert f"| 流局（奖池作废） | 1、2 | {void_scores} |" in text
         assert f"| 甲 以 5 金币获胜 | 4 | 甲 {expected} |" in text
         assert text.count("当日得分仅列非零玩家，未列者为 0 分。") == 1
         assert f"本局得分：甲 {expected + hit_score} 分、乙 {hit_score} 分" in text

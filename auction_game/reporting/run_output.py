@@ -109,7 +109,7 @@ def print_day_result(log: MatchLog, standings: list[StandingsEntry], coins: dict
     kind = "加赛" if log.is_playoff else "正赛"
     print(f"\n===== 第 {log.match_index} 局（{kind}）第 {day.day} 天 =====")
     if day.is_void:
-        outcome = "流局，奖池作废" if day.day == log.game.max_days else "流局，奖池滚存至次日"
+        outcome = "流局，奖池作废"
     else:
         outcome = f"{day.winner} 以 {day.winning_bid} 金币获胜"
     print(f"奖池 {day.pool} 分；{outcome}。")

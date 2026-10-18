@@ -15,7 +15,7 @@ from auction_game.reporting.run_output import initialize_run, make_publish, prin
 from tests.support.factories import NAMES, TEST_GAME, bids_by_day, make_standings, run_scenario
 
 
-def test_daily_report_shows_winner_hits_rollover_void_and_settled_balances(capsys):
+def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(capsys):
     game = replace(TEST_GAME, initial_coins=20, max_bid=9, super_bounty=5,
                    super_hit_score=3, daily_pool=(1, 2, 3), regular_matches=1, max_playoffs=0)
     strategy = bids_by_day({1: [4, 4, 9, 2, 1, 0], 2: [2, 2, 1, 1, 0, 0], 3: [0] * 6})
@@ -40,9 +40,9 @@ def test_daily_report_shows_winner_hits_rollover_void_and_settled_balances(capsy
     assert "| 1 | 己 | 3 | 23 |" in first
     assert "| 3 | 丙 | 1 | 11 |" in first
     assert first.index("| 1 | 丁") < first.index("| 3 | 丙")
-    assert "奖池 2 分；流局，奖池滚存至次日。" in second
+    assert "奖池 2 分；流局，奖池作废。" in second
     assert "超级命中：丁 +3 分。" in second
-    assert "奖池 5 分；流局，奖池作废。" in last
+    assert "奖池 3 分；流局，奖池作废。" in last
     assert "超级命中：无。" in last
     assert all(word not in "".join(reports) for word in ["争冠", "上限", "锁冠", "私有分析"])
 
@@ -118,9 +118,9 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert (paths.match(1, readable=True).parent / "../RULES.md").resolve() == paths.root / "RULES.md"
     assert "奖池和得分的单位为分，正常出价的单位为金币。\n\n| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分 |" in report
     assert "4（撞车） | 4（撞车）；超级出价 3（落空） | 9（获胜） | 2（退款）；超级出价 4（命中）" in report
-    assert "| 流局 | 0、1、2 |" in report
-    assert "| 流局 | 0、1、2 | 丁 2 |" in report
-    assert "| 3 | 5 |" in report and "| 流局（奖池作废） | 0、1、2 |" in report
+    assert report.count("| 流局（奖池作废） | 0、1、2 |") == 2
+    assert "| 流局（奖池作废） | 0、1、2 | 丁 2 |" in report
+    assert "| 3 | 3 |" in report
     for text in [report, prompts.match_end_speech_request(log, standings, True),
                  prompts.final_speech_request(standings, log)]:
         assert prompts.render_match_log(log) in text
@@ -148,4 +148,6 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
         "player": "甲", "raw_bid": -1, "bid": 0, "status": "illegal", "is_super": False,
     }
     assert days[1]["is_void"] and days[2]["is_void"]
+    assert [day["pool"] for day in days] == [1, 2, 3]
+    assert [day["auction_score"] for day in days] == [1, 0, 0]
     assert days[1]["super_uses"] == [{"player": "丁", "value": 2, "hit": True}]

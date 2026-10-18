@@ -31,7 +31,7 @@ def render_rules(game: GameSettings, names: list[str], *, include_note: bool = T
             for day, amount in enumerate(game.daily_pool, 1)
         )
         pool_description = (
-            f"各日基础奖池依次为：{daily_amounts}。每局基础奖池合计 {game.auction_pool_per_match} 分。"
+            f"各日奖池依次为：{daily_amounts}。每局奖池合计 {game.auction_pool_per_match} 分。"
         )
     values = {
         **game.to_dict(),

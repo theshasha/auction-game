@@ -313,8 +313,45 @@ def test_current_game_configuration_smoke(tmp_path, demo_configuration):
     assert all(factory.opened == factory.closed for factory in factories)
 
 
+def test_analysis_and_replay_reject_old_rollover_pool_without_writing_logs(
+        tmp_path, monkeypatch, demo_configuration):
+    from shutil import copytree
+
+    game = GameSettings(
+        initial_coins=0, daily_salary=1, daily_pool=(2, 5), max_bid=7,
+        super_cost=2, super_bounty=3, super_hit_score=2,
+        regular_matches=1, max_playoffs=0,
+    )
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+    original = tmp_path / "original"
+    generate_demo(original, test_model=True)
+    copied = copytree(original, tmp_path / "legacy-copy")
+    paths = RunPaths(copied)
+    payload = json.loads(paths.match(1).read_text(encoding="utf-8"))
+    match = payload["match"]
+    first, second = match["days"]
+    assert first["is_void"] and first["pool"] == 2 and first["auction_score"] == 0
+    winner = second["winner"]
+    assert winner is not None and second["pool"] == second["auction_score"] == 5
+    # 临时副本模拟旧规则的完整滚存结算；原场次始终保持原样。
+    second.update(pool=7, auction_score=7)
+    match["auction_scores"][winner] = match["scores"][winner] = 7
+    standing = next(entry for entry in payload["standings_after_match"] if entry["player"] == winner)
+    standing.update(total_score=7, total_auction_score=7,
+                    scores_per_match=[7], auction_scores_per_match=[7])
+    paths.match(1).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    before = {path: path.read_bytes() for root in (original, copied)
+              for path in root.rglob("*") if path.is_file()}
+    with pytest.raises(ValueError, match="001.json.*第 2 天 pool.*本场配置当日奖池"):
+        analyze.analyze(copied)
+    with pytest.raises(ValueError, match="001.json.*第 2 天 pool.*本场配置当日奖池"):
+        export_replay(copied, winner, capture_definitions=True, debug=True)
+    assert {path: path.read_bytes() for root in (original, copied)
+            for path in root.rglob("*") if path.is_file()} == before
+
+
 @pytest.mark.parametrize("regular_matches,bounty", [(5, 7), (2, 5)])
-def test_rich_demo_rollover_super_hits_and_single_playoff(
+def test_rich_demo_discards_void_pool_super_hits_and_single_playoff(
         tmp_path, monkeypatch, demo_configuration, regular_matches, bounty):
     game = GameSettings(
         initial_coins=12, daily_salary=6, daily_pool=(3, 3, 3, 3, 3), max_bid=10,
@@ -345,11 +382,12 @@ def test_rich_demo_rollover_super_hits_and_single_playoff(
         assert all(bid["status"] == "ok" for day in match["days"] for bid in day["bids"])
         assert first["is_void"] and first["winner"] is None and first["auction_score"] == 0
         assert first["super_uses"] == [{"player": names[0], "value": 1, "hit": False}]
-        assert second["pool"] == game.daily_pool[0] + game.daily_pool[1]
+        assert [day["pool"] for day in match["days"]] == list(game.daily_pool)
+        assert second["pool"] == game.daily_pool[1]
         assert second["winner"] == winner and second["auction_score"] == second["pool"]
         assert second["super_uses"] == [{"player": name, "value": 2, "hit": True} for name in names[:2]]
         assert all(day["winner"] == winner and not day["super_uses"] for day in later)
-        assert match["auction_scores"] == {name: game.auction_pool_per_match if name == winner else 0
+        assert match["auction_scores"] == {name: sum(game.daily_pool[1:]) if name == winner else 0
                                             for name in names}
         assert match["scores"] == {name: match["auction_scores"][name] + int(name in names[:2])
                                    for name in names}
@@ -358,10 +396,10 @@ def test_rich_demo_rollover_super_hits_and_single_playoff(
         if number == regular_matches:
             assert totals[names[0]] == totals[names[1]] == max(totals.values())
             if regular_matches == 5:
-                assert [totals[name] for name in names[:3]] == [35, 35, 15]
+                assert [totals[name] for name in names[:3]] == [29, 29, 12]
     assert totals[names[0]] > max(totals[name] for name in names[1:])
     if regular_matches == 5:
-        assert [totals[name] for name in names[:3]] == [51, 36, 15]
+        assert [totals[name] for name in names[:3]] == [42, 30, 12]
     expected_calls = 2 + len(matches) * (game.max_days - 1) + 3 * (len(matches) - 1) + 2
     assert all(factory.opened == factory.closed == factory.calls == expected_calls for factory in factories)
     entries = [json.loads(line) for line in paths.player(1).read_text(encoding="utf-8").splitlines()]
@@ -378,9 +416,11 @@ def test_rich_demo_rollover_super_hits_and_single_playoff(
     assert all(saved["identity_model"]["model"] != saved["execution_model"]["model"]
                for saved in snapshot["players"])
     replay = replay_path.read_text(encoding="utf-8")
-    for event in ("首次超级落空", "首次超级命中", "首次流局", "首次滚存获胜", "加赛关键日"):
+    for event in ("首次超级落空", "首次超级命中", "首次流局", "加赛关键日"):
         assert replay.count(event) == 1
-    assert "获胜者 甲，拍卖得分 6 分" in replay
+    assert "首次滚存获胜" not in replay
+    assert "获胜者 甲，拍卖得分 3 分" in replay
+    assert "当日流局，奖池作废，拍卖得分 0 分" in replay
     assert "甲 出 1，落空，命中得分 0 分" in replay
     assert "甲 出 2，命中，命中得分 1 分" in replay
     assert "实际执行：假模型 FunctionModel" in replay

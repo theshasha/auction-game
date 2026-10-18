@@ -26,7 +26,7 @@ class TestMyLastDayObservation:
             assert not obs.my_last_collided and not obs.my_last_bid_illegal
 
     def test_crash_winner_refund_fields(self):
-        # 第 1 天：己唯一 1 获胜（奖池不滚存）；第 2 天：6、5、5、3、2、0 →
+        # 第 1 天：己唯一 1 获胜；第 2 天：6、5、5、3、2、0 →
         # 甲出 6 唯一获胜扣 6（拿全部奖池 4 分），乙丙出 5 撞车各扣 5，
         # 丁出 3、戊出 2 唯一未中退还；第 3 天的 Observation 回看第 2 天
         captured = {}

@@ -180,7 +180,7 @@ def bid_request(obs: Observation) -> str:
     yesterday = obs.today_history[-1]
     winner = None if yesterday["winner"] == "流局" else yesterday["winner"]
     if winner is None:
-        announcement = f"昨日公布：流局，奖池 {yesterday['pool']} 分并入今日。"
+        announcement = f"昨日公布：流局，奖池 {yesterday['pool']} 分作废。"
     else:
         announcement = (
             f"昨日公布：{winner} 以 {yesterday['winning_bid']} 金币的正常出价获胜，"
@@ -245,7 +245,7 @@ def render_match_log(log: MatchLog) -> str:
                     cell += "（落空）"
             cells.append(cell)
         if day.is_void:
-            outcome = "流局（奖池作废）" if day.day == log.game.max_days else "流局"
+            outcome = "流局（奖池作废）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 金币获胜"
         collision_text = "、".join(str(value) for value in day.collision_values) or "—"

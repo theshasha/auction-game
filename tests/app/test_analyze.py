@@ -95,7 +95,7 @@ def test_score_matrices_and_top_match_counts():
 @pytest.mark.parametrize("all_void", [False, True])
 def test_solo_top_and_all_zero_tied_matches(all_void, tmp_path, capsys):
     days = [
-        make_day(day, [2, 2] if all_void else [2, 1], day if all_void else 1,
+        make_day(day, [2, 2] if all_void else [2, 1], 1,
                  None if all_void else "甲", None if all_void else 2,
                  [2] if all_void else [], 0 if all_void else 1, is_void=all_void)
         for day in (1, 2)
@@ -217,7 +217,7 @@ def test_super_result_days_compare_all_supers_once_without_changing_logs(
     days = [
         make_day(1, bids, 1, winner, winning_bid, collisions, int(winner is not None),
                  is_void=winner is None, super_bids=super_bids),
-        make_day(2, [0] * len(bids), 2 if winner is None else 1, None, None, [0], is_void=True),
+        make_day(2, [0] * len(bids), 1, None, None, [0], is_void=True),
     ]
     names = [bid.player for bid in days[0].bids if not bid.is_super]
     auction_scores = {name: int(name == winner) for name in names}
@@ -259,7 +259,7 @@ def test_super_collision_hits_include_void_days_and_illegal_effective_zero(tmp_p
     days = [
         make_day(1, [0, 0, 3, 3], 1, None, None, [0, 3], is_void=True,
                  super_bids={"乙": (3, True), "丙": (0, True), "丁": (0, True)}),
-        make_day(2, [0, 0, 0, 0], 2, None, None, [0], is_void=True),
+        make_day(2, [0, 0, 0, 0], 1, None, None, [0], is_void=True),
     ]
     days[0].bids[0].raw_bid = 7
     days[0].bids[0].status = "illegal"  # 有效正常 0 参与互撞，原始 7 不参与。
@@ -557,11 +557,11 @@ def test_invalid_game_snapshot_is_rejected():
 def test_mean_bids_exclude_void_days_but_include_illegal_zero(tmp_path, capsys):
     days = [
         make_day(1, [2, 2, 2, 2, 2, 2], 1, None, None, [2], is_void=True),
-        make_day(2, [0, 3, 0, 2, 5, 4], 2, "戊", 5, [0], 2),
+        make_day(2, [0, 3, 0, 2, 5, 4], 1, "戊", 5, [0], 1),
     ]
     days[1].bids[0].status = "illegal"
     days[1].bids[0].raw_bid = -1
-    points = {"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 2, "己": 0}
+    points = {"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 1, "己": 0}
     match = make_log(days=days, auction_scores=points, scores=points,
                      game=ANALYZE_GAME).to_dict()
     rows = rows_by_name(collect_player_stats([{"match": match}]))
@@ -575,6 +575,7 @@ def test_mean_bids_exclude_void_days_but_include_illegal_zero(tmp_path, capsys):
     analyze(tmp_path)
     output = capsys.readouterr().out
     assert "第 1 天：出价 —（全流局），奖池 1.00" in output
+    assert "第 2 天：出价 2.33（6 笔），奖池 1.00" in output
     assert "全天总体：平均 2.33（6 笔）" in output
 
 
@@ -582,13 +583,13 @@ def test_aggregate_zero_bids_include_super_but_player_zero_bids_only_normal(tmp_
     days = [
         make_day(1, [0, 0, 1, 1, 0, 0], 1, None, None, [0, 1], is_void=True,
                  super_bids={"丙": (0, True)}),
-        make_day(2, [1, 0, 2, 3, 4, 5], 2, "己", 5, [0], 2,
+        make_day(2, [1, 0, 2, 3, 4, 5], 1, "己", 5, [0], 1,
                  super_bids={"甲": (0, True)}),
     ]
     days[0].bids[0].status = "illegal"
     days[0].bids[0].raw_bid = -1
-    match = make_log(days=days, auction_scores={"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 2},
-                     scores={"甲": 2, "乙": 0, "丙": 2, "丁": 0, "戊": 0, "己": 2},
+    match = make_log(days=days, auction_scores={"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 1},
+                     scores={"甲": 2, "乙": 0, "丙": 2, "丁": 0, "戊": 0, "己": 1},
                      game=ANALYZE_GAME).to_dict()
     rows = rows_by_name(collect_player_stats([{"match": match}]))
     assert rows["甲"]["zero_bids"] == 1  # 流局日正常 0 计入，两笔超级 0 不计
@@ -630,6 +631,26 @@ def test_daily_auction_scores_follow_pool(field, value):
     match["days"][0][field] = value
     with pytest.raises(ValueError, match=field):
         validate_match(match)
+
+
+@pytest.mark.parametrize("second_void", [False, True])
+@pytest.mark.parametrize("entrypoint", [validate_match, recompute_remaining_coins,
+                                       validate_matches, collect_player_stats])
+def test_statistics_reject_old_rollover_pool_even_with_consistent_scores(second_void, entrypoint):
+    game = replace(ANALYZE_GAME, daily_pool=(2, 5))
+    days = [
+        make_day(1, [2, 2], 2, None, None, [2], is_void=True),
+        make_day(2, [1, 1] if second_void else [1, 0], 7,
+                 None if second_void else "甲", None if second_void else 1,
+                 [1] if second_void else [], 0 if second_void else 7, is_void=second_void),
+    ]
+    points = {"甲": 0 if second_void else 7, "乙": 0}
+    match = make_log(days=days, auction_scores=points, scores=points, game=game).to_dict()
+    data = [{"match": match}] if entrypoint in (validate_matches, collect_player_stats) else match
+    original = deepcopy(data)
+    with pytest.raises(ValueError, match="第 2 天 pool.*本场配置当日奖池"):
+        entrypoint(data)
+    assert data == original
 
 
 @pytest.mark.parametrize("entrypoint", [validate_match, recompute_remaining_coins,
@@ -692,9 +713,8 @@ def test_void_result_must_follow_effective_bids_even_with_consistent_scores():
     match = make_match_1()
     day = match["days"][0]
     day.update(winner=None, winning_bid=None, is_void=True, auction_score=0)
-    match["days"][1].update(pool=2, auction_score=2)
-    match["auction_scores"].update(乙=0, 己=2)
-    match["scores"].update(乙=2, 己=2)
+    match["auction_scores"].update(乙=0)
+    match["scores"].update(乙=2)
     with pytest.raises(ValueError, match="is_void"):
         validate_match(match)
 

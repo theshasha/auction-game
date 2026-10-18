@@ -103,11 +103,10 @@ def validate_match(match: dict) -> tuple[GameSettings, list[str]]:
                          f"实际为 {day_indices}")
     auction_scores = dict.fromkeys(player_names, 0)
     scores = dict.fromkeys(player_names, 0)
-    carry = 0
     for day in match["days"]:
-        expected_pool = game.daily_pool[day["day"] - 1] + carry
+        expected_pool = game.daily_pool[day["day"] - 1]
         if type(day["pool"]) is not int or day["pool"] != expected_pool:
-            raise ValueError(f"第 {day['day']} 天 pool 与配置奖池及流局滚存不一致")
+            raise ValueError(f"第 {day['day']} 天 pool 与本场配置当日奖池不一致（流局奖池作废）")
         effective_bids = [BidRecord(player=bid["player"], raw_bid=bid["raw_bid"], bid=bid["bid"],
                                     status=bid["status"], is_super=bid["is_super"])
                           for bid in day["bids"]]
@@ -135,7 +134,6 @@ def validate_match(match: dict) -> tuple[GameSettings, list[str]]:
             auction_scores[day["winner"]] += day["auction_score"]
         for name in player_names:
             scores[name] += daily_scores[name]
-        carry = day["pool"] if day["is_void"] else 0
     for field, expected in (("auction_scores", auction_scores), ("scores", scores)):
         if match[field] != expected:
             raise ValueError(f"日志 match.{field} 与每日计分累计不一致")

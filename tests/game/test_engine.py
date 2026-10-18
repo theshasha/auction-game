@@ -1,7 +1,7 @@
 """单局规则引擎的边界测试：出价校验、胜负判定、金币结算、流局奖池与参数贯通。
 主要使用 ScriptedPlayer 构造确定性场景（场景构造器见 conftest.py）。
 
-测试基准参数：每局固定 6 天，每天奖池固定 4 分（流局并入次日）；
+测试基准参数：每局固定 6 天，每天奖池固定 4 分（流局当天作废）；
 超级出价不限次数（每天最多 1 笔），每次提交固定消耗 2 金币，0~7、不能等于
 当天正常出价、与正常出价合计不得超过余额、不能获胜；命中（其数值上 ≥1 笔
 正常出价）则该数值全部正常出价按撞车处理，狙击者获得系统印发的 3 金币悬赏。
@@ -153,16 +153,16 @@ class TestCoinSettlement:
         assert record_jia.raw_bid == 4
         assert record_jia.bid == 0 and record_jia.status == "illegal"
         assert day2.winner == "乙" and day2.winning_bid == 3
-        assert day2.pool == 8  # 第 1 天奖池 4 分并入：4 + 4 = 8
-        assert log.auction_scores["乙"] == 8
+        assert day2.pool == 4
+        assert log.auction_scores["乙"] == 4
 
 
-class TestPoolRollover:
-    """流局奖池并入次日；第 6 天流局（或未拍出）则作废。每天基础奖池 4 分。"""
+class TestPoolDiscard:
+    """流局当天的拍卖分作废，后续每天只使用当天配置奖池。"""
 
-    def test_late_pool_includes_full_rollover(self):
-        # 前 4 天流局，第 5 天唯一上限价获胜，领取全部滚存奖池 20 分；
-        # 第 6 天奖池重置为 4 分。
+    def test_late_winner_only_receives_that_days_pool(self):
+        # 前 4 天流局，第 5、6 天获胜也只能领取各自当天的奖池。
+        game = replace(TEST_GAME, daily_pool=(2, 3, 4, 5, 6, 7))
         cap = TEST_GAME.max_bid
         log = run_scenario({
             1: [1, 1, 1, 1, 1, 1],
@@ -171,13 +171,13 @@ class TestPoolRollover:
             4: [1, 1, 1, 1, 1, 1],
             5: [cap, 5, 4, 3, 2, 0],
             6: [cap, 5, 4, 3, 2, 0],
-        })
-        assert [day.pool for day in log.days] == [4, 8, 12, 16, 20, 4]
+        }, game=game)
+        assert [day.pool for day in log.days] == [2, 3, 4, 5, 6, 7]
         assert all(day.is_void and day.winner is None for day in log.days[:4])
         day5 = log.days[4]
         assert day5.winner == "甲" and day5.winning_bid == cap
-        assert day5.auction_score == 20
-        assert log.auction_scores["甲"] == 24
+        assert day5.auction_score == 6
+        assert log.auction_scores["甲"] == 13
 
 
 class TestFixedSixDays:
@@ -194,7 +194,7 @@ class TestFixedSixDays:
         assert all(record.status == "ok" for day in log.days for record in day.bids)
 
     def test_observation_carries_pool_and_salary(self):
-        # 全员每天出 0 撞车：天天流局、无人花钱；奖池 4→…→24，工资每天 +3
+        # 全员每天出 0 撞车：天天流局、无人花钱；每天奖池 4 分，工资每天 +3
         captured = {}
         run_scenario({}, capture=captured)
         seen = [
@@ -203,11 +203,11 @@ class TestFixedSixDays:
         ]
         assert seen == [
             (1, 4, 7, 0, 0),
-            (2, 8, 10, 0, 0),
-            (3, 12, 13, 0, 0),
-            (4, 16, 16, 0, 0),
-            (5, 20, 19, 0, 0),
-            (6, 24, 22, 0, 0),
+            (2, 4, 10, 0, 0),
+            (3, 4, 13, 0, 0),
+            (4, 4, 16, 0, 0),
+            (5, 4, 19, 0, 0),
+            (6, 4, 22, 0, 0),
         ]
 
 
@@ -228,11 +228,10 @@ class TestIllegalBidInMatch:
 
 
 class TestConfiguredMatch:
-    def test_production_winner_can_take_three_points_and_one_hit_point_same_day(self):
+    def test_production_winner_can_take_auction_and_hit_points_same_day(self):
         game = load_game_settings()
-        assert game.daily_pool == (3, 3, 3, 3, 3)
-        assert game.super_hit_score == 1
-        assert game.auction_pool_per_match == 15
+        pool = game.daily_pool[0]
+        score = pool + game.super_hit_score
         captured = {}
         log = run_scenario(
             {1: [6, 6, 4, 3, 2, 1]},
@@ -240,20 +239,24 @@ class TestConfiguredMatch:
             capture=captured,
             game=game,
         )
-        assert log.days[0].pool == log.days[0].auction_score == 3
+        assert log.days[0].pool == log.days[0].auction_score == pool
         assert log.days[0].winner == "丙"
-        assert log.auction_scores == {"甲": 0, "乙": 0, "丙": 3, "丁": 0, "戊": 0, "己": 0}
-        assert log.scores == {"甲": 0, "乙": 0, "丙": 4, "丁": 0, "戊": 0, "己": 0}
-        assert captured["丙"][1].my_match_auction_score == 3
-        assert captured["丙"][1].my_match_score == 4
+        assert log.auction_scores == {"甲": 0, "乙": 0, "丙": pool, "丁": 0, "戊": 0, "己": 0}
+        assert log.scores == {"甲": 0, "乙": 0, "丙": score, "丁": 0, "戊": 0, "己": 0}
+        assert captured["丙"][1].my_match_auction_score == pool
+        assert captured["丙"][1].my_match_score == score
 
-    def test_production_void_rolls_three_points_into_six_point_auction(self):
-        log = run_scenario({2: [1, 0, 0, 0, 0, 0]}, game=load_game_settings())
-        assert [day.pool for day in log.days] == [3, 6, 3, 6, 9]
-        assert [day.auction_score for day in log.days] == [0, 6, 0, 0, 0]
+    def test_production_void_discards_pool_each_day(self):
+        game = load_game_settings()
+        pool = game.daily_pool[1]
+        log = run_scenario({2: [1, 0, 0, 0, 0, 0]}, game=game)
+        assert [day.pool for day in log.days] == list(game.daily_pool)
+        assert [day.auction_score for day in log.days] == [
+            pool if day == 2 else 0 for day in range(1, game.max_days + 1)
+        ]
         assert log.days[0].is_void and log.days[-1].is_void
-        assert log.auction_scores == {"甲": 6, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
-        assert log.scores == {"甲": 6, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
+        assert log.auction_scores == {"甲": pool, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
+        assert log.scores == {"甲": pool, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
 
     def test_random_bot_uses_observed_limit_and_super_cost(self):
         game = GameSettings(
@@ -317,15 +320,17 @@ class TestConfiguredMatch:
         assert log.game is game
         assert log.to_dict()["game"] == game.to_dict()
 
-    def test_custom_last_day_void_discards_accumulated_pool(self):
+    @pytest.mark.parametrize("is_playoff", [False, True])
+    def test_custom_every_void_day_discards_its_pool(self, is_playoff):
         game = GameSettings(
             initial_coins=11, daily_salary=2, daily_pool=(2, 3, 4), max_bid=9,
             super_cost=4, super_bounty=6, super_hit_score=2,
             regular_matches=2, max_playoffs=1,
         )
-        log = run_one_match(constant_strategies([0] * 6), game=game)
+        log = run_one_match(constant_strategies([0] * 6), game=game, is_playoff=is_playoff,
+                            match_index=game.regular_matches + 1 if is_playoff else 1)
         assert len(log.days) == 3
-        assert [day.pool for day in log.days] == [2, 5, 9]
+        assert [day.pool for day in log.days] == [2, 3, 4]
         assert all(day.is_void and day.winner is None and day.auction_score == 0 for day in log.days)
         assert log.auction_scores == {name: 0 for name in ["甲", "乙", "丙", "丁", "戊", "己"]}
         assert log.scores == {"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}

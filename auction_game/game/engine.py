@@ -144,7 +144,6 @@ def run_match(
     coins = {player.name: game.initial_coins for player in players}
     match_auction_scores = {player.name: 0 for player in players}
     match_scores = {player.name: 0 for player in players}
-    rollover = 0  # 流局并入次日奖池的拍卖分
     log = MatchLog(match_index=match_index, is_playoff=is_playoff, game=game)
     past_log_dicts = [past_log.to_dict() for past_log in past_logs]
 
@@ -152,7 +151,7 @@ def run_match(
         if day >= 2:
             for name in coins:
                 coins[name] += game.daily_salary
-        pool = game.daily_pool[day - 1] + rollover
+        pool = game.daily_pool[day - 1]
 
         # 昨日各玩家的自我结算结果（正常出价/扣款/撞车/被狙/非法/超级出价命中），
         # 复用昨日 DayResult 结算。my_last_deduction 只含正常出价的扣款（获胜或撞车）；
@@ -272,13 +271,11 @@ def run_match(
             winner = winning_record.player
             auction_score = pool  # 任何价位获胜都拿全部拍卖分
             match_auction_scores[winner] += auction_score
-            rollover = 0
             is_void = False
         else:
             winner = None
             winning_bid = None
             auction_score = 0
-            rollover = pool  # 流局：奖池整体并入次日；本局最后一天流局则随循环结束作废
             is_void = True
 
         # 金币结算：获胜与撞车的正常出价全额扣除（流局日必然全员撞车，

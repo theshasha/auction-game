@@ -91,7 +91,7 @@ class TestSuperBid:
     def test_pure_snipe_with_zero_normal_bid(self):
         # 正常出 0 + 超级出价（纯狙击）：0+2 ≤ 余额即合法。
         # 甲第 1 天出 6 获胜余额 1，第 2 天 +3 后纯狙击出 6：落空（全员正常出 0 互撞），
-        # 正常出价全灭流局，奖池并入第 3 天；甲扣 2 成本
+        # 正常出价全灭流局，当天奖池作废；甲扣 2 成本
         captured = {}
         log = run_scenario(
             {1: [6, 1, 1, 1, 1, 1], 2: [0, 0, 0, 0, 0, 0]},
@@ -101,7 +101,7 @@ class TestSuperBid:
         day2 = log.days[1]
         assert day2.super_uses == [{"player": "甲", "value": 6, "hit": False}]
         assert day2.is_void and day2.winner is None
-        assert log.days[2].pool == 8
+        assert log.days[2].pool == 4
         assert captured["甲"][2].my_coins == 5  # 7-6+3-2+3，纯狙击仍扣成本
 
     def test_super_bid_equal_to_normal_voids_whole_submission(self):
@@ -178,7 +178,7 @@ class TestSuperBid:
         assert log.scores == {"甲": 0, "乙": 0, "丙": 6, "丁": 0, "戊": 0, "己": 0}
         assert captured["丙"][1].my_match_score == 6
 
-    def test_void_hits_score_each_sniper_and_only_auction_pool_rolls_over(self):
+    def test_void_discards_pool_and_keeps_each_snipers_rewards(self):
         captured = {}
         log = run_scenario(
             {
@@ -200,13 +200,15 @@ class TestSuperBid:
             {"player": "乙", "value": 0, "hit": True},
             {"player": "丙", "value": 4, "hit": True},
         ]
-        assert [day.pool for day in log.days] == [4, 8, 4, 8, 12, 16]
-        assert log.auction_scores == {"甲": 0, "乙": 0, "丙": 0, "丁": 8, "戊": 0, "己": 0}
-        assert log.scores == {"甲": 4, "乙": 4, "丙": 4, "丁": 8, "戊": 0, "己": 0}
+        assert [day.pool for day in log.days] == [4, 4, 4, 4, 4, 4]
+        assert log.auction_scores == {"甲": 0, "乙": 0, "丙": 0, "丁": 4, "戊": 0, "己": 0}
+        assert log.scores == {"甲": 4, "乙": 4, "丙": 4, "丁": 4, "戊": 0, "己": 0}
+        # 首日流局照扣正常出价和超级成本，并发悬赏；次日再加工资。
+        assert captured["甲"][1].all_coins == {"甲": 7, "乙": 7, "丙": 11, "丁": 10, "戊": 10, "己": 10}
         assert captured["甲"][1].my_match_score == 2
         assert captured["乙"][1].my_match_score == 2
         assert captured["丙"][1].my_match_score == 2
-        assert captured["丁"][2].my_match_score == 8
+        assert captured["丁"][2].my_match_score == 4
 
     def test_super_observation_fields(self):
         # Observation 携带昨日超级出价结局（数值/命中，无次数状态字段）；
