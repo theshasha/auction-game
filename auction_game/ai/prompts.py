@@ -286,15 +286,16 @@ def render_standings(standings: list[StandingsEntry]) -> str:
     return "\n".join([header, separator, *rows])
 
 
-def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], will_continue: bool) -> str:
+def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry]) -> str:
+    """只在还有下一局时调用。"""
     kind = "加赛局" if log.is_playoff else "正赛局"
     lines = [
         f"第 {log.match_index} 局（{kind}）结束。",
         f"本局完整出价日志：\n\n{render_match_log(log)}",
         f"截至当前的累计排名与分数明细：\n\n{render_standings(standings)}",
     ]
-    # 正赛结束后，第一名仍并列时才提示加赛。
-    if will_continue and log.match_index >= log.game.regular_matches:
+    # 正赛打完后还有下一局，说明第一名并列，进入加赛。
+    if log.match_index >= log.game.regular_matches:
         lines.append("第一名总分并列，全员进入加赛。")
     lines.append("请向全体玩家发表本局结束后的感想（不超过 300 字）。")
     lines.append(speech_format_hint())

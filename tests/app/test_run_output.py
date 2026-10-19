@@ -120,7 +120,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert report.count("| 流局（奖池作废） | 0、1、2 |") == 2
     assert "| 流局（奖池作废） | 0、1、2 | 丁 2 |" in report
     assert "| 3 | 3 |" in report
-    for text in [report, prompts.match_end_speech_request(log, standings, True),
+    for text in [report, prompts.match_end_speech_request(log, standings),
                  prompts.final_speech_request(standings, log)]:
         assert prompts.render_match_log(log) in text
         assert all(word not in text for word in ["，扣", "成本", "悬赏", "奖池并入次日"])

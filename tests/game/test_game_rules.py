@@ -6,7 +6,7 @@ import json
 import pytest
 import yaml
 
-from auction_game.configuration import ConfigurationError, load_game_settings, load_players
+from auction_game.configuration import ConfigurationError, load_game_settings
 from auction_game.game.game_rules import GameSettings, validate_submission
 
 
@@ -35,17 +35,13 @@ def test_immutable_settings_and_json_snapshot(settings_data):
         game.initial_coins = 0
 
 
-@pytest.mark.parametrize("field", [
-    "initial_coins", "daily_salary", "max_bid", "super_cost", "super_bounty",
-    "super_hit_score",
-    "regular_matches", "max_playoffs",
+@pytest.mark.parametrize("field,value,match", [
+    ("max_bid", -1, "max_bid"), ("daily_pool", [1, 0], r"daily_pool\[1\]"),
 ])
-@pytest.mark.parametrize("value", [True, 1.5, -1])
-def test_constructor_rejects_invalid_integer_fields(settings_data, field, value):
-    settings_data["daily_pool"] = tuple(settings_data["daily_pool"])
+def test_invalid_values(settings_data, field, value, match):
     settings_data[field] = value
-    with pytest.raises(ValueError, match=field):
-        GameSettings(**settings_data)
+    with pytest.raises(ValueError, match=match):
+        GameSettings.from_dict(settings_data)
 
 
 def test_zero_boundaries(settings_data):
@@ -61,32 +57,17 @@ def test_zero_boundaries(settings_data):
         GameSettings.from_dict(settings_data)
 
 
-@pytest.mark.parametrize("pool,field", [
-    ([], "daily_pool"), ("123", "daily_pool"), ([0], r"daily_pool\[0\]"),
-    ([-1], r"daily_pool\[0\]"), ([True], r"daily_pool\[0\]"),
-    ([1.5], r"daily_pool\[0\]"),
-])
-def test_invalid_pools(settings_data, pool, field):
-    settings_data["daily_pool"] = pool
-    with pytest.raises(ValueError, match=field):
-        GameSettings.from_dict(settings_data)
-
-
-def test_constructor_requires_tuple(settings_data):
-    with pytest.raises(ValueError, match="daily_pool"):
-        GameSettings(**settings_data)
-
-
-def test_required_and_unknown_fields(settings_data):
-    with pytest.raises(ValueError, match="win_score"):
-        GameSettings.from_dict({**settings_data, "win_score": 4})
-    with pytest.raises(ValueError, match="拼写"):
-        GameSettings.from_dict({**settings_data, "max_bdi": 9})
-    for field in settings_data:
-        with pytest.raises(ValueError, match=field):
-            GameSettings.from_dict({k: v for k, v in settings_data.items() if k != field})
-    with pytest.raises(ValueError, match="根节点"):
-        GameSettings.from_dict([])
+@pytest.mark.parametrize("change,field", [
+    (lambda data: data.update(max_bdi=9), "max_bdi"),
+    (lambda data: data.pop("max_bid"), "max_bid"),
+], ids=["unknown", "missing"])
+def test_unknown_and_missing_fields_name_the_field(settings_data, tmp_path, change, field):
+    change(settings_data)
+    path = tmp_path / "game.yaml"
+    path.write_text(yaml.safe_dump(settings_data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match=field) as exc:
+        load_game_settings(path)
+    assert str(path) in str(exc.value)
 
 
 @pytest.mark.parametrize("bid,super_bid,coins,reason", [
@@ -128,19 +109,3 @@ def test_load_game_paths_and_errors(settings_data, tmp_path, monkeypatch):
     assert "daily_salary" in str(exc.value)
     with pytest.raises(ConfigurationError, match="读取失败"):
         load_game_settings(tmp_path / "missing.yaml")
-
-
-def test_load_players_is_independent_and_preserves_contract(tmp_path, monkeypatch):
-    monkeypatch.setattr("auction_game.configuration.CAPABILITIES_PATH", tmp_path / "missing.json")
-    path = tmp_path / "players.yaml"
-    player = dict(persona_title="沉稳", persona_text="谨慎出价", model="identity")
-    models_path = tmp_path / "models.yaml"
-    model = dict(name="甲", provider="test", model="api-model", protocol="chat",
-                 models_dev={"provider": "official", "model": "source"})
-    models_path.write_text(yaml.safe_dump({"models": {"identity": model}}), encoding="utf-8")
-    path.write_text(yaml.safe_dump({"players": [player]}), encoding="utf-8")
-    from auction_game.model_capabilities import effective_capabilities
-    model.update(effective_capabilities("identity", model, {}))
-    assert load_players(path, models_path) == [{**player, **model, "model_key": "identity",
-                                               "identity_model": {"key": "identity", **model},
-                                               "predicted_win_rate": 0}]

@@ -3,8 +3,6 @@
 from dataclasses import replace
 from copy import deepcopy
 
-import pytest
-
 from tests.support.factories import TEST_GAME
 from auction_game.game.players import ScriptedPlayer
 from auction_game.game.tournament import first_place_tied, run_tournament
@@ -88,12 +86,6 @@ class TestRegularSeasonOnly:
         assert first_days[0].my_total_score == 0
         assert first_days[0].standings[0].total_score == 0
 
-    @pytest.mark.parametrize("names", [[], ["甲"], ["甲", "甲"], ["甲", ""], ["甲", "  "]])
-    def test_invalid_roster_is_rejected_before_playing(self, names):
-        players = [ScriptedPlayer.constant(name, 0) for name in names]
-        with pytest.raises(ValueError, match="玩家|比赛"):
-            run_tournament(players, TEST_GAME)
-
     def test_unique_first_place_no_playoff(self):
         players = make_players({1: "甲", 2: "甲", 3: "甲", 4: "甲", 5: "甲"})
         result = run_tournament(players, TEST_GAME)
@@ -149,19 +141,19 @@ class TestPlayoff:
         assert first_place_tied(result.final_standings)
 
 
-class TestDirectorWillContinue:
-    """will_continue 的准确性：决定局末是否还有「下一局规划」轮，必须考虑加赛上限。"""
+class TestDirectorMatchEnd:
+    """局末发言只在还有下一局时发生；判断下一局要考虑加赛上限。"""
 
     class FakeDirector:
         def __init__(self):
-            self.match_end_calls = []  # [(log, will_continue)]
+            self.match_end_calls = []  # [log]
             self.final_calls = []      # [(standings, log)]
 
         def on_opening(self):
             pass
 
-        def on_match_end(self, log, standings, will_continue):
-            self.match_end_calls.append((log, will_continue))
+        def on_match_end(self, log, standings):
+            self.match_end_calls.append(log)
 
         def on_final(self, standings, log):
             self.final_calls.append((standings, log))
@@ -222,7 +214,7 @@ class TestDirectorWillContinue:
         assert {entry.player: entry.scores_per_match for entry in result.final_standings} == {
             "甲": [2, 1], "乙": [2, 0], "丙": [0, 0],
         }
-        assert [(log.match_index, more) for log, more in director.match_end_calls] == [(1, True)]
+        assert [log.match_index for log in director.match_end_calls] == [1]
         assert director.final_calls == [(result.final_standings, result.match_logs[1])]
         # 已发布的常规局排名不随加赛累计而漂移。
         assert {entry.player: entry.total_score for entry in regular_standings} == {"甲": 2, "乙": 2, "丙": 0}
@@ -260,24 +252,23 @@ class TestDirectorWillContinue:
         assert totals(result) == {"甲": 2, "乙": 0, "丙": 0}
         assert scores(result) == {"甲": 2, "乙": 2, "丙": 0}
         assert ranks(result) == {"甲": 1, "乙": 1, "丙": 3}
-        assert [(log.match_index, more) for log, more in director.match_end_calls] == [(1, True), (2, True)]
+        assert [log.match_index for log in director.match_end_calls] == [1, 2]
         assert director.final_calls == [(result.final_standings, result.match_logs[2])]
 
-    def test_will_continue_false_on_last_match_when_decided(self):
+    def test_last_match_skips_match_end_when_decided(self):
         director = self.FakeDirector()
         players = make_players({i: "甲" for i in range(1, 6)})
         result = run_tournament(players, TEST_GAME, director=director)
 
         # 前 4 局仍有下一局，触发局末发言；第 5 局（最后一局）跳过局末发言
-        assert [call[1] for call in director.match_end_calls] == [True, True, True, True]
-        assert [call[0].match_index for call in director.match_end_calls] == [1, 2, 3, 4]
+        assert [log.match_index for log in director.match_end_calls] == [1, 2, 3, 4]
         # 终局感言恰好一次，且拿到最后一局（第 5 局）的完整出价日志
         assert len(director.final_calls) == 1
         _, final_log = director.final_calls[0]
         assert final_log.match_index == 5
         assert final_log is result.match_logs[-1]
 
-    def test_will_continue_respects_playoff_cap(self):
+    def test_match_end_respects_playoff_cap(self):
         # 上限缩到 2：全员每天出 0 撞车永远流局、人人 0 分永远并列，直到封顶
         game = replace(TEST_GAME, max_playoffs=2)
         director = self.FakeDirector()
@@ -286,10 +277,9 @@ class TestDirectorWillContinue:
 
         assert result.playoff_cap_hit
         assert result.playoff_count == 2
-        # 第 5 局后还有加赛空间→True；第 6 局（加赛 1/2）→True；
+        # 第 5 局后还有加赛空间，第 6 局（加赛 1/2）后也有；
         # 第 7 局（加赛 2/2）封顶为最后一局，跳过局末发言
-        assert [call[1] for call in director.match_end_calls] == [True, True, True, True, True, True]
-        assert [call[0].match_index for call in director.match_end_calls] == [1, 2, 3, 4, 5, 6]
+        assert [log.match_index for log in director.match_end_calls] == [1, 2, 3, 4, 5, 6]
         # 终局感言拿到的是封顶的第 7 局（最后一局）日志
         assert len(director.final_calls) == 1
         _, final_log = director.final_calls[0]

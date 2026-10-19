@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import random
 
 from auction_game.configuration import ConfigurationError, load_game_settings
@@ -11,16 +12,9 @@ from auction_game.game.rules import sync_root_rules
 
 
 def run_benchmark(count: int) -> int:
-    """策略对照（不写日志）：两组各 count 场，共 2 × count 场。
-
-    第二组为 1 个每日出最高可付价、不使用超级出价的玩家对 5 个随机玩家。
-    策略与随机对手的平均总分比较均取第二组，第一组仅作过程统计参考。
+    """两组各 count 场：第一组 6 个随机玩家，只作过程统计参考；
+    第二组 1 个每日出最高可付价、不用超级出价的玩家对 5 个随机玩家，用于比较平均总分。
     """
-    from collections import Counter
-
-    if type(count) is not int or count <= 0:
-        print("错误：benchmark 场数必须是正整数")
-        return 1
     try:
         game = load_game_settings()
         sync_root_rules(game)

@@ -12,11 +12,6 @@ from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import BOT_NAMES
 
 
-@pytest.fixture(autouse=True)
-def isolate_root_rules(tmp_path, monkeypatch):
-    monkeypatch.setattr("auction_game.game.rules.RULES_PATH", tmp_path / "RULES.md")
-
-
 def test_benchmark_uses_one_game_without_logs(monkeypatch, capsys, tmp_path):
     game = GameSettings(
         initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
@@ -75,14 +70,6 @@ def test_game_error_stops_before_tournament(monkeypatch, capsys):
     monkeypatch.setattr(benchmark, "run_tournament", tournament)
     assert benchmark.run_benchmark(1) == 1
     assert "配置读取失败：game.yaml：max_bid" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("count", [0, -1, True, 1.5, "2", None])
-def test_invalid_count_fails_before_loading_configuration(monkeypatch, capsys, count):
-    monkeypatch.setattr(benchmark, "load_game_settings", lambda: pytest.fail("非法场数不应加载配置"))
-    monkeypatch.setattr(benchmark, "run_tournament", lambda *args: pytest.fail("非法场数不应启动比赛"))
-    assert benchmark.run_benchmark(count) == 1
-    assert "场数必须是正整数" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("strategy_score,rank", [

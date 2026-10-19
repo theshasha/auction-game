@@ -53,10 +53,9 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     )
     monkeypatch.setattr(rules, "TEMPLATE_PATH", template_path)
     monkeypatch.setattr(rules, "RULES_PATH", document_path)
-    monkeypatch.setattr(configuration, "ROOT_DIR", tmp_path)
-    # 路径默认值在函数定义时绑定；直接调整默认值，保留真实加载与校验。
-    monkeypatch.setattr(configuration.load_game_settings, "__defaults__", (game_path,))
-    monkeypatch.setattr(configuration.load_players, "__defaults__", (players_path, models_path))
+    monkeypatch.setattr(rules, "load_game_settings", lambda: configuration.load_game_settings(game_path))
+    monkeypatch.setattr(rules, "load_players",
+                        lambda **kwargs: configuration.load_players(players_path, models_path, **kwargs))
     monkeypatch.setattr(sys, "argv", ["rules.py"])
 
     assert rules.main() == 0
@@ -71,7 +70,7 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     )
     generated = document_path.read_bytes()
     body = rules.render_rules(
-        configuration.load_game_settings(), rules._identity_names(), include_note=False,
+        configuration.load_game_settings(game_path), rules._identity_names(), include_note=False,
     )
     assert document_path.read_text(encoding="utf-8") == rules.GENERATED_NOTE + body
     assert "<!--" not in body
@@ -102,24 +101,17 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
 
 
 @pytest.mark.parametrize("entry,args", [(runners.run_bots, (1,)), (runners.run_ai, ()),
-                                         (benchmark.run_benchmark, (1,))])
-def test_sync_failure_stops_all_public_starts_before_logs_or_models(entry, args, tmp_path, monkeypatch):
+                                         (benchmark.run_benchmark, (1,)), (offline_demo.generate_demo, ())])
+def test_template_error_stops_all_starts_before_logs_or_models(entry, args, tmp_path, monkeypatch):
     template = tmp_path / "bad-template.md"
     template.write_text("{unknown}", encoding="utf-8")
     monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
-    monkeypatch.setattr(runners, "make_run_dir", lambda *args: pytest.fail("同步失败后创建了日志"))
+    for module in (runners, offline_demo):
+        monkeypatch.setattr(module, "make_run_dir", lambda *args: pytest.fail("同步失败后创建了日志"))
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("同步失败后请求了密钥"))
-    assert entry(*args) == 1
-
-
-def test_sync_failure_stops_offline_demo_before_logs_or_models(tmp_path, monkeypatch):
-    template = tmp_path / "bad-template.md"
-    template.write_text("{unknown}", encoding="utf-8")
-    monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
-    monkeypatch.setattr(offline_demo, "make_run_dir", lambda *args: pytest.fail("同步失败后创建了日志"))
     monkeypatch.setattr(offline_demo, "DemoFactory", lambda *args, **kwargs: pytest.fail("同步失败后创建了模型"))
-    with pytest.raises(configuration.ConfigurationError, match="根规则同步失败"):
-        offline_demo.generate_demo()
+    with pytest.raises(KeyError, match="unknown"):
+        entry(*args)
 
 
 @pytest.mark.parametrize("entry,args,kwargs,module,boundary", [
@@ -149,19 +141,3 @@ def test_all_starts_sync_scoring_rules_before_logs_or_models(
     monkeypatch.setattr(module, boundary, stop_before_side_effect)
     with pytest.raises(StartStopped):
         entry(*args, **kwargs)
-
-
-def test_sync_atomic_failure_preserves_old_document_and_unchanged_mtime(tmp_path, monkeypatch):
-    document = tmp_path / "RULES.md"
-    monkeypatch.setattr(rules, "RULES_PATH", document)
-    assert rules.sync_root_rules() is True
-    content, mtime = document.read_bytes(), document.stat().st_mtime_ns
-    assert rules.sync_root_rules() is False
-    assert document.stat().st_mtime_ns == mtime
-    template = tmp_path / "changed-template.md"
-    template.write_text("changed {player_names}", encoding="utf-8")
-    monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
-    monkeypatch.setattr(rules.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("disk failure")))
-    with pytest.raises(configuration.ConfigurationError, match="disk failure"):
-        rules.sync_root_rules()
-    assert document.read_bytes() == content

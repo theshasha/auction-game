@@ -237,7 +237,7 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
     pc = dict(model_key="fake", provider="fake", model="alias", protocol="responses", max_tokens=4096,
               model_settings={"openai_reasoning_effort": "high"},
               capabilities={"reasoning_status": "high", "reasoning_detail": "synthetic"})
-    monkeypatch.setattr(check_llm, "load_configuration", lambda: (
+    monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: (
          {"llm": {"timeout_seconds": 3, "channels": {"fake": CHANNELS["hub"]}}},
         [pc, pc],
     ))

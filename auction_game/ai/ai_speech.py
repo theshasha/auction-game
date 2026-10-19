@@ -75,24 +75,23 @@ class AISpeechDirector:
             "第一局策略规划（含首日出价）",
         )
 
-    def on_match_end(self, log: MatchLog, standings: list[StandingsEntry], will_continue: bool) -> None:
+    def on_match_end(self, log: MatchLog, standings: list[StandingsEntry]) -> None:
         speeches = self._run_round(
             {
-                p: (prompts.match_end_speech_request(log, standings, will_continue), f"match_{log.match_index}_speech")
+                p: (prompts.match_end_speech_request(log, standings), f"match_{log.match_index}_speech")
                 for p in self.players
             },
             f"第 {log.match_index} 局局末发言",
         )
         self._publish_speeches(f"第 {log.match_index} 局局末发言", speeches)
-        if will_continue:
-            self._run_round(
-                {p: (prompts.memory_request(self._others(speeches, p.name)), f"match_{log.match_index}_memory") for p in self.players},
-                f"第 {log.match_index} 局累计私有记忆",
-            )
-            self._run_round(
-                {p: (prompts.next_match_plan_request(standings, self.game, log.match_index + 1), f"match_{log.match_index}_plan") for p in self.players},
-                "下一局策略规划（含首日出价）",
-            )
+        self._run_round(
+            {p: (prompts.memory_request(self._others(speeches, p.name)), f"match_{log.match_index}_memory") for p in self.players},
+            f"第 {log.match_index} 局累计私有记忆",
+        )
+        self._run_round(
+            {p: (prompts.next_match_plan_request(standings, self.game, log.match_index + 1), f"match_{log.match_index}_plan") for p in self.players},
+            "下一局策略规划（含首日出价）",
+        )
 
     def on_final(self, standings: list[StandingsEntry], log: MatchLog) -> None:
         speeches = self._run_round(

@@ -5,27 +5,17 @@ from __future__ import annotations
 import sys
 import time
 import argparse
-import json
 
 from auction_game.configuration import ConfigurationError, load_configuration
 from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
 from auction_game.ai.agent_execution import AgentExecutor
-from pydantic_ai import Agent, ModelRetry
+from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 from pydantic_ai.usage import UsageLimits
 
 PING_HISTORY = [ModelRequest(parts=[SystemPromptPart("你是一个简洁的助手。")])]
-PING_PROMPT = "只回复两个大写字母 OK，不要添加空白或其他内容。"
-
-
+PING_PROMPT = "请回复 OK。"
 PING_AGENT = Agent(output_type=str, retries=0)
-
-
-@PING_AGENT.output_validator
-def validate_ping(reply: str) -> str:
-    if reply != "OK":
-        raise ModelRetry("连通探测要求回复严格为 OK。")
-    return reply
 
 
 def main(argv=None) -> int:
@@ -38,31 +28,23 @@ def main(argv=None) -> int:
     if args.max_tokens <= 0:
         parser.error("--max-tokens 必须是正整数")
     try:
-        config, players = load_configuration(test_model=True) if args.test_model else load_configuration()
+        config, players = load_configuration(test_model=args.test_model)
         if args.model:
-            selected = []
+            players = []
             for key in args.model:
                 if key not in config["models"]:
                     raise ConfigurationError(f"models.yaml：未知模型配置名 {key!r}")
-                selected.append({"model_key": key, **config["models"][key]})
-            players = selected
+                players.append({"model_key": key, **config["models"][key]})
     except ConfigurationError as exc:
         print(f"[配置错误] {exc}")
         return 1
     timeout = config["llm"]["timeout_seconds"]
 
-    # 同一模型的别名只在实际预算和设置一致时合并。
-    targets = {}
-    for player in players:
-        channel = config["llm"]["channels"][player["provider"]]
-        key = (channel["base_url"], channel["api_key_env"], player["protocol"], player["model"],
-               player["max_tokens"], json.dumps(player["model_settings"], sort_keys=True))
-        targets.setdefault(key, player)
+    targets = {player["model_key"]: player for player in players}
     failures = 0
     print(f"连通检查：{len(targets)} 个检查目标，会请求真实服务，可能收费。每个目标至多请求一次，不重试。")
     for player in targets.values():
-        protocol_suffix = f" / {player['protocol']}" if player.get("protocol") else ""
-        label = f"{player['model_key']}（{player['provider']}{protocol_suffix} / {player['model']}）"
+        label = f"{player['model_key']}（{player['provider']} / {player['protocol']} / {player['model']}）"
         probe_budget = min(args.max_tokens, player["max_tokens"])
         print(f"[探测] {label}: 比赛预算={player['max_tokens']}，本次探测预算={probe_budget}，"
               f"推理={player['capabilities']['reasoning_status']}；"
@@ -78,7 +60,7 @@ def main(argv=None) -> int:
                 model_settings=player["model_settings"],
                 request_attempts=1,
             ))
-        except (MissingApiKeyError, ValueError) as exc:
+        except MissingApiKeyError as exc:
             print(f"[配置错误] {label}: {exc}")
             failures += 1
             continue
@@ -93,6 +75,10 @@ def main(argv=None) -> int:
             continue
         elapsed = time.monotonic() - started
         preview = " ".join(reply.split())[:80]
+        if not preview:
+            print(f"[调用失败] {label}: 回复为空")
+            failures += 1
+            continue
         print(f"[通过] {label}  耗时 {elapsed:.1f}s  回复: {preview}")
 
     print(f"\n检查完成：共 {len(targets)} 个检查目标，失败 {failures} 个。")

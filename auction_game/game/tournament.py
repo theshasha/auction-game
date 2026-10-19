@@ -1,7 +1,4 @@
-"""整场流程：按本场参数运行正赛、第一名并列时的加赛循环与最终排名结算。
-
-发言编排通过可选的 director 钩子注入，规则逻辑本身不依赖任何 AI 代码。
-"""
+"""整场流程：正赛、第一名并列时的加赛和最终排名。AI 发言通过 director 钩子接入。"""
 
 from __future__ import annotations
 
@@ -15,10 +12,10 @@ from auction_game.game.players import Player
 
 
 class SpeechDirector(Protocol):
-    """发言编排钩子（开局/局末/终局）。Bot 模式传 None，行为完全不变。"""
+    """开局、局末和终局的发言编排；on_match_end 只在还有下一局时调用。"""
 
     def on_opening(self) -> None: ...
-    def on_match_end(self, log: MatchLog, standings: list[StandingsEntry], will_continue: bool) -> None: ...
+    def on_match_end(self, log: MatchLog, standings: list[StandingsEntry]) -> None: ...
     def on_final(self, standings: list[StandingsEntry], log: MatchLog) -> None: ...
 
 
@@ -32,8 +29,6 @@ class TournamentResult:
 
 def first_place_tied(standings: list[StandingsEntry]) -> bool:
     """第一名总分是否有并列。"""
-    if not standings:
-        return False
     top_score = standings[0].total_score
     return sum(1 for entry in standings if entry.total_score == top_score) >= 2
 
@@ -49,19 +44,9 @@ def run_tournament(
 ) -> TournamentResult:
     """跑完整场比赛。
 
-    on_match_end: 每局（含加赛局）结束后的回调，收到该局完整日志与截至当前的
-    累计排名——这两者即规则要求局末向全体玩家公开的信息。
-    director: 发言编排（开局发言、局末发言+下局规划、终局感言+观众总结）。
-    bid_collector: AI 模式的并行出价收集器，透传给 engine.run_match。
-    on_day_end: 每日结算后的观众展示回调，透传给 engine.run_match。
+    on_match_end 在每局（含加赛局）结束后收到该局日志和累计排名，即规则要求局末公开的信息。
+    bid_collector 和 on_day_end 转交给 engine.run_match。
     """
-    names = [player.name for player in players]
-    if len(names) < 2:
-        raise ValueError("比赛至少需要两名玩家")
-    if any(not isinstance(name, str) or not name.strip() for name in names):
-        raise ValueError("玩家名字不能为空")
-    if len(set(names)) != len(names):
-        raise ValueError("玩家名字必须唯一")
     result = TournamentResult()
     auction_scores_history = {player.name: [] for player in players}
     scores_history = {player.name: [] for player in players}
@@ -92,16 +77,14 @@ def run_tournament(
         standings = compute_standings(auction_scores_history, scores_history=scores_history)
         if on_match_end:
             on_match_end(log, standings)
-        if director:
-            # 正赛末局或加赛后仍并列才有下一局；加赛局还要预留上限余量
-            # （正赛局结束后 playoff_count 未自增，只有加赛局需 +1）
-            will_continue = match_index < game.regular_matches or (
-                first_place_tied(standings)
-                and result.playoff_count + (1 if is_playoff else 0) < game.max_playoffs
-            )
-            # 最后一局跳过局末发言：该局的完整出价日志并入终局感言（on_final）
-            if will_continue:
-                director.on_match_end(log, standings, will_continue)
+        # 正赛打完后，第一名仍并列且没到加赛上限才有下一局；这时加赛局的 playoff_count 还没自增。
+        has_next_match = match_index < game.regular_matches or (
+            first_place_tied(standings)
+            and result.playoff_count + (1 if is_playoff else 0) < game.max_playoffs
+        )
+        # 最后一局不做局末发言，它的出价日志随终局感言（on_final）发出。
+        if director and has_next_match:
+            director.on_match_end(log, standings)
 
     for _ in range(game.regular_matches):
         play_one_match(is_playoff=False)

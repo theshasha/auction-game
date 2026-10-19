@@ -32,7 +32,7 @@ def main() -> int:
     if args.benchmark is not None:
         return benchmark.run_benchmark(args.benchmark)
     elif args.ai:
-        return runners.run_ai(test_model=True) if args.test_model else runners.run_ai()
+        return runners.run_ai(test_model=args.test_model)
     else:
         return runners.run_bots(args.seed)
 

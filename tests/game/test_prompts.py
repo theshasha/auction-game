@@ -60,7 +60,7 @@ class TestSpeechFields:
                                    scores_history={name: [scores[name]] for name in NAMES})
         for text in (
             prompts.opening_speech_request(),
-            prompts.match_end_speech_request(make_log(auction_scores=auction_scores, scores=scores), standings, True),
+            prompts.match_end_speech_request(make_log(auction_scores=auction_scores, scores=scores), standings),
             prompts.final_speech_request(standings, make_log(match_index=5, auction_scores=auction_scores, scores=scores)),
         ):
             assert "strategy" in text and "speech" in text
@@ -75,7 +75,7 @@ class TestSpeechFields:
         standings = make_standings({"甲": [2, 1], "乙": [1, 0]},
                                    scores_history={"甲": [8, 4], "乙": [12, 2]})
         text = (prompts.final_speech_request(standings, log) if final
-                else prompts.match_end_speech_request(log, standings, will_continue=True))
+                else prompts.match_end_speech_request(log, standings))
         assert "本局得分：甲 3 分、乙 0 分" in text
         assert "排名与分数明细" in text
         assert f"本局完整出价日志：\n\n{prompts.render_match_log(log)}" in text
@@ -122,23 +122,20 @@ def test_memory_description_keeps_replacement_without_full_record_instruction():
     assert "完整" not in text
 
 class TestPlayoffNotice:
-    """加赛预告只在正赛打完（或加赛后）且第一名仍并列时出现。"""
+    """局末发言只在还有下一局时发出；正赛打完后还有下一局就预告加赛。"""
 
     @pytest.mark.parametrize(
-        "regular_matches, match_index, is_playoff, will_continue, expected",
+        "regular_matches, match_index, is_playoff, expected",
         [
-            (5, 2, False, True, False),
-            (5, 5, False, True, True),
-            (5, 5, False, False, False),
-            (5, 6, True, True, True),
-            (2, 2, False, True, True),
-            (2, 2, False, False, False),
+            (5, 2, False, False),
+            (5, 5, False, True),
+            (5, 6, True, True),
+            (2, 2, False, True),
         ],
-        ids=["early", "regular-tied", "regular-decided", "playoff-tied",
-             "custom-tied", "custom-decided"],
+        ids=["early", "regular-tied", "playoff-tied", "custom-tied"],
     )
     def test_notice_at_regular_and_playoff_boundaries(
-        self, regular_matches, match_index, is_playoff, will_continue, expected,
+        self, regular_matches, match_index, is_playoff, expected,
     ):
         text = prompts.match_end_speech_request(
             make_log(
@@ -151,7 +148,6 @@ class TestPlayoffNotice:
                 {name: [int(name == "甲")] * match_index for name in NAMES},
                 scores_history={name: [4 if name in ("甲", "乙") else 0] * match_index for name in NAMES},
             ),
-            will_continue=will_continue,
         )
         notice = "第一名总分并列，全员进入加赛。"
         assert ("第一名总分并列" in text) is expected

@@ -35,10 +35,8 @@ def test_director_passes_game_to_both_plans(monkeypatch, tmp_path):
     monkeypatch.setattr(director, "_run_round", lambda *args: {"甲": "发言甲", "乙": "发言乙"})
     monkeypatch.setattr(director, "_publish_speeches", lambda *args: None)
     director.on_opening()
-    director.on_match_end(SimpleNamespace(match_index=1), [], True)
+    director.on_match_end(SimpleNamespace(match_index=1), [])
     assert plans == [({"乙": "发言乙"}, ()), ({"甲": "发言甲"}, ()), ([], (2,)), ([], (2,))]
-    director.on_match_end(SimpleNamespace(match_index=2), [], False)
-    assert len(plans) == 4
 
 
 @pytest.mark.parametrize("phase", ["opening_speech", "match_1_speech", "final_speech", "final_summary"])

@@ -1,4 +1,4 @@
-<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动预览：python -m auction_game.game.rules -->
+<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动生成：python -m auction_game.game.rules -->
 【唯一高价拍卖游戏规则】
 
 一、赛制

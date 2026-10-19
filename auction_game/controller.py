@@ -1,7 +1,7 @@
-"""轮级运行控制：限制同时运行的任务数，暂停等已启动任务结束，成功结果只提交一次。
+"""轮级运行控制：限制同时运行的任务数，暂停时等已启动任务结束，成功结果只提交一次。
 
-暂停期间任务内部已有的网络重试和输出纠错仍可能继续；控制器不取消 HTTP。
-服务/输出失败恢复检查点，程序错误原样传播。q 等已启动任务结束后恢复整轮初始状态并中止。
+控制器不取消 HTTP，暂停期间任务内部的网络重试和输出纠错仍会继续。
+服务或输出失败时恢复该任务的检查点，程序错误直接抛出。q 等已启动任务结束后，把整轮恢复到开始时的状态并中止比赛。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable
 
 from auction_game.ai.agent_execution import CallFailedError
 
@@ -19,23 +19,15 @@ class TournamentAborted(Exception):
     """用户中止整场比赛。"""
 
 
-class CheckpointParticipant(Protocol):
-    """状态由参与者解释，控制器只保存并原样交还快照。"""
-
-    def checkpoint(self) -> Any: ...
-
-    def rollback(self, checkpoint: Any) -> None: ...
-
-
 @dataclass
 class RoundTask:
     key: str
     fn: Callable[[], Any]
-    participant: CheckpointParticipant | None = None
+    participant: Any = None  # 提供 checkpoint() 和 rollback(checkpoint)，失败或退出时据此恢复状态。
 
 
 class Controller:
-    """stdin 和任务启动共用锁；收到继续命令后，仍先等已启动任务结束并收集结果。"""
+    """stdin 命令和任务派发共用一把锁；收到继续命令后，仍先等已启动任务结束并收集结果。"""
 
     def __init__(self, mode: str = "step", announce: Callable[[str], None] = print,
                  *, max_concurrency: int = 10):
@@ -47,32 +39,22 @@ class Controller:
         self._gate = threading.Event()
         self._lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
-        self._inflight = 0
         self._announce = announce
-        self._reader_thread: Optional[threading.Thread] = None
-
-    def request_pause(self, reason: str) -> None:
-        """重复暂停只处理一次；停止启动新任务，保留已启动任务最终通过校验的结果。"""
-        with self._changed:
-            if self._pause_requested:
-                return
-            self._pause_requested = True
-            self._resume_requested = False
-            self._mode = "step"
-            inflight = self._inflight
-            self._gate.set()
-            self._changed.notify_all()
-        self._announce(f"[暂停] {reason}：停止新任务，等待当前 {inflight} 项任务结束。"
-                       "成功结果保留，内部重试可能继续。"
-                       "回车或 c：等任务结束后继续；q：等任务结束后撤销本轮并退出比赛。")
 
     def offer_command(self, command: str) -> None:
-        if command == "p":
-            self.request_pause("用户请求暂停")
-            return
         message = None
         with self._changed:
-            if command in ("", "c"):
+            if command == "p":
+                # 已暂停时重复 p 不清除恢复意图。
+                if self._pause_requested:
+                    return
+                self._pause_requested = True
+                self._resume_requested = False
+                self._mode = "step"
+                self._gate.set()
+                message = ("[暂停] 停止新任务，等待已启动任务结束。成功结果保留，内部重试可能继续。"
+                           "回车或 c：等任务结束后继续；q：等任务结束后撤销本轮并退出比赛。")
+            elif command in ("", "c"):
                 if self._pause_requested:
                     self._resume_requested = True
                 if command == "c":
@@ -94,17 +76,16 @@ class Controller:
             for line in sys.stdin:
                 self.offer_command(line.strip())
 
-        self._reader_thread = threading.Thread(target=read_loop, daemon=True)
-        self._reader_thread.start()
+        threading.Thread(target=read_loop, daemon=True).start()
 
     def wait_for_turn(self, label: str, *, notices: tuple[str, ...] = (),
                       require_confirmation: bool = False) -> None:
-        """先准备等待确认再显示提示，保留提示后的输入；执行期间误按回车不提前确认。"""
+        """先进入等待状态再显示提示，提示之后的按键有效；执行期间误按的回车不算确认。"""
         with self._lock:
             if self._quit_requested:
                 raise TournamentAborted
             if require_confirmation:
-                # 未知失败发生前的快速恢复不替代失败后的重试确认。
+                # 失败前的快速恢复命令不能代替失败后的补跑确认。
                 self._mode = "step"
                 self._resume_requested = False
             wait = True
@@ -134,10 +115,10 @@ class Controller:
 
 
 def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: str) -> dict[str, Any]:
-    """同一轮输入由调用方预先固定；全部结果齐全且暂停后已确认继续才返回。
+    """运行一轮输入已固定的任务；全部成功，且暂停过时用户已确认继续，才返回结果。
 
-    最多派发 max_concurrency 项，不把整轮排进线程池。暂停事件与派发共锁，
-    即使 p 后立即恢复，也先等已启动任务结束并收集结果，再决定补跑或提交。
+    同时最多运行 max_concurrency 项。派发和暂停共用一把锁；即使 p 后立即恢复，
+    也先等已启动任务结束并收集结果，再决定补跑或提交。
     """
     checkpoints = {task.key: task.participant.checkpoint()
                    for task in tasks if task.participant is not None}
@@ -152,8 +133,6 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
 
     results: dict[str, Any] = {}
     pending = list(tasks)
-    if not pending:
-        return results
     gate_label = label
     try:
         controller.wait_for_turn(gate_label)
@@ -172,13 +151,12 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
             with ThreadPoolExecutor(max_workers=min(controller.max_concurrency, len(pending))) as pool:
                 while unstarted or active:
                     with controller._changed:
-                        # submit 与暂停命令在同一锁下，不会在暂停后继续补队列。
+                        # 派发和暂停命令在同一把锁下，暂停后不会再派发。
                         while (unstarted and len(active) < controller.max_concurrency
                                and not controller._pause_requested and not controller._quit_requested):
                             task = unstarted.pop(0)
                             future = pool.submit(task.fn)
                             active[future] = task
-                            controller._inflight = len(active)
                             future.add_done_callback(notify_done)
                         done = [future for future in active if future.done()]
                         if not done:
@@ -186,7 +164,8 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
                                 break
                             controller._changed.wait()
                             continue
-                    # 必须读取所有完成结果，包括暂停前已完成但尚未收集的 future。
+                    # 收集所有已完成的结果，包括暂停前已完成但还没收集的。
+                    # done 里都已完成；用 as_completed 是为了让竞态测试在收集时机插入等待。
                     for future in as_completed(done):
                         task = active.pop(future)
                         try:
@@ -194,8 +173,6 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
                         except CallFailedError as exc:
                             failed[task.key] = str(exc)
                             rollback(task)
-                        with controller._lock:
-                            controller._inflight = len(active)
 
             pending = [task for task in pending if task.key not in results]
             with controller._lock:
@@ -203,7 +180,7 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
                     raise TournamentAborted
                 paused = controller._pause_requested
                 if not paused and not pending:
-                    return results  # 提交与暂停共享同步边界。
+                    return results  # 提交和暂停在同一把锁下判断。
             notices = []
             if paused:
                 notices.append(f"[暂停] 成功 {len(results)}，失败 {len(failed)}，"
@@ -221,6 +198,3 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
         for task in tasks:
             rollback(task)
         raise
-    finally:
-        with controller._lock:
-            controller._inflight = 0

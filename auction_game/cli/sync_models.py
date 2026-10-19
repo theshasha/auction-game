@@ -6,65 +6,36 @@ import argparse
 from datetime import datetime, timezone
 import difflib
 import json
-import os
 from pathlib import Path
-import tempfile
 from urllib.request import Request, urlopen
 
 from auction_game.configuration import MODELS_PATH, load_model_catalog
-from auction_game.model_capabilities import effective_capabilities, positive_integer, read_snapshot
+from auction_game.model_capabilities import effective_capabilities, read_snapshot
 from auction_game.paths import CAPABILITIES_PATH
 
 API_URL = "https://models.dev/api.json"
 
 
-def unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"JSON 键重复：{key}")
-        result[key] = value
-    return result
+def positive_integer(value):
+    return value if type(value) is int and value > 0 else None
 
 
 def build_snapshot(catalog: dict, data: dict, retrieved_from: str) -> dict:
-    if (not isinstance(data, dict) or not data or any(
-        not isinstance(provider, dict) or not isinstance(provider.get("models"), dict)
-        for provider in data.values()
-    )):
-        raise ValueError("models.dev 数据格式错误：每个 provider 必须包含 models 对象")
+    """按 models.yaml 的精确来源取条目；数值上限规范成正整数或 None。"""
     entries = {}
     for key, model in catalog.items():
         source = model["models_dev"]
-        provider = data.get(source["provider"], {})
-        item = provider.get("models", {}).get(source["model"])
+        item = data.get(source["provider"], {}).get("models", {}).get(source["model"])
         entry = {"source": source}
         if item is None:
             entry.update(status="unknown", reason="未找到配置指定的精确来源")
         else:
-            if (not isinstance(item, dict) or item.get("id") != source["model"]
-                    or not isinstance(item.get("limit"), dict)):
-                raise ValueError(f"{key}：来源数据格式错误或 id 与配置不一致")
-            if "reasoning" in item and type(item["reasoning"]) is not bool:
-                raise ValueError(f"{key}：reasoning 必须是布尔值")
-            options = item.get("reasoning_options")
-            if options is not None and (not isinstance(options, list) or any(
-                not isinstance(option, dict) or not isinstance(option.get("type"), str)
-                or (option["type"] == "effort" and (
-                    not isinstance(option.get("values"), list)
-                    or any(not isinstance(value, str) for value in option["values"])))
-                for option in options
-            )):
-                raise ValueError(f"{key}：reasoning_options 结构异常")
-            canonical = source.get("canonical_model_id")
-            if canonical and item.get("canonical_model_id") != canonical:
-                raise ValueError(f"{key}：canonical_model_id 已变更，请核对 models_dev 来源配置")
+            limit = item.get("limit", {})
             entry.update(status="matched", matched_id=item["id"],
-                         canonical_model_id=item.get("canonical_model_id"),
-                         limit={field: positive_integer(item["limit"].get(field))
+                         limit={field: positive_integer(limit.get(field))
                                 for field in ("context", "input", "output")},
                          reasoning=item.get("reasoning"),
-                         reasoning_options=item.get("reasoning_options"))
+                         reasoning_options=item.get("reasoning_options") or [])
         entries[key] = entry
     return {"schema_version": 1, "retrieved_from": retrieved_from,
             "fetched_at": datetime.now(timezone.utc).isoformat(), "models": entries}
@@ -86,10 +57,9 @@ def main(argv=None) -> int:
             request = Request(API_URL, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
             with urlopen(request, timeout=60) as response:
                 text = response.read().decode("utf-8")
-        data = json.loads(text, object_pairs_hook=unique_object)
-        snapshot = build_snapshot(catalog, data, str(args.input.resolve()) if args.input else API_URL)
+        snapshot = build_snapshot(catalog, json.loads(text), str(args.input.resolve()) if args.input else API_URL)
         old = read_snapshot(output)
-        # 获取时间不产生无意义的能力差异；数据与来源未变时不重写。
+        # 获取时间不算能力差异；能力和来源都没变时不重写。
         comparison = {key: value for key, value in snapshot.items() if key != "fetched_at"}
         previous = {key: value for key, value in old.items() if key != "fetched_at"}
         changed = comparison != previous
@@ -107,17 +77,12 @@ def main(argv=None) -> int:
             if cap["output_fallback_reason"]:
                 print(f"  暂用默认输出预算：{cap['output_fallback_reason']}")
         if args.write and changed:
-            output.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent,
-                                             prefix=output.name + ".", suffix=".tmp", delete=False) as handle:
-                handle.write(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n")
-                temporary = handle.name
-            os.replace(temporary, output)
+            output.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(f"已更新 {output}")
         elif changed:
             print("仅预览；使用 --write 保存模型能力。")
     except (OSError, ValueError) as exc:
-        print(f"同步失败，本地模型能力未改动：{exc}")
+        print(f"同步失败：{exc}")
         return 1
     return 0
 

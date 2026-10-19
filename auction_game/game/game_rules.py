@@ -1,4 +1,4 @@
-"""不可变比赛参数与共享出价校验；不读取配置文件或依赖玩家实现。"""
+"""比赛参数和出价规则检查，引擎和模型层共用。"""
 
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ class GameSettings:
             if type(value) is not int or value < minimum:
                 requirement = "正整数" if minimum else "非负整数"
                 raise ValueError(f"{name} 必须是{requirement}")
-        if not isinstance(self.daily_pool, tuple) or not self.daily_pool:
-            raise ValueError("daily_pool 必须是非空 tuple，各日奖池必须是正整数")
+        if not self.daily_pool:
+            raise ValueError("daily_pool 不能为空")
         for index, value in enumerate(self.daily_pool):
             if type(value) is not int or value <= 0:
                 raise ValueError(f"daily_pool[{index}] 必须是正整数")
@@ -46,22 +46,11 @@ class GameSettings:
 
     @classmethod
     def from_dict(cls, data: dict) -> GameSettings:
-        """从配置或日志快照加载，拒绝缺少字段、未知字段及非法值。"""
-        if not isinstance(data, dict):
-            raise ValueError("game 根节点必须是 mapping（键值配置）")
-        names = [field.name for field in fields(cls)]
-        unknown = [str(name) for name in data if name not in names]
-        if unknown:
-            raise ValueError(f"未知字段 {', '.join(unknown)}，请检查字段拼写")
-        missing = [name for name in names if name not in data]
-        if missing:
-            raise ValueError(f"缺少必填字段 {', '.join(missing)}")
-        values = dict(data)
-        pool = values["daily_pool"]
-        if not isinstance(pool, (list, tuple)):
+        """从 game.yaml 或场次快照加载；缺字段或未知字段由构造函数报 TypeError。"""
+        pool = data.get("daily_pool")
+        if not isinstance(pool, list):
             raise ValueError("daily_pool 必须是非空列表，各日奖池必须是正整数")
-        values["daily_pool"] = tuple(pool)
-        return cls(**values)
+        return cls(**{**data, "daily_pool": tuple(pool)})
 
     def to_dict(self) -> dict:
         """返回独立的 JSON 友好快照，奖池序列输出为 list。"""

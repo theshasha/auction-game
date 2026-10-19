@@ -39,73 +39,72 @@ def run_bots(seed) -> int:
     return 0
 
 
-def run_ai(*, model_factory=None, run_dir=None, controller=None,
-           start_reader=True, test_model=False, run_type=None, loaded_configuration=None,
-           prepared_game=None, task_runner_factory=TaskRunner) -> int:
-    """生产组装入口；离线演示仅注入模型边界、输出目录及控制器推进方式。
+def make_task_runners(config, player_configs, model_factory, runner=TaskRunner) -> dict:
+    """为每名玩家创建任务入口；缺密钥在这里报错，早于创建场次目录。"""
+    llm = config["llm"]
+    return {pc["name"]: runner(model_factory(
+        provider=pc["provider"],
+        channel=llm["channels"][pc["provider"]],
+        model=pc["model"],
+        timeout=llm["timeout_seconds"],
+        protocol=pc["protocol"],
+        max_tokens=pc["max_tokens"],
+        model_settings=pc["model_settings"],
+    )) for pc in player_configs}
 
-    loaded_configuration 供离线入口复用本次启动已解析的配置，不再次读取 YAML。
-    prepared_game 是已完成根规则同步的参数对象；离线入口在创建目录前准备一次。
-    task_runner_factory 允许离线入口在任务边界提供显式依赖与无交互失败策略。
-    """
+
+def run_ai(test_model: bool = False) -> int:
+    """真实模型比赛；配置、规则或密钥有误时在创建场次目录前停止。"""
     try:
-        if loaded_configuration is None:
-            loaded_configuration = load_configuration(test_model=True) if test_model else load_configuration()
-        config, player_configs = loaded_configuration
-        game = prepared_game
-        if game is None:
-            game = load_game_settings()
-            sync_root_rules(game)
-    except ConfigurationError as exc:
+        config, player_configs = load_configuration(test_model=test_model)
+        game = load_game_settings()
+        sync_root_rules(game)
+        task_runners = make_task_runners(config, player_configs, make_model_factory)
+    except (ConfigurationError, MissingApiKeyError) as exc:
         print(f"[配置错误] {exc}")
         return 1
-    if len(player_configs) < 2:
-        print("错误：AI 比赛至少需要 2 名玩家，请检查 players.yaml")
-        return 1
-    timeout = config["llm"]["timeout_seconds"]
-    max_concurrency = config["llm"]["max_concurrency"]
+    run_type = "ai-test" if test_model else "ai"
+    run_dir = make_run_dir(run_type)
+    if test_model:
+        test_key = config["test_model"]
+        print(f"测试模型：{test_key} / {config['models'][test_key]['model']}（全员使用，调用真实服务，可能收费）")
+        print("角色身份与独立历史保持不变。")
+    else:
+        print("常规阵容：")
+        for pc in player_configs:
+            print(f"  {pc['name']}：{pc['model']}")
+    warned = {pc["model_key"]: pc for pc in player_configs if pc["capabilities"]["output_fallback_reason"]}
+    for pc in warned.values():
+        label = "测试模型" if test_model else pc["model"]
+        print(f"[预算提醒] {label}：{pc['capabilities']['output_fallback_reason']}；暂用 {pc['max_tokens']} tokens。")
+    if warned:
+        print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
+              "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
+    controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
+    return play_ai(config, player_configs, game, task_runners, controller,
+                   run_dir=run_dir, run_type=run_type, test_model=test_model, start_reader=True)
 
+
+def play_ai(config, player_configs, game, task_runners, controller, *,
+            run_dir, run_type, test_model, start_reader=False) -> int:
+    """写场次快照并跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。"""
     all_names = [pc["name"] for pc in player_configs]
-    predictions = [(pc["name"], pc.get("predicted_win_rate", 0)) for pc in player_configs]
-
-    task_runners = {}
-    model_factory = model_factory or make_model_factory
-    for pc in player_configs:
-        try:
-            task_runners[pc["name"]] = task_runner_factory(model_factory(
-                provider=pc["provider"],
-                channel=config["llm"]["channels"][pc["provider"]],
-                model=pc["model"],
-                timeout=timeout,
-                protocol=pc["protocol"],
-                max_tokens=pc["max_tokens"],
-                model_settings=pc["model_settings"],
-            ))
-        except (MissingApiKeyError, ValueError) as exc:
-            print(f"[配置错误] 玩家 {pc['name']}：{exc}")
-            return 1
-
-    run_type = run_type or ("ai-test" if test_model else "ai")
-    run_dir = run_dir if run_dir is not None else make_run_dir(run_type)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    predictions = [(pc["name"], pc["predicted_win_rate"]) for pc in player_configs]
     # 本场配置快照，统计和展示只读它。
     snapshot = {
         "run_type": run_type,
         "mode": "test_model" if test_model else "regular",
         "game": game.to_dict(),
-        "max_concurrency": max_concurrency,
+        "max_concurrency": controller.max_concurrency,
         "prompts": dict(config["prompts"]),
         "players": [{
             "name": pc["name"], "persona_title": pc["persona_title"], "persona_text": pc["persona_text"],
-            "predicted_win_rate": pc.get("predicted_win_rate", 0),
+            "predicted_win_rate": pc["predicted_win_rate"],
             "identity_model": pc["identity_model"],
             "execution_model": {"key": pc["model_key"], **{key: pc[key] for key in EXECUTION_FIELDS}},
         } for pc in player_configs],
     }
     paths = initialize_run(run_dir, snapshot, render_rules(game, all_names))
-    controller = controller if controller is not None else Controller(mode="step")
-    # 注入的离线控制器也使用同一份已校验配置，所有轮级任务共用此上限。
-    controller.max_concurrency = max_concurrency
 
     players = [
         AIPlayer(
@@ -123,34 +122,10 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None,
         )
         for number, pc in enumerate(player_configs, 1)
     ]
-    if run_type == "offline":
-        print("离线演示：全员使用假模型，不调用真实服务，不收费。")
-    elif test_model:
-        test_key = config["test_model"]
-        test_execution = config["models"][test_key]
-        print(f"测试模型：{test_key} / {test_execution['model']}（全员使用，调用真实服务，可能收费）")
-        print("角色身份与独立历史保持不变。")
-    else:
-        print("常规阵容：")
-        for pc in player_configs:
-            print(f"  {pc['name']}：{pc['model']}")
-    print(f"并发上限：{max_concurrency}")
+    print(f"并发上限：{controller.max_concurrency}")
     prompt_options = config["prompts"]
     print(f"提示设置：赛前预测{'开启' if prompt_options['enable_predictions'] else '关闭'}，"
           f"人设{'开启' if prompt_options['enable_personas'] else '关闭'}")
-    if run_type != "offline":
-        warned = set()
-        for pc in player_configs:
-            reason = pc["capabilities"]["output_fallback_reason"]
-            target = (pc["provider"], pc["protocol"], pc["model"], pc["max_tokens"], reason)
-            if reason and target not in warned:
-                warned.add(target)
-                label = "测试模型" if test_model else pc["model"]
-                print(f"[预算提醒] {label}：{reason}；暂用 {pc['max_tokens']} tokens。")
-        if warned:
-            print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
-                  "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
-
     if start_reader:
         controller.start_stdin_reader()
         print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=退出比赛")

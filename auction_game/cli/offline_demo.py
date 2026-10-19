@@ -17,7 +17,7 @@ from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.controller import Controller
 from auction_game.ai.agent_tasks import Task, TaskRunner
 from auction_game.game.game_rules import GameSettings
-from auction_game.runners import run_ai
+from auction_game.runners import make_task_runners, play_ai
 from auction_game.reporting.run_output import make_run_dir
 from auction_game.game.rules import sync_root_rules
 
@@ -36,26 +36,31 @@ _current_task: ContextVar[OfflineTask] = ContextVar("offline_task")
 
 
 def demo_submission(game, index, player_count, match_index, day, coins):
-    """纯报价脚本；经济或赛制不适用时沿用首位玩家低价参与的策略。"""
-    rich_demo = (
-        player_count >= 4 and game.max_days >= 2 and game.regular_matches >= 2
-        and game.max_playoffs >= 1 and game.max_bid >= 2 and game.daily_salary >= 1
-        and game.initial_coins >= game.super_cost
-        and game.initial_coins + game.daily_salary >= max(2 * game.super_cost + 1, 2)
-    )
-    if not rich_demo:
-        return (min(3, game.max_bid, coins) if index == 0 else 0), None
+    """离线报价脚本，按局和天给出确定的报价。
+
+    每局首日全员出 0 流局，首位玩家的超级出价落空；次日前两位玩家用超级出价狙中末位玩家的 2，
+    之后由本局的赢家以 1 独得。正赛由前两位轮流赢（局数为奇数时最后一局给第三位），
+    两人打平进入加赛，加赛由首位玩家赢。至少 4 名玩家且金币够用时这些阶段都会出现；
+    否则报价截断到规则允许的范围，只保证合法。
+    """
+    super_bid = None
     if day == 1:
-        return 0, 1 if index == 0 else None
-    winner = (match_index - 1) % 2
-    if match_index > game.regular_matches:
-        winner = 0
-    elif game.regular_matches % 2 and match_index == game.regular_matches:
-        winner = 2
-    if day == 2:
-        bid = 2 if index == player_count - 1 else int(index == winner)
-        return bid, 2 if index in (0, 1) else None
-    return int(index == winner), None
+        bid, super_bid = 0, 1 if index == 0 else None
+    else:
+        winner = (match_index - 1) % 2
+        if match_index > game.regular_matches:
+            winner = 0
+        elif game.regular_matches % 2 and match_index == game.regular_matches:
+            winner = 2
+        bid = int(index == winner)
+        if day == 2:
+            bid = 2 if index == player_count - 1 else bid
+            super_bid = 2 if index in (0, 1) else None
+    bid = min(bid, game.max_bid, coins)
+    if super_bid is not None and (super_bid > game.max_bid or super_bid == bid
+                                  or bid + game.super_cost > coins):
+        super_bid = None
+    return bid, super_bid
 
 
 class OfflineTaskRunner(TaskRunner):
@@ -135,18 +140,10 @@ class DemoFactory:
 
 def generate_demo(output: Path | None = None, *, test_model=False):
     """返回场次目录和各玩家的假模型工厂。"""
-    loaded_configuration = load_configuration(test_model=test_model)
-    _, configs = loaded_configuration
+    config, configs = load_configuration(test_model=test_model)
     game = load_game_settings()
     sync_root_rules(game)
     names = [pc["name"] for pc in configs]
-    if output is not None:
-        output = output.resolve()
-        if output.exists():
-            raise FileExistsError(f"场次已存在，拒绝覆盖：{output}")
-        print(f"本场日志目录：{output}")
-    else:
-        output = make_run_dir("offline")
     factories = []
 
     def factory(**kwargs):
@@ -158,14 +155,16 @@ def generate_demo(output: Path | None = None, *, test_model=False):
         factories.append(item)
         return item
 
-    controller = OfflineController(mode="continuous")
+    task_runners = make_task_runners(config, configs, factory, runner=OfflineTaskRunner)
+    if output is None:
+        output = make_run_dir("offline")
+    else:
+        print(f"本场日志目录：{output}")
+    print("离线演示：全员使用假模型，不调用真实服务，不收费。")
+    controller = OfflineController(mode="continuous", max_concurrency=config["llm"]["max_concurrency"])
     with override_allow_model_requests(False):
-        status = run_ai(model_factory=factory, run_dir=output, controller=controller,
-                        start_reader=False, test_model=test_model, run_type="offline",
-                        loaded_configuration=loaded_configuration, prepared_game=game,
-                        task_runner_factory=OfflineTaskRunner)
-    if status:
-        raise RuntimeError(f"离线比赛启动失败：{status}")
+        play_ai(config, configs, game, task_runners, controller,
+                run_dir=output, run_type="offline", test_model=test_model)
     return output, factories
 
 

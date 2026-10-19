@@ -214,7 +214,7 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
     # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。
     standings = make_standings({"Alpha": [2] * match_index, "Bravo": [1] * match_index},
                               scores_history={"Alpha": [2] * match_index, "Bravo": [3] * match_index})
-    director.on_match_end(make_log(match_index=match_index, is_playoff=playoff, game=game), standings, True)
+    director.on_match_end(make_log(match_index=match_index, is_playoff=playoff, game=game), standings)
     for p in players:
         text = encoded(p.task_runner.calls[-1])
         assert "private-" + p.name in text
@@ -238,10 +238,3 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
         assert p.decide_bid(obs) == (0, None)
         assert len(p.task_runner.calls) == 4
     assert "private-" not in (tmp_path / "speeches.md").read_text(encoding="utf-8")
-
-
-def test_final_match_skips_memory_and_next_plan(tmp_path):
-    player = make_player(fake_task_runner([speech_reply("last speech")]))
-    director = AISpeechDirector([player], Controller(mode="continuous", announce=lambda _: None), tmp_path, game=player.game)
-    director.on_match_end(make_log(), [], False)
-    assert len(player.task_runner.calls) == 1 and player.memory == ""

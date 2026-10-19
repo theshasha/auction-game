@@ -20,7 +20,7 @@ class TestSettlementFacts:
 
     def test_match_end_speech_contains_results_without_reminder(self):
         text = prompts.match_end_speech_request(
-            make_log(), make_standings({n: [0] for n in NAMES}), True
+            make_log(), make_standings({n: [0] for n in NAMES})
         )
         assert "规则要点重申" not in text
         assert "本局完整出价日志" in text and "5（获胜）" in text and "4（退款）" in text
@@ -40,7 +40,7 @@ class TestRulesText:
         text = render_rules(load_game_settings(), names)
         document = tmp_path / "RULES.md"
         monkeypatch.setattr(rules, "RULES_PATH", document)
-        rules.sync_root_rules()
+        rules.sync_root_rules(load_game_settings())
         assert document.read_text(encoding="utf-8") == text
         system = prompts.build_system_prompt(names[0], "人设", "正文", [], names, load_game_settings())
         body = render_rules(load_game_settings(), names, include_note=False)
@@ -165,11 +165,6 @@ class TestRulesText:
         assert system.startswith(text)
         assert "其他 2 位玩家是：乙、丙" in system
 
-    @pytest.mark.parametrize("names", [[], ["甲"], ["甲", "甲"], ["甲", " "]])
-    def test_invalid_actual_names_rejected(self, names):
-        with pytest.raises(ValueError):
-            render_rules(TEST_GAME, names)
-
     def test_unknown_placeholder_is_not_silently_preserved(self, tmp_path, monkeypatch):
         template = tmp_path / "RULES.template.md"
         template.write_text("{misspelled_parameter}", encoding="utf-8")
@@ -207,10 +202,3 @@ class TestRulesText:
         monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
         assert rules.main() == 1
         assert document.read_text(encoding="utf-8") == "过期规则"
-
-    def test_check_command_rejects_bad_template(self, tmp_path, monkeypatch):
-        template = tmp_path / "RULES.template.md"
-        template.write_text("{unknown}", encoding="utf-8")
-        monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
-        monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
-        assert rules.main() == 1

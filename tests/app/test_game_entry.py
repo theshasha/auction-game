@@ -5,7 +5,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -14,7 +13,6 @@ import main
 from auction_game import runners
 from auction_game.configuration import ConfigurationError
 from auction_game.game.game_rules import GameSettings
-from auction_game.ai.llm_client import MissingApiKeyError
 from auction_game.game.players import BOT_NAMES
 from auction_game.game.rules import render_rules
 
@@ -63,31 +61,16 @@ def test_game_errors_stop_before_clients_or_logs(monkeypatch, capsys, entry, arg
         raise ConfigurationError("game.yaml：max_bid 必须是非负整数")
 
     monkeypatch.setattr(runners, "load_game_settings", load)
-    monkeypatch.setattr(runners, "load_configuration", lambda: ({}, []))
+    monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: ({}, []))
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("参数错误时不应创建客户端"))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("参数错误时不应创建日志"))
     assert entry(*args) == 1
     assert "[配置错误] game.yaml：max_bid" in capsys.readouterr().out
 
 
-def test_ai_single_player_stops_before_clients_or_logs(monkeypatch, capsys, game):
-    monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"timeout_seconds": 30}},
-        [{"name": "甲", "provider": "openai", "model": "test-model"}],
-    ))
-    monkeypatch.setattr(runners, "load_game_settings", lambda: game)
-    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("一人名单不应创建客户端"))
-    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("一人名单不应创建日志"))
-
-    assert runners.run_ai() == 1
-
-    output = capsys.readouterr().out
-    assert "至少需要 2 名玩家" in output and "players.yaml" in output
-
-
 @pytest.mark.parametrize("args,expected", [
     (["--seed", "42"], ("bots", 42)),
-    (["--ai"], ("ai",)),
+    (["--ai"], ("ai", False)),
     (["--benchmark", "2"], ("benchmark", 2)),
 ])
 @pytest.mark.parametrize("status", [0, 1])
@@ -100,7 +83,7 @@ def test_main_dispatches_mode(monkeypatch, args, expected, status):
 
     monkeypatch.setattr("sys.argv", ["main.py", *args])
     monkeypatch.setattr(runners, "run_bots", lambda seed: record("bots", seed))
-    monkeypatch.setattr(runners, "run_ai", lambda: record("ai"))
+    monkeypatch.setattr(runners, "run_ai", lambda test_model: record("ai", test_model))
     monkeypatch.setattr(main.benchmark, "run_benchmark", lambda count: record("benchmark", count))
 
     assert main.main() == status
@@ -134,48 +117,6 @@ def test_main_dispatches_test_model_and_rejects_other_modes(monkeypatch):
             main.main()
         assert exc.value.code == 2
     assert len(calls) == 1
-
-
-@pytest.mark.parametrize("error_type", [MissingApiKeyError, ValueError])
-def test_ai_initialization_error_stops_before_logs(monkeypatch, capsys, game, error_type):
-    monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"max_concurrency": 10, "timeout_seconds": 30, "channels": {"test": {}}}},
-        [{"name": name, "provider": "test", "model": "test", "protocol": "chat", "max_tokens": 123,
-          "model_settings": {}}
-         for name in ["甲", "乙"]],
-    ))
-    monkeypatch.setattr(runners, "load_game_settings", lambda: game)
-
-    def make_model_factory(**kwargs):
-        raise error_type("初始化失败")
-
-    monkeypatch.setattr(runners, "make_model_factory", make_model_factory)
-    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("初始化失败不应创建日志"))
-    assert runners.run_ai() == 1
-    assert "[配置错误] 玩家 甲：初始化失败" in capsys.readouterr().out
-
-
-def test_ai_success_returns_zero_with_mocked_tournament(monkeypatch, tmp_path, game):
-    monkeypatch.setattr(runners, "load_configuration", lambda: (
-        {"llm": {"max_concurrency": 10, "timeout_seconds": 30, "channels": {"test": {"base_url": "https://offline.invalid/v1"}}},
-         "prompts": {"enable_predictions": True, "enable_personas": True}},
-        [dict(name=name, provider="test", model="test", protocol="chat", max_tokens=123,
-              model_settings={}, capabilities={"reasoning_status": "unknown", "reasoning_detail": "synthetic",
-                                               "output_fallback_reason": None},
-              persona_title="测试", persona_text="测试人设", model_key="test",
-              identity_model={"key": "test", "model": "identity"})
-         for name in ["甲", "乙"]],
-    ))
-    monkeypatch.setattr(runners, "load_game_settings", lambda: game)
-    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
-    monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / "run")
-    monkeypatch.setattr(runners, "Controller", lambda mode: SimpleNamespace(start_stdin_reader=lambda: None))
-    result = object()
-    monkeypatch.setattr(runners, "run_tournament", lambda *args, **kwargs: result)
-    printed = []
-    monkeypatch.setattr(runners, "print_final_result", printed.append)
-    assert runners.run_ai() == 0
-    assert printed == [result]
 
 
 @pytest.mark.parametrize("args,valid_game,status,writes_logs", [

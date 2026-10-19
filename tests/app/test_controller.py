@@ -326,7 +326,7 @@ class TestParallelRound:
             assert sum("停止新任务" in message for message in announcements) == 1
             assert any("成功 1，失败 0，未启动 1" in message for message in announcements)
             assert any("停止新任务" in message and "内部重试可能继续" in message
-                       and "成功结果保留" in message and "等待当前 1 项任务结束" in message
+                       and "成功结果保留" in message and "等待已启动任务结束" in message
                        and "回车或 c：等任务结束后继续" in message
                        and "q：等任务结束后撤销本轮并退出比赛" in message for message in announcements)
 
