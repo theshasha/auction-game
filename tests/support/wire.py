@@ -28,12 +28,10 @@ def make_agent(model):
     return production_agent(model, "bid", settings={"timeout": 3.0, "max_tokens": 123})
 
 
-def sse(protocol, data=GOOD, *, ending="ok", tool=False, tool_name="bid", tool_id="call_1", text=None, thinking=None):
-    """真实 SSE 文本夹具；tool=True 只用于旧工具消息与错误回复。"""
+def sse(protocol, data=GOOD, *, ending="ok", text=None, thinking=None):
+    """真实 SSE 文本夹具。"""
     if text is None:
         text = text_reply(data)
-    args = json.dumps(data)
-    halves = (args[:len(args) // 2], args[len(args) // 2:])
     events = []
     if protocol == "chat":
         def chunk(delta, finish=None):
@@ -41,14 +39,9 @@ def sse(protocol, data=GOOD, *, ending="ok", tool=False, tool_name="bid", tool_i
                     "model": MODEL, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
         if thinking:
             events.append(chunk({"role": "assistant", "reasoning_content": thinking}))
-        if tool:
-            events.append(chunk({"role": "assistant", "tool_calls": [{"index": 0, "id": tool_id,
-                           "type": "function", "function": {"name": tool_name, "arguments": halves[0]}}]}))
-            events.append(chunk({"tool_calls": [{"index": 0, "function": {"arguments": halves[1]}}]}))
-        else:
-            events.append(chunk({"role": "assistant", "content": text}))
+        events.append(chunk({"role": "assistant", "content": text}))
         if ending != "missing":
-            events.append(chunk({}, "length" if ending == "limit" else "tool_calls" if tool else "stop"))
+            events.append(chunk({}, "length" if ending == "limit" else "stop"))
         return [("data: " + json.dumps(e) + "\n\n").encode() for e in events] + [b"data: [DONE]\n\n"]
     if protocol == "responses":
         response = {"id": "resp_1", "object": "response", "created_at": 1, "model": MODEL,
@@ -63,28 +56,16 @@ def sse(protocol, data=GOOD, *, ending="ok", tool=False, tool_name="bid", tool_i
             events.append({"type": "response.reasoning_summary_text.delta", "item_id": "rs_old",
                            "output_index": 1, "summary_index": 0, "delta": thinking})
             events.append({"type": "response.output_item.done", "output_index": 1, "item": reasoning})
-        item = {"type": "function_call", "id": "fc_1", "call_id": tool_id, "name": tool_name,
-                "arguments": "", "status": "in_progress"}
-        if tool:
-            events.append({"type": "response.output_item.added", "output_index": 0, "item": item})
-            for part in halves:
-                events.append({"type": "response.function_call_arguments.delta", "item_id": "fc_1",
-                               "output_index": 0, "delta": part})
-            events.append({"type": "response.function_call_arguments.done", "item_id": "fc_1",
-                           "output_index": 0, "arguments": args})
-            item = dict(item, arguments=args, status="completed")
-            events.append({"type": "response.output_item.done", "output_index": 0, "item": item})
-        else:
-            part = {"type": "output_text", "text": text, "annotations": []}
-            item = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
-                    "content": [part]}
-            events.append({"type": "response.output_item.added", "output_index": 0,
-                           "item": dict(item, content=[], status="in_progress")})
-            events.append({"type": "response.content_part.added", "item_id": "msg_1", "output_index": 0,
-                           "content_index": 0, "part": dict(part, text="")})
-            events.append({"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
-                           "content_index": 0, "delta": text})
-            events.append({"type": "response.output_item.done", "output_index": 0, "item": item})
+        part = {"type": "output_text", "text": text, "annotations": []}
+        item = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+                "content": [part]}
+        events.append({"type": "response.output_item.added", "output_index": 0,
+                       "item": dict(item, content=[], status="in_progress")})
+        events.append({"type": "response.content_part.added", "item_id": "msg_1", "output_index": 0,
+                       "content_index": 0, "part": dict(part, text="")})
+        events.append({"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
+                       "content_index": 0, "delta": text})
+        events.append({"type": "response.output_item.done", "output_index": 0, "item": item})
         if ending != "missing":
             status = "incomplete" if ending == "limit" else "completed"
             final = dict(response, status=status, output=([reasoning] if thinking else []) + [item],
@@ -103,22 +84,14 @@ def sse(protocol, data=GOOD, *, ending="ok", tool=False, tool_name="bid", tool_i
                 {"type": "content_block_start", "index": 2, "content_block": {"type": "redacted_thinking", "data": "redacted_old_reasoning"}},
                 {"type": "content_block_stop", "index": 2},
             ])
-        if tool:
-            events.append({"type": "content_block_start", "index": 0, "content_block": {
-                           "type": "tool_use", "id": tool_id, "name": tool_name, "input": {}}})
-            for part in halves:
-                events.append({"type": "content_block_delta", "index": 0,
-                               "delta": {"type": "input_json_delta", "partial_json": part}})
-            events.append({"type": "content_block_stop", "index": 0})
-        else:
-            events.append({"type": "content_block_start", "index": 0,
-                           "content_block": {"type": "text", "text": ""}})
-            events.append({"type": "content_block_delta", "index": 0,
-                           "delta": {"type": "text_delta", "text": text}})
-            events.append({"type": "content_block_stop", "index": 0})
+        events.append({"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "text", "text": ""}})
+        events.append({"type": "content_block_delta", "index": 0,
+                       "delta": {"type": "text_delta", "text": text}})
+        events.append({"type": "content_block_stop", "index": 0})
         if ending != "missing":
             events.append({"type": "message_delta", "delta": {
-                           "stop_reason": "max_tokens" if ending == "limit" else "tool_use" if tool else "end_turn",
+                           "stop_reason": "max_tokens" if ending == "limit" else "end_turn",
                            "stop_sequence": None}, "usage": {"output_tokens": 3}})
             events.append({"type": "message_stop"})
     return [("event: " + e["type"] + "\ndata: " + json.dumps(dict(e, sequence_number=i)) + "\n\n").encode()
@@ -167,15 +140,12 @@ class Harness:
             raise http.ConnectError("offline", request=request)
         if isinstance(item, int):
             return http.Response(item, json={"error": {"type": "invalid_request_error", "message": "bad config"}})
+        if isinstance(item, list):  # 原始 SSE 块
+            item = (None, {"chunks": item})
         data, options = item
         options = dict(options)
         broken = options.pop("broken", False)
-        body = self.requests[-1][1]
-        tools = body.get("tools", [])
-        tool_name = tools[0].get("function", tools[0])["name"] if tools else "bid"
-        tool_name = options.pop("tool_name", tool_name)
-        chunks = sse(self.protocol, data, tool_name=tool_name,
-                     tool_id=f"call_{len(self.requests)}", **options)
+        chunks = options.pop("chunks", None) or sse(self.protocol, data, **options)
         if broken and self.protocol == "chat":
             # [DONE] is a successful SDK terminator; interrupt before it, not after it.
             chunks = chunks[:-1]

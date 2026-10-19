@@ -8,7 +8,7 @@ import yaml
 
 from auction_game.cli import check_llm
 from auction_game import runners
-from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, channel_model_profile, load_configuration
+from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, load_configuration
 from auction_game.game.game_rules import GameSettings
 from tests.support.factories import CHANNELS
 
@@ -158,11 +158,6 @@ def test_missing_file(tmp_path):
 def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, capsys, entry, test_model, test_key):
     config_path = config_files[0]
     config_path.write_text(yaml.safe_dump({"test_model": test_key, "llm": {"max_concurrency": 2, "timeout_seconds": 900.5, "channels": CHANNELS}}), encoding="utf-8")
-    models_path = config_files[2]
-    models = yaml.safe_load(models_path.read_text(encoding="utf-8"))
-    models["models"]["first"]["model_profile"] = {"supports_forced_tool_choice": True}
-    models["models"]["substitute"]["model_profile"] = {"supports_forced_tool_choice": False}
-    models_path.write_text(yaml.safe_dump(models), encoding="utf-8")
     loaded = []
     factories = []
     chats = []
@@ -233,9 +228,6 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, c
         assert games_loaded == [True]
         snapshot = json.loads((tmp_path / "run" / "data" / "run_config.json").read_text(encoding="utf-8"))
         assert snapshot["max_concurrency"] == 2
-        for pc, saved in zip(load_configuration(*config_files, test_model=test_model)[1], snapshot["players"]):
-            assert saved["execution_model"]["model_profile"] == channel_model_profile(
-                CHANNELS[pc["provider"]], pc["protocol"], pc["model_profile"])
         assert (tmp_path / "run" / "RULES.md").read_text(encoding="utf-8") == runners.render_rules(game, ["甲", "乙"])
     else:
         assert check_llm.main(["--test-model"] if test_model else []) == 0
@@ -247,16 +239,14 @@ def test_entries_use_shared_configuration(config_files, monkeypatch, tmp_path, c
     assert len(chats) == (1 if test_model and entry is check_llm else 2)
     expected = [
         dict(provider="hub", channel=CHANNELS["hub"], model="test-model-a", timeout=900.5,
-             protocol="chat", max_tokens=123, model_settings={},
-             model_profile={"supports_forced_tool_choice": True}),
+             protocol="chat", max_tokens=123, model_settings={}),
         dict(provider="anthropic", channel=CHANNELS["anthropic"], model="test-model-b", timeout=900.5,
               protocol="anthropic", max_tokens=456, model_settings={}),
     ]
     if test_model and test_key == "substitute":
         expected = [dict(provider="hub", channel=CHANNELS["hub"], model="test-model-c", timeout=900.5,
                          protocol="responses", max_tokens=789,
-                         model_settings={"openai_reasoning_effort": "medium"},
-                         model_profile={"supports_forced_tool_choice": False})] * len(chats)
+                         model_settings={"openai_reasoning_effort": "medium"})] * len(chats)
     elif test_model:
         expected = [expected[0]] * len(chats)
     if entry is check_llm:
@@ -290,9 +280,6 @@ def test_entries_report_configuration_errors(config_files, monkeypatch, capsys, 
     ({"hub": {"base_url": "https://host:bad", "api_key_env": "KEY"}}, "base_url"),
     ({"hub": {"base_url": "https://host", "api_key_env": "bad-name"}}, "api_key_env"),
     ({"hub": {"base_url": "https://host", "api_key_env": None}}, "api_key_env"),
-    ({"hub": {**CHANNELS["hub"], "responses_profile": None}}, "responses_profile"),
-    ({"hub": {**CHANNELS["hub"], "responses_profile": {"supports_forced_tool_choice": "false"}}}, "responses_profile"),
-    ({"hub": {**CHANNELS["hub"], "responses_profile": {"supports_tools": False}}}, "responses_profile"),
 ])
 def test_invalid_channels(config_files, channel, field):
     config_path = config_files[0]
@@ -315,7 +302,6 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
     config_path, _, models_path = config_files
     models = yaml.safe_load(models_path.read_text(encoding="utf-8"))
     models["models"]["substitute"]["reasoning_effort"] = "low"
-    models["models"]["substitute"]["model_profile"] = {"supports_forced_tool_choice": True}
     models_path.write_text(yaml.safe_dump(models), encoding="utf-8")
     # 先加载带 low 覆盖的替身，再切换目录键，检查旧配置不污染下一次启动。
     assert load_configuration(*config_files, test_model=True)[1][0]["model_settings"] == {
@@ -335,8 +321,6 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
     assert testing[0] is not testing[1]
     if test_key == "first":
         assert all(player["model_settings"] == {} for player in testing)
-        assert all(player["model_profile"] == {} for player in testing)
-        assert testing[1]["identity_model"]["model_profile"] == {}
         assert config["models"]["substitute"]["model_settings"] == {"openai_reasoning_effort": "low"}
     assert load_configuration(*config_files)[1] == regular
 
@@ -374,10 +358,6 @@ def test_startup_deduplicates_budget_warning_with_repair_command(config_files, m
     ("max_tokens", True), ("max_tokens", 0), ("max_tokens", 2.5), ("max_tokens", "123"),
     ("models_dev", None), ("models_dev", {"provider": "official"}),
     ("name", "../escape"), ("name", " "),
-    ("model_profile", None), ("model_profile", []),
-    ("model_profile", {"supports_forced_tool_choice": "true"}),
-    ("model_profile", {"supports_forced_tool_choice": 1}),
-    ("model_profile", {"supports_tools": True}),
 ])
 def test_invalid_catalog_fields(config_files, field, value):
     path = config_files[2]
@@ -398,16 +378,11 @@ def test_invalid_test_model_reference(config_files, target):
         load_configuration(*config_files)
 
 
-@pytest.mark.parametrize("alias_profile,expected_calls", [
-    ({}, 1), ({"supports_forced_tool_choice": False}, 1),
-    ({"supports_forced_tool_choice": True}, 2),
-])
-def test_probe_selected_catalog_aliases_deduplicate_and_reject_unknown(
-        config_files, monkeypatch, alias_profile, expected_calls):
+def test_probe_selected_catalog_aliases_deduplicate_and_reject_unknown(config_files, monkeypatch):
+    expected_calls = 1
     path = config_files[2]
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     data["models"]["alias"] = dict(data["models"]["substitute"])
-    data["models"]["alias"]["model_profile"] = alias_profile
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     snapshot_path = path.parent / "model_capabilities.json"
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
@@ -426,27 +401,6 @@ def test_probe_selected_catalog_aliases_deduplicate_and_reject_unknown(
     assert calls[0]["protocol"] == "responses" and calls[0]["max_tokens"] == 789
     assert check_llm.main(["--model", "absent"]) == 1
     assert len(calls) == expected_calls
-
-
-def test_channel_model_profile_uses_execution_override_without_mutating_inputs():
-    channel = {"chat_profile": {"supports_forced_tool_choice": False}}
-    override = {"supports_forced_tool_choice": True}
-    merged = channel_model_profile(channel, "chat", override)
-    assert merged == {"supports_forced_tool_choice": True}
-    merged.clear()
-    assert channel["chat_profile"] == {"supports_forced_tool_choice": False}
-    assert override == {"supports_forced_tool_choice": True}
-    assert channel_model_profile(channel, "anthropic", override) == {}
-
-
-def test_production_only_kimi_forces_tool_choice():
-    config, _ = load_configuration()
-    assert all(channel_model_profile(channel, protocol) == {"supports_forced_tool_choice": False}
-               for channel in config["llm"]["channels"].values() for protocol in ("chat", "responses"))
-    enabled = [key for key, model in config["models"].items()
-               if channel_model_profile(config["llm"]["channels"][model["provider"]], model["protocol"],
-                                        model["model_profile"]).get("supports_forced_tool_choice")]
-    assert enabled == ["kimi_k3"]
 
 
 def test_old_player_format_and_repeated_identity_rejected(config_files):

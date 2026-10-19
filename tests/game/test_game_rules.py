@@ -141,7 +141,6 @@ def test_load_players_is_independent_and_preserves_contract(tmp_path, monkeypatc
     path.write_text(yaml.safe_dump({"players": [player]}), encoding="utf-8")
     from auction_game.model_capabilities import effective_capabilities
     model.update(effective_capabilities("identity", model, {}))
-    model["model_profile"] = {}
     assert load_players(path, models_path) == [{**player, **model, "model_key": "identity",
                                                "identity_model": {"key": "identity", **model},
                                                "predicted_win_rate": 0}]

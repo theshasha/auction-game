@@ -7,7 +7,7 @@ import time
 import argparse
 import json
 
-from auction_game.configuration import ConfigurationError, channel_model_profile, load_configuration
+from auction_game.configuration import ConfigurationError, load_configuration
 from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
 from auction_game.ai.agent_execution import AgentExecutor
 from pydantic_ai import Agent, ModelRetry
@@ -51,13 +51,12 @@ def main(argv=None) -> int:
         return 1
     timeout = config["llm"]["timeout_seconds"]
 
-    # 同一模型的别名只在实际预算、设置与渠道兼容配置一致时合并。
+    # 同一模型的别名只在实际预算和设置一致时合并。
     targets = {}
     for player in players:
         channel = config["llm"]["channels"][player["provider"]]
         key = (channel["base_url"], channel["api_key_env"], player["protocol"], player["model"],
-               player["max_tokens"], json.dumps(player["model_settings"], sort_keys=True),
-               json.dumps(channel_model_profile(channel, player["protocol"], player.get("model_profile")), sort_keys=True))
+               player["max_tokens"], json.dumps(player["model_settings"], sort_keys=True))
         targets.setdefault(key, player)
     failures = 0
     print(f"连通检查：{len(targets)} 个检查目标，会请求真实服务，可能收费。每个目标至多请求一次，不重试。")
@@ -68,9 +67,6 @@ def main(argv=None) -> int:
         print(f"[探测] {label}: 比赛预算={player['max_tokens']}，本次探测预算={probe_budget}，"
               f"推理={player['capabilities']['reasoning_status']}；"
               f"{player['capabilities']['reasoning_detail']}")
-        profile = channel_model_profile(config['llm']['channels'][player['provider']],
-                                        player['protocol'], player.get('model_profile'))
-        print(f"  生效兼容设置={json.dumps(profile, sort_keys=True)}")
         try:
             executor = AgentExecutor(make_model_factory(
                 provider=player["provider"],
@@ -81,7 +77,6 @@ def main(argv=None) -> int:
                 max_tokens=probe_budget,
                 model_settings=player["model_settings"],
                 request_attempts=1,
-                **({"model_profile": player["model_profile"]} if player.get("model_profile") else {}),
             ))
         except (MissingApiKeyError, ValueError) as exc:
             print(f"[配置错误] {label}: {exc}")

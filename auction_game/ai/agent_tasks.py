@@ -109,8 +109,8 @@ def make_agent(model, task: Task, *, settings=None):
 class TaskRunner:
     """个人赛适配器；业务组装后交给通用执行器，不修改输入历史。"""
 
-    def __init__(self, factory: ModelFactory, *, capture_requests=False):
-        self.executor = AgentExecutor(factory, capture_requests=capture_requests)
+    def __init__(self, factory: ModelFactory):
+        self.executor = AgentExecutor(factory)
 
     def __call__(self, task: Task, prompt: str, history: list[ModelMessage], *,
                  game: GameSettings | None = None, coins: int = 0) -> ExecutionResult[BidOutput | SpeechOutput | MemoryOutput | str]:

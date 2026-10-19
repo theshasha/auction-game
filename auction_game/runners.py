@@ -6,7 +6,7 @@ import random
 
 from auction_game.ai.ai_player import AIPlayer
 from auction_game.ai.ai_speech import AISpeechDirector
-from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, channel_model_profile, load_configuration, load_game_settings
+from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, load_configuration, load_game_settings
 from auction_game.controller import (
     Controller,
     RoundTask,
@@ -18,7 +18,6 @@ from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.game.players import BOT_NAMES, RandomBot
 from auction_game.game.rules import render_rules, sync_root_rules
 from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_day_result, print_final_result
-from auction_game.reporting.tool_records import ToolWriter
 from auction_game.game.tournament import run_tournament
 
 
@@ -40,12 +39,11 @@ def run_bots(seed) -> int:
     return 0
 
 
-def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=None,
+def run_ai(*, model_factory=None, run_dir=None, controller=None,
            start_reader=True, test_model=False, run_type=None, loaded_configuration=None,
            prepared_game=None, task_runner_factory=TaskRunner) -> int:
     """生产组装入口；离线演示仅注入模型边界、输出目录及控制器推进方式。
 
-    record_player 按需记录单玩家完整逻辑请求，默认不膨胀普通比赛日志。
     loaded_configuration 供离线入口复用本次启动已解析的配置，不再次读取 YAML。
     prepared_game 是已完成根规则同步的参数对象；离线入口在创建目录前准备一次。
     task_runner_factory 允许离线入口在任务边界提供显式依赖与无交互失败策略。
@@ -74,7 +72,6 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
     model_factory = model_factory or make_model_factory
     for pc in player_configs:
         try:
-            # 无模型覆盖时保留原有注入工厂接口；非空覆盖始终随实际执行模型传递。
             task_runners[pc["name"]] = task_runner_factory(model_factory(
                 provider=pc["provider"],
                 channel=config["llm"]["channels"][pc["provider"]],
@@ -83,8 +80,7 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
                 protocol=pc["protocol"],
                 max_tokens=pc["max_tokens"],
                 model_settings=pc["model_settings"],
-                **({"model_profile": pc["model_profile"]} if pc.get("model_profile") else {}),
-            ), capture_requests=pc["name"] == record_player)
+            ))
         except (MissingApiKeyError, ValueError) as exc:
             print(f"[配置错误] 玩家 {pc['name']}：{exc}")
             return 1
@@ -104,16 +100,11 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             "name": pc["name"], "persona_title": pc["persona_title"], "persona_text": pc["persona_text"],
             "predicted_win_rate": pc.get("predicted_win_rate", 0),
             "identity_model": pc["identity_model"],
-            "execution_model": {"key": pc["model_key"], **{key: pc[key] for key in
-                                 EXECUTION_FIELDS if key != "model_profile"},
-                                 "model_profile": channel_model_profile(
-                                     config["llm"]["channels"][pc["provider"]], pc["protocol"],
-                                     pc.get("model_profile")),
-                                 "base_url": config["llm"]["channels"][pc["provider"]]["base_url"]},
+            "execution_model": {"key": pc["model_key"], **{key: pc[key] for key in EXECUTION_FIELDS},
+                                "base_url": config["llm"]["channels"][pc["provider"]]["base_url"]},
         } for pc in player_configs],
     }
     paths = initialize_run(run_dir, snapshot, render_rules(game, all_names))
-    tool_writer = ToolWriter(paths)
     controller = controller if controller is not None else Controller(mode="step")
     # 注入的离线控制器也使用同一份已校验配置，所有轮级任务共用此上限。
     controller.max_concurrency = max_concurrency
@@ -131,8 +122,6 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None, record_player=N
             game=game,
             log_path=paths.player(number),
             readable_path=paths.player(number, readable=True),
-            capture_path=paths.capture(number) if pc["name"] == record_player else None,
-            tool_writer=tool_writer, player_number=number,
         )
         for number, pc in enumerate(player_configs, 1)
     ]

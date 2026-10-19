@@ -1,6 +1,5 @@
 """公开边界、规划缓存及观众总结；任务均经过真实 Agent。"""
 
-import json
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -10,7 +9,7 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.ai import ai_speech
 from auction_game.ai.agent_execution import OutputFailedError
-from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply, text_reply
+from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply, text_reply, task_entries
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import ScriptedPlayer
 
@@ -64,7 +63,7 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     player = make_player(runner, tmp_path)
     assert player.give_speech("请发言", "opening_speech") == speech
     assert len(runner.calls) == 1
-    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    entry = task_entries(player.log_path)[-1]
     assert entry["result"] == speech_reply(speech)
     assert "烟雾弹" in ModelMessagesTypeAdapter.dump_json(player.messages).decode()
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
@@ -96,7 +95,7 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
     player.plan_strategy("plan", "plan")
     with pytest.raises(OutputFailedError):
         player.give_speech("speech", "speech")
-    entry = json.loads(player.log_path.read_text(encoding="utf-8").splitlines()[-1])
+    entry = task_entries(player.log_path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     # SDK 合并历史末尾请求后，失败审计仍只包含本任务的两次原文。
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [

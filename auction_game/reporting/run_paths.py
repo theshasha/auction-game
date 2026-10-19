@@ -98,24 +98,6 @@ class RunPaths:
         base = self.root if readable else self.data
         return base / "players" / f"{number:03d}{'.md' if readable else '.jsonl'}"
 
-    def capture(self, number):
-        return self.data / "replay" / f"{number:03d}.jsonl"
-
-    def definitions(self, number):
-        return self.data / "replay" / f"{number:03d}_definitions.json"
-
-    @property
-    def tools(self):
-        return self.root / "tools.md"
-
-    @property
-    def tool_definitions(self):
-        return self.data / "tool_definitions.json"
-
-    @property
-    def tool_requests(self):
-        return self.data / "tool_requests.jsonl"
-
     def prepare(self):
         for directory in (self.data / "matches", self.data / "players", self.root / "matches", self.root / "players"):
             directory.mkdir(parents=True, exist_ok=True)
@@ -126,9 +108,3 @@ class RunPaths:
         except FileNotFoundError as exc:
             raise ValueError(f"旧格式或无效场次：{self.root} 缺少 data/run_config.json；仅支持新格式") from exc
         return validate_run_config(config)
-
-    def number(self, name):
-        for pc in self.read_config()["players"]:
-            if pc["name"] == name:
-                return pc["number"]
-        raise ValueError(f"场次没有玩家：{name}")

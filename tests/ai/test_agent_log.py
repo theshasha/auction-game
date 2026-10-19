@@ -9,7 +9,7 @@ from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.ai.prompts import with_output_requirement
 from auction_game.reporting.agent_log import AgentLog, render_markdown_entry
-from tests.support.factories import bid_reply, fake_task_runner, make_ai_obs, make_player
+from tests.support.factories import bid_reply, fake_task_runner, make_ai_obs, make_player, task_entries
 from tests.support.wire import Harness, reply
 
 
@@ -26,7 +26,7 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     assert markdown.count(strategy) == markdown.count(speech) == 1
     assert "tool-return" not in markdown and "call-1" not in markdown
     assert "Final result processed." not in markdown and '"speech":' not in markdown
-    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    entry = task_entries(player.log_path)[-1]
     assert entry["result"] == {"strategy": strategy, "speech": speech}
     response = [part for msg in entry["messages"] if msg["kind"] == "response" for part in msg["parts"]]
     assert len(response) == 1 and response[0]["part_kind"] == "text"
@@ -36,6 +36,17 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     assert '<a id=' not in markdown and entry["task_id"] not in markdown
     assert all(text not in markdown for text in ("任务：", "状态：", "任务补跑", "网络尝试", "完整审计"))
     assert entry["reruns"] == 0 and entry["first_task"] is entry["previous_task"] is None
+
+
+def test_system_prompt_is_logged_once_before_tasks(tmp_path):
+    player = make_player(fake_task_runner([bid_reply(1)]), tmp_path)
+    player.decide_bid(make_ai_obs())
+    system = player.messages[0].parts[0].content
+    first = json.loads(player.log_path.read_text(encoding="utf-8").splitlines()[0])
+    assert first == {"task": "system", "content": system}
+    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    assert markdown.startswith(f"# Alpha · 私人对话（含私有策略）\n\n## 系统提示\n\n{system}\n\n---")
+    assert markdown.count("【你的身份】") == 1
 
 
 @pytest.mark.parametrize("super_bid,label", [(None, "未使用"), (0, "0"), (3, "3")])
@@ -85,7 +96,7 @@ def test_failures_and_recovery_append_links_to_first_input(tmp_path, monkeypatch
     assert markdown.count("首次输入](#第1局第2天每日出价)") == 2
     assert "上次记录](#第1局第2天每日出价补跑1)" in markdown
     assert "状态：成功" not in prefixes[1]
-    entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
+    entries = task_entries(player.log_path)
     assert [entry["status"] for entry in entries] == ["failed", "failed", "success"]
     assert [entry["reruns"] for entry in entries] == [0, 1, 2]
     assert [entry["first_task"] for entry in entries] == [None, "task-0001", "task-0001"]
@@ -110,10 +121,7 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
 
 @pytest.mark.parametrize("success", [True, False])
 @pytest.mark.parametrize("content,reason", [
-    ("Unknown tool name: 'plan'. Available tools: 'bid'", "误用工具 plan，提示改用 bid"),
     ("正常出价 8 超过当前余额 4", "正常出价 8 超过当前余额 4"),
-    ([{"loc": ["bid"], "type": "int_type", "msg": "Input should be a valid integer",
-       "input": "无效私有策略", "ctx": {"data": "无效私有策略"}}], "bid 必须是整数"),
     ("decision 必须是 JSON 对象\n请重新提交完整结果。\n<strategy>\n策略正文\n</strategy>",
      "decision 必须是 JSON 对象"),
     ("长错误" * 100, "长错误" * 33 + "长…"),
@@ -143,7 +151,7 @@ def test_text_format_correction_uses_actual_sdk_retry_prompt(tmp_path):
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "纠错 1 次，已通过" in markdown
     assert "首次私有策略" not in markdown and "最终私有策略" in markdown
-    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    entry = task_entries(player.log_path)[-1]
     retry = next(part for message in entry["messages"] for part in message["parts"]
                  if part["part_kind"] == "retry-prompt")
     assert "<decision>" in retry["content"]
@@ -160,29 +168,6 @@ def test_phase_titles(phase, title):
     entry = {"task_id": "task-0001", "phase": phase, "context": "第3局第2天", "task": "bid",
              "status": "success", "messages": [], "request_errors": [], "result": "原文"}
     assert f"## {title}" in render_markdown_entry(entry)
-
-
-def test_summary_heading_is_readable_without_changing_saved_title():
-    entry = {"phase": "final_summary", "status": "success", "messages": [],
-             "readable_title": "观众总结不回喂", "first_title": "观众总结不回喂",
-             "previous_title": "观众总结不回喂补跑1"}
-    markdown = render_markdown_entry(entry)
-    assert "## 观众总结仅供观众" in markdown
-    assert "首次输入](#观众总结仅供观众)" in markdown
-    assert "上次记录](#观众总结仅供观众补跑1)" in markdown
-    assert "不回喂" not in markdown
-    assert entry["readable_title"] == entry["first_title"] == "观众总结不回喂"
-
-
-def test_tool_audit_does_not_clutter_readable_markdown():
-    entry = {"task_id": "task-0037", "phase": "bid", "status": "success",
-             "messages": [{"parts": [{"part_kind": "user-prompt",
-                                        "content": "| 天 | 出价 |\n| --- | --- |\n| 1 | 4 |"}]}],
-             "tool_definitions": ["definition-hash"], "request_errors": [], "result": "完成"}
-    markdown = render_markdown_entry(entry)
-    assert "| 天 | 出价 |\n| --- | --- |\n| 1 | 4 |" in markdown
-    assert all(text not in markdown for text in ("task-0037", "definition-hash", "tools.md", "<details>"))
-    assert entry["tool_definitions"] == ["definition-hash"]
 
 
 def test_bid_instructions_only_describe_canonical_types():
@@ -217,9 +202,7 @@ def test_changed_input_is_not_hidden_by_failed_task_link(tmp_path):
     markdown = log.readable_path.read_text(encoding="utf-8")
     assert markdown.count("### 输入原文") == 2
     assert "首次输入" not in markdown
-    entries = [json.loads(line) for line in log.path.read_text(encoding="utf-8").splitlines()]
-    assert [item["readable_title"] for item in entries] == ["开局发言", "开局发言记录2"]
-    assert markdown.count("## 开局发言\n") == 1
+    assert markdown.count("## 开局发言\n") == markdown.count("## 开局发言记录2\n") == 1
 
 
 def test_input_markdown_preserves_indentation():

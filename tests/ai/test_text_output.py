@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 from auction_game.ai.agent_tasks import BidOutput
 from auction_game.ai.text_output import OutputFormatError, parse_text_output
-from tests.support.factories import text_reply
+from tests.support.factories import text_reply, task_entries
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
@@ -83,7 +83,7 @@ def test_decoder_limits_share_correction_and_preserve_audit(value, corrected, tm
         with pytest.raises(OutputFailedError):
             player.decide_bid(make_ai_obs())
     assert len(harness.requests) == 2
-    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    entry = task_entries(player.log_path)[-1]
     assert entry["status"] == ("success" if corrected else "failed")
     texts = [part["content"] for message in entry["messages"] for part in message["parts"]
              if part["part_kind"] == "text"]

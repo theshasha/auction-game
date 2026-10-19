@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from auction_game.ai import prompts
 from auction_game.ai.agent_execution import OutputFailedError
@@ -14,7 +15,7 @@ from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.ai.ai_speech import AISpeechDirector
 from auction_game.controller import Controller
 from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log,
-                                     make_player, make_standings, speech_reply)
+                                     make_player, make_standings, speech_reply, task_entries)
 from tests.support.wire import Harness, PROTOCOLS, reply
 
 
@@ -22,46 +23,45 @@ def encoded(messages):
     return ModelMessagesTypeAdapter.dump_json(messages).decode()
 
 
+def extend_openai_profile(monkeypatch, **overrides):
+    original = OpenAIProvider.model_profile
+    monkeypatch.setattr(OpenAIProvider, "model_profile", staticmethod(lambda name: {**original(name), **overrides}))
+
+
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_cleaned_history_preserves_phase_and_tool_pairs_without_mutating_audit(protocol):
-    from pydantic_ai.messages import (ModelRequest, ModelResponse, TextPart, ThinkingPart,
-                                     ToolCallPart, ToolReturnPart, UserPromptPart)
+def test_cleaned_history_preserves_phase_without_mutating_audit(protocol, monkeypatch):
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ThinkingPart, UserPromptPart
     from auction_game.ai.ai_player import completed_history
     raw = [ModelRequest(parts=[UserPromptPart("old task")]), ModelResponse(parts=[
         ThinkingPart("secret", signature="old_signature_value", provider_name="openai"),
         TextPart("working", id="msg_old", provider_name="openai",
                  provider_details={"phase": "commentary", "other": "discard"}),
-        ToolCallPart("bid", json.dumps(bid_reply(2)), tool_call_id="call_old|fc_old",
-                     id="fc_old", provider_name="openai"),
-    ], provider_name="openai", provider_response_id="resp_old"),
-        ModelRequest(parts=[ToolReturnPart("bid", "success", tool_call_id="call_old|fc_old")])]
+    ], provider_name="openai", provider_response_id="resp_old")]
     before = encoded(raw)
     cleaned = completed_history(raw)
     assert encoded(raw) == before
     assert cleaned[1].parts[0].provider_details == {"phase": "commentary"}
     h = Harness(protocol, [reply()])
-    if protocol == "responses":
-        h.factory = replace(h.factory, model_profile={"openai_supports_phase": True,
-                             "openai_supports_encrypted_reasoning_content": True})
+    extend_openai_profile(monkeypatch, openai_supports_phase=True,
+                          openai_supports_encrypted_reasoning_content=True)
     TaskRunner(h.factory)("bid", "new task", cleaned, game=make_ai_obs().game, coins=6)
     wire = json.dumps(h.requests[0][1])
-    for marker in ("secret", "old_signature_value", "msg_old", "fc_old", "resp_old", "discard"):
+    for marker in ("secret", "old_signature_value", "msg_old", "resp_old", "discard"):
         assert marker not in wire
-    assert wire.count("call_old") == 2
     if protocol == "responses":
         assert '"phase": "commentary"' in wire
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("auto", [False, True])
-def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_path):
+def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_path, monkeypatch):
     thinking = "OLD_PRIVATE_THINKING" * 1000
     h = Harness(protocol, [reply(dict(bid_reply("bad")), thinking=thinking),
                            reply(bid_reply(2), thinking=thinking), reply(bid_reply(1)),
-                           reply(tool=False, text="audience")])
+                           reply(text="audience")])
     if protocol == "responses":
-        h.factory = replace(h.factory, model_profile={"openai_supports_encrypted_reasoning_content": True},
-                            model_settings={"openai_previous_response_id": "auto"} if auto else {})
+        extend_openai_profile(monkeypatch, openai_supports_encrypted_reasoning_content=True)
+        h.factory = replace(h.factory, model_settings={"openai_previous_response_id": "auto"} if auto else {})
     player = make_player(TaskRunner(h.factory), tmp_path)
     player.plan_strategy("original task", "opening_plan")
     assert len(h.requests) == 2
@@ -150,9 +150,11 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     assert "第一版经验" not in third_input and len(runner.calls) == 6  # 超软目标只请求一次
     player.final_summary("review all matches")
     assert "first match raw" in encoded(runner.calls[-1]) and "second match raw" in encoded(runner.calls[-1])
-    entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
-    assert entries[4]["memory_chars"] == len(long_memory)
-    assert "累计私有记忆" in player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    entries = task_entries(player.log_path)
+    assert entries[4]["history_reset"] == f"【累计私有记忆，仅自己可见】\n{long_memory}"
+    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    assert markdown.count("此后对话从系统提示和一条消息重新开始") == 2
+    assert "这次请求带的是从开局到现在的全部对话" in markdown
     player.rollback(checkpoint)
     assert player.memory == "" and player.checkpoint() == checkpoint
 

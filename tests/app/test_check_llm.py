@@ -19,7 +19,7 @@ def test_help_names_model_configuration_and_separate_check_budget(capsys):
     assert "不改变比赛预算" in output
 
 
-def test_check_reports_targets_cost_budget_and_compatibility(config_files, monkeypatch, capsys):
+def test_check_reports_targets_cost_and_budget(config_files, monkeypatch, capsys):
     monkeypatch.setattr(check_llm, "load_configuration", lambda: load_configuration(*config_files))
     runner = fake_task_runner(["OK"])
     calls = []
@@ -34,7 +34,6 @@ def test_check_reports_targets_cost_budget_and_compatibility(config_files, monke
     assert "1 个检查目标，会请求真实服务，可能收费" in output
     assert "每个目标至多请求一次，不重试" in output
     assert "比赛预算=789，本次探测预算=100" in output
-    assert "生效兼容设置=" in output and "supports_forced_tool_choice" in output
     assert len(calls) == len(runner.calls) == 1
     assert calls[0]["max_tokens"] == 100 and calls[0]["request_attempts"] == 1
     assert check_llm.main(["--model", "absent"]) == 1
@@ -50,7 +49,7 @@ def test_probe_accepts_only_exact_ok_with_no_tools_or_correction(
     config, players = load_configuration(*config_files)
     config["models"]["substitute"]["protocol"] = protocol
     monkeypatch.setattr(check_llm, "load_configuration", lambda: (config, players))
-    harness = Harness(protocol, [reply(tool=False, text=text)])
+    harness = Harness(protocol, [reply(text=text)])
 
     def factory(**kwargs):
         assert kwargs["request_attempts"] == 1

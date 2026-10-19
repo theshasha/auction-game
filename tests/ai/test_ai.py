@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
-import json
 from pathlib import Path
 
 import pytest
@@ -11,9 +10,8 @@ from pydantic_ai.messages import ModelRequest, SystemPromptPart
 from pydantic_ai import Agent, ModelRetry, RunContext
 
 from auction_game.ai.agent_execution import AgentExecutor, OutputFailedError
-from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, text_reply
+from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, text_reply, task_entries
 from auction_game.ai import prompts
-from auction_game.reporting.request_records import load_requests
 
 
 @pytest.mark.parametrize("enable_predictions", [False, True])
@@ -51,46 +49,23 @@ def test_invalid_output_uses_one_shared_correction(invalid):
     assert any(isinstance(p, RetryPromptPart) for m in player.messages for p in m.parts)
 
 
-def test_format_then_business_error_does_not_reset_budget(tmp_path, monkeypatch):
+def test_format_then_business_error_does_not_reset_budget(tmp_path):
     runner = fake_task_runner([bid_reply("2"), bid_reply(7)])
-    runner.executor.capture_requests = True
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
         player.decide_bid(make_ai_obs(day=2, coins=3))
     assert len(runner.calls) == 2 and player.messages == before
-    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
-    assert "requests" not in entry
-    load_requests(tmp_path / "capture.jsonl", [entry])
+    entry = task_entries(player.log_path)[-1]
     assert entry["status"] == "failed" and entry["error"]["type"] == "OutputFailedError"
-    assert [request["request"] for request in entry["requests"]] == [1, 2]
     assert any(part["part_kind"] == "retry-prompt"
-               for message in entry["requests"][1]["messages"] for part in message["parts"])
-    assert all(request["response"] for request in entry["requests"])
+               for message in entry["messages"] for part in message["parts"])
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
         text_reply(bid_reply("2")), text_reply(bid_reply(7))]
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "纠错 1 次，仍失败" in md and "OutputFailedError" in md
-    assert "retry-prompt" not in md and "call-1" not in md
-    # 同一次真实纠错审计导出后，首次无效回复与纠错输入都必须可见。
-    from auction_game.reporting import replay
-    from auction_game.reporting.run_paths import FORMAT_VERSION, RunPaths
-    paths = RunPaths(tmp_path)
-    paths.prepare()
-    paths.player(1).write_text(player.log_path.read_text(encoding="utf-8"), encoding="utf-8")
-    paths.capture(1).parent.mkdir(parents=True, exist_ok=True)
-    paths.capture(1).write_text((tmp_path / "capture.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
-    paths.config.write_text(json.dumps({"format_version": FORMAT_VERSION, "run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(), "timeout_seconds": 60,
-        "players": [{"number": 1, "name": "Alpha", "identity_model": {"model": "identity"},
-                     "execution_model": {"protocol": "chat", "model": "fake", "max_tokens": 123,
-                                         "base_url": "https://offline.invalid/v1"}}]}), encoding="utf-8")
-    monkeypatch.setattr(replay, "load_match_logs", lambda _: [{"standings_after_match": []}])
-    readable = replay.export_replay(tmp_path, "Alpha", capture_definitions=True).read_text(encoding="utf-8")
-    assert "第一次回复" in readable and "纠正后回复" in readable
-    assert '"bid": "2"' in readable and '"bid": 7' in readable
-    assert "本次新增提示" in readable and "Input should be a valid integer" in readable
-    assert "本次结果未加入玩家对话或首日出价缓存" in readable
+    assert "retry-prompt" not in md
 
 
 def test_custom_game_and_realtime_balance_use_shared_rules():
@@ -118,7 +93,7 @@ def test_business_history_and_original_audit_survive_rollback(tmp_path):
     assert player.messages == middle
     parts = [p for m in player.messages for p in m.parts]
     assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
-    entries = [json.loads(line) for line in player.log_path.read_text(encoding="utf-8").splitlines()]
+    entries = task_entries(player.log_path)
     assert entries[0]["result"] == bid_reply(1)
     audit = ModelMessagesTypeAdapter.validate_python(entries[0]["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
@@ -165,7 +140,7 @@ def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, m
         assert json_after == json_before
     else:
         # 沿用逐文件追加语义：JSONL 已成功时，Markdown 失败不会撤销它。
-        entries = [json.loads(line) for line in json_after.splitlines()]
+        entries = task_entries(player.log_path)
         assert len(entries) == 2
         assert entries[-1]["status"] == ("success" if valid_output else "failed")
 
@@ -188,8 +163,8 @@ def test_non_auction_agent_reuses_executor_with_typed_deps_and_isolated_history(
             raise ModelRetry("missing greeting")
         return output
 
-    h = Harness("chat", [reply(tool=False, text="invalid"),
-                         reply(tool=False, text="hello reader" if succeeds else "invalid again")])
+    h = Harness("chat", [reply(text="invalid"),
+                         reply(text="hello reader" if succeeds else "invalid again")])
     history = [ModelRequest(parts=[SystemPromptPart("original")])]
     before = deepcopy(history)
     executor = AgentExecutor(h.factory)

@@ -13,7 +13,7 @@ from auction_game.cli.sync_models import build_snapshot, main
 def public_data():
     return {"official": {"models": {
         "source-a": {"id": "source-a", "limit": {"context": 9999, "output": 900},
-                     "reasoning": True, "reasoning_options": [{"type": "toggle"}], "tool_call": True},
+                     "reasoning": True, "reasoning_options": [{"type": "toggle"}]},
         "source-b": {"id": "source-b", "limit": {"context": 5000, "output": 0}, "reasoning": False},
         "source-c": {"id": "source-c", "limit": {"context": 9999, "input": 8000, "output": 1900},
                      "reasoning": True, "reasoning_options": [{"type": "effort", "values": ["medium", "high"]}]},

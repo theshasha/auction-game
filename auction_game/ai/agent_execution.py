@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 import anthropic
@@ -14,7 +14,7 @@ from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelResponse
 
-from auction_game.ai.llm_client import RequestCapture, IncompleteStream, ModelFactory
+from auction_game.ai.llm_client import IncompleteStream, ModelFactory
 
 OutputT = TypeVar("OutputT")
 DepsT = TypeVar("DepsT")
@@ -25,17 +25,15 @@ class ExecutionResult(Generic[OutputT]):
     output: OutputT
     messages: list[ModelMessage]
     request_errors: list[dict]
-    requests: list[dict] = field(default_factory=list)
 
 
 class CallFailedError(Exception):
     """模型调用失败；消息只保存到日志，不加入玩家历史。"""
 
-    def __init__(self, message: str, *, messages=(), request_errors=(), requests=()):
+    def __init__(self, message: str, *, messages=(), request_errors=()):
         super().__init__(message)
         self.messages = list(messages)
         self.request_errors = list(request_errors)
-        self.requests = list(requests)
 
 
 class OutputFailedError(CallFailedError):
@@ -50,9 +48,8 @@ async def _drain_events(ctx, events):
 class AgentExecutor:
     """每个任务使用独立事件循环和客户端，并在开始前深拷贝输入历史。"""
 
-    def __init__(self, factory: ModelFactory, *, capture_requests=False):
+    def __init__(self, factory: ModelFactory):
         self.factory = factory
-        self.capture_requests = capture_requests
 
     def __call__(self, agent: Agent[DepsT, OutputT], prompt: str,
                  history: list[ModelMessage], *, deps: DepsT = None, usage_limits=None) -> ExecutionResult[OutputT]:
@@ -60,8 +57,6 @@ class AgentExecutor:
 
     async def _run(self, agent, prompt, history, deps, usage_limits):
         async with self.factory.open() as model:
-            if self.capture_requests:
-                model = RequestCapture(model)
             with capture_run_messages() as captured:
                 try:
                     result = await agent.run(prompt, model=model, message_history=history, deps=deps,
@@ -75,7 +70,5 @@ class AgentExecutor:
                              and not (isinstance(m, ModelResponse) and m.state == "interrupted")]
                     error_type = OutputFailedError if isinstance(exc, (UnexpectedModelBehavior, UsageLimitExceeded)) else CallFailedError
                     raise error_type(f"{type(exc).__name__}: {exc}", messages=audit,
-                                      request_errors=model.request_errors,
-                                      requests=getattr(model, "requests", ())) from exc
-            return ExecutionResult(result.output, result.new_messages(), model.request_errors,
-                                   getattr(model, "requests", []))
+                                      request_errors=model.request_errors) from exc
+            return ExecutionResult(result.output, result.new_messages(), model.request_errors)

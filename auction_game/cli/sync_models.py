@@ -45,9 +45,8 @@ def build_snapshot(catalog: dict, data: dict, retrieved_from: str) -> dict:
             if (not isinstance(item, dict) or item.get("id") != source["model"]
                     or not isinstance(item.get("limit"), dict)):
                 raise ValueError(f"{key}：来源数据格式错误或 id 与配置不一致")
-            for flag in ("reasoning", "tool_call"):
-                if flag in item and type(item[flag]) is not bool:
-                    raise ValueError(f"{key}：{flag} 必须是布尔值")
+            if "reasoning" in item and type(item["reasoning"]) is not bool:
+                raise ValueError(f"{key}：reasoning 必须是布尔值")
             options = item.get("reasoning_options")
             if options is not None and (not isinstance(options, list) or any(
                 not isinstance(option, dict) or not isinstance(option.get("type"), str)
@@ -65,7 +64,7 @@ def build_snapshot(catalog: dict, data: dict, retrieved_from: str) -> dict:
                          limit={field: positive_integer(item["limit"].get(field))
                                 for field in ("context", "input", "output")},
                          reasoning=item.get("reasoning"),
-                         reasoning_options=item.get("reasoning_options"), tool_call=item.get("tool_call"))
+                         reasoning_options=item.get("reasoning_options"))
         entries[key] = entry
     return {"schema_version": 1, "retrieved_from": retrieved_from,
             "fetched_at": datetime.now(timezone.utc).isoformat(), "models": entries}

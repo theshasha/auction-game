@@ -6,7 +6,6 @@ Successful-stream checking and SDK construction use the production model factory
 
 import asyncio
 from copy import deepcopy
-from dataclasses import replace
 import json
 
 import pytest
@@ -15,10 +14,7 @@ import pytest
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart
 
-from tests.support.factories import CHANNELS, text_reply
-from auction_game.configuration import channel_model_profile
-from auction_game.ai.llm_client import RequestCapture
-from auction_game.reporting.replay import capture_protocol_definition, protocol_tools
+from tests.support.factories import text_reply, task_entries
 from auction_game.ai.agent_tasks import BidOutput as Bid
 from tests.support.wire import PROTOCOLS, MODEL, SYSTEM, GOOD, Harness, reply, run, make_agent
 
@@ -27,8 +23,7 @@ def test_real_sdk_stream_contract(protocol):
     async def scenario():
         data = dict(GOOD, super_bid=0)
         async with Harness(protocol, [reply(data)]) as h:
-            capture = RequestCapture(h.model)
-            result = await run(make_agent(capture), coins=4)
+            result = await run(make_agent(h.model), coins=4)
             assert result.output == Bid(**data)
             assert len(h.requests) == 1
             request, body = h.requests[0]
@@ -50,14 +45,6 @@ def test_real_sdk_stream_contract(protocol):
             parts = [p for m in result.all_messages() for p in m.parts]
             assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(data)]
             assert not any(isinstance(p, (ToolCallPart, ToolReturnPart)) for p in parts)
-            # 回放捕获必须保留同一 SDK 文本输出模式。
-            snapshot = await capture_protocol_definition(h.factory, capture.requests[0])
-            assert snapshot["source"] == "offline_sdk_mock_transport"
-            assert snapshot["definition"] == protocol_tools(body)
-            assert "body" not in snapshot and snapshot["versions"]["openai"]
-            assert not snapshot["definition"].get("tools")
-            assert capture.requests[0]["parameters"]["output_mode"] == "text"
-            assert not capture.requests[0]["parameters"]["output_tools"]
     asyncio.run(scenario())
 
 
@@ -69,7 +56,6 @@ def test_real_sdk_stream_contract(protocol):
 def test_one_shared_correction_budget(protocol, replies, succeeds):
     async def scenario():
         h = Harness(protocol, replies)
-        h.factory = replace(h.factory, model_profile=channel_model_profile(CHANNELS["hub"], protocol))
         async with h:
             if succeeds:
                 result = await run(make_agent(h.model), coins=5)
@@ -86,8 +72,7 @@ def test_one_shared_correction_budget(protocol, replies, succeeds):
 def test_bare_json_exhausts_correction(protocol, super_bid):
     async def scenario():
         # 出价 JSON 必须放在完整的 strategy/decision 文本结构内。
-        h = Harness(protocol, [reply(tool=False, text=json.dumps(dict(GOOD, super_bid=super_bid)))] * 2)
-        h.factory = replace(h.factory, model_profile=channel_model_profile(CHANNELS["hub"], protocol))
+        h = Harness(protocol, [reply(text=json.dumps(dict(GOOD, super_bid=super_bid)))] * 2)
         async with h:
             with pytest.raises(UnexpectedModelBehavior):
                 await run(make_agent(h.model))
@@ -98,11 +83,9 @@ def test_bare_json_exhausts_correction(protocol, super_bid):
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("first,second", [
-    (reply(tool=False, text=json.dumps(GOOD)), reply(dict(GOOD, super_bid="None"))),
-    (reply(dict(GOOD, super_bid="None")), reply(tool=False, text=json.dumps(GOOD))),
-    (reply(tool=True, tool_name="plan"), reply(dict(GOOD, bid=99))),
-    (reply(dict(GOOD, bid=99)), reply(tool=True, tool_name="plan")),
-    (reply(text="missing sections"), reply(tool=True, tool_name="plan")),
+    (reply(text=json.dumps(GOOD)), reply(dict(GOOD, super_bid="None"))),
+    (reply(dict(GOOD, super_bid="None")), reply(text=json.dumps(GOOD))),
+    (reply(text="missing sections"), reply(dict(GOOD, bid=99))),
 ])
 def test_mixed_corrections_share_two_request_limit(protocol, first, second):
     from auction_game.ai.agent_tasks import TaskRunner
@@ -141,7 +124,7 @@ def test_super_bid_null_compatibility_preserves_raw_audit(protocol, value, tmp_p
     player = make_player(TaskRunner(h.factory), tmp_path)
     assert player.decide_bid(make_ai_obs()) == (2, None)
     assert len(h.requests) == h.closes == 1
-    entry = json.loads(player.log_path.read_text(encoding="utf-8"))
+    entry = task_entries(player.log_path)[-1]
     assert entry["result"]["super_bid"] is None
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     expected = text_reply(dict(GOOD, super_bid=value))
@@ -164,7 +147,7 @@ def test_failed_task_after_sdk_history_merge_audits_both_raw_replies(protocol, t
     with pytest.raises(OutputFailedError):
         player.decide_bid(make_ai_obs(day=2))
     assert player.checkpoint() == before
-    entry = json.loads(player.log_path.read_text(encoding="utf-8").splitlines()[-1])
+    entry = task_entries(player.log_path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
         text_reply(data) for data in invalid]
@@ -173,15 +156,20 @@ def test_failed_task_after_sdk_history_merge_audits_both_raw_replies(protocol, t
     assert len(h.requests) == 3 and h.closes == 2
 
 
-@pytest.mark.parametrize("tool", [True, False])
-def test_chat_auto_profile_accepts_text_and_corrects_legacy_tools(tool):
-    async def scenario():
-        h = Harness("chat", [reply(tool=tool), reply()])
-        profile = channel_model_profile({"chat_profile": {"supports_forced_tool_choice": False}}, "chat")
-        h.factory = replace(h.factory, model_profile=profile)
-        async with h:
-            result = await run(make_agent(h.model))
-            assert result.output.bid == GOOD["bid"]
-            assert len(h.requests) == (2 if tool else 1)
-            assert all("tool_choice" not in body and not body.get("tools") for _, body in h.requests)
-    asyncio.run(scenario())
+def test_hallucinated_tool_call_fails_without_retry():
+    from auction_game.ai.agent_tasks import TaskRunner
+    from auction_game.ai.agent_execution import CallFailedError
+    from tests.support.factories import TEST_GAME
+
+    def chunk(delta, finish=None):
+        event = {"id": "chat_1", "object": "chat.completion.chunk", "created": 1, "model": MODEL,
+                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        return ("data: " + json.dumps(event) + "\n\n").encode()
+
+    call = {"index": 0, "id": "call_1", "type": "function",
+            "function": {"name": "bid", "arguments": json.dumps(GOOD)}}
+    h = Harness("chat", [[chunk({"role": "assistant", "tool_calls": [call]}),
+                          chunk({}, "tool_calls"), b"data: [DONE]\n\n"]])
+    with pytest.raises(CallFailedError, match="IncompleteStream"):
+        TaskRunner(h.factory)("bid", "today", [], game=TEST_GAME, coins=6)
+    assert len(h.requests) == h.closes == 1

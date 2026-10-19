@@ -6,13 +6,12 @@ import json
 import html
 from pathlib import Path
 import re
-from typing import Callable
 
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
-from auction_game.reporting.request_records import RequestWriter
+from auction_game.ai.agent_tasks import render_task_result
 
 
 def _inputs(entry: dict) -> list[str]:
@@ -33,7 +32,7 @@ def _phase_title(entry: dict) -> str:
             return f"第{index}局累计私有记忆"
         return f"第{index}局局末发言" if task == "speech" else f"第{int(index) + 1}局策略规划（含首日出价）"
     return {"opening_speech": "开局发言", "opening_plan": "第1局策略规划（含首日出价）",
-            "final_speech": "最终感言", "final_summary": "观众总结（不回喂）"}.get(
+            "final_speech": "最终感言", "final_summary": "观众总结（仅供观众）"}.get(
                 phase, entry.get("context") or "模型任务")
 
 
@@ -59,55 +58,25 @@ def _error_reason(entry: dict) -> str:
 
 
 def _correction_reason(entry: dict) -> str:
-    """只摘取首次纠错提示的原因，不展示校验错误内的 input/ctx 或无效策略。"""
-    content = next((part.get("content") for message in entry["messages"] for part in message["parts"]
-                    if part["part_kind"] == "retry-prompt"), None)
-    if isinstance(content, list):
-        reasons = []
-        for error in content[:2]:
-            field = ".".join(str(value) for value in error.get("loc", ()))
-            reason = {"int_type": "必须是整数", "missing": "缺少必填字段",
-                      "extra_forbidden": "包含多余字段", "string_type": "必须是文本",
-                      "string_too_short": "文本不能为空"}.get(error.get("type"), error.get("msg", "格式无效"))
-            reasons.append(f"{field} {reason}".strip())
-        reason = "；".join(reasons)
-    elif isinstance(content, str):
-        unknown = re.search(r"Unknown tool name: ['\"]([^'\"]+)['\"]", content)
-        available = re.search(r"Available tools: ['\"]([^'\"]+)['\"]", content)
-        if unknown:
-            reason = f"误用工具 {unknown[1]}"
-            if available:
-                reason += f"，提示改用 {available[1]}"
-        else:
-            # 文本任务后续行是完整重交模板，可读日志只显示当前错误。
-            reason = content.split("\n", 1)[0]
-    else:
-        reason = "输出未通过校验，已要求重新提交"
-    reason = " ".join(reason.split())
+    """只取首次纠错提示的第一行；后续行是完整重交模板。"""
+    content = next(part["content"] for message in entry["messages"] for part in message["parts"]
+                   if part["part_kind"] == "retry-prompt")
+    reason = " ".join(content.split("\n", 1)[0].split())
     return html.escape(reason[:100] + ("…" if len(reason) > 100 else ""))
 
 
-def render_result(result) -> list[str]:
-    return ["### 结果\n\n" + (result if isinstance(result, str) else json.dumps(result, ensure_ascii=False))]
+def render_markdown_entry(entry: dict, title: str | None = None,
+                          first_title: str | None = None, previous_title: str | None = None) -> str:
+    """正文只展示输入和最终结果；原始回复及完整错误保存在 JSON 记录中。
 
-
-def _heading_link(title: str) -> str:
-    # 使用纯中文/数字章节名，避免各 Markdown 阅读器对标点的锚点规则差异。
-    return "#" + title.replace("不回喂", "仅供观众")
-
-
-def render_markdown_entry(entry: dict, result_renderer: Callable = render_result) -> str:
-    """正文只展示输入和最终结果；原始回复及完整错误保存在 JSON 记录中。"""
+    标题只含中文和数字，链接锚点在各 Markdown 阅读器里一致。
+    """
     success = entry["status"] == "success"
-    first_title = entry.get("first_title")
-    previous_title = entry.get("previous_title")
-    title = entry.get("readable_title", _phase_title(entry)).replace("不回喂", "仅供观众")
-    lines = [f"## {title}"]
+    lines = [f"## {title or _phase_title(entry)}"]
     if entry.get("reruns", 0):
         lines.append("补跑后成功。" if success else "补跑仍失败。")
     if first_title:
-        lines.append(f"输入沿用[首次输入]({_heading_link(first_title)})；"
-                     f"接续[上次记录]({_heading_link(previous_title)})。")
+        lines.append(f"输入沿用[首次输入](#{first_title})；接续[上次记录](#{previous_title})。")
     else:
         inputs = _inputs(entry)
         if inputs:
@@ -120,50 +89,47 @@ def render_markdown_entry(entry: dict, result_renderer: Callable = render_result
     if not success:
         lines.append(f"> 失败原因：{_error_reason(entry)}。")
     if "result" in entry:
-        lines.extend(result_renderer(entry["result"]))
+        lines.extend(render_task_result(entry["result"]))
+    if "history_note" in entry:
+        lines.append(entry["history_note"])
     return "\n\n".join(lines) + "\n\n---\n\n"
 
 
 class AgentLog:
-    """同步写 JSONL 后写 Markdown；任一失败原样抛出。"""
+    """同步写 JSONL 后写 Markdown；写入异常向上传递。"""
 
-    def __init__(self, name: str, path: Path | None, *, readable_path=None, capture_path=None,
-                 result_renderer: Callable = render_result):
+    def __init__(self, name: str, path: Path | None, *, readable_path=None):
         self.name = name
         self.path = path
         self.readable_path = readable_path
-        self.capture = RequestWriter(capture_path)
-        self.result_renderer = result_renderer
         self._task_number = 0
         self._failed_tasks: dict[tuple, tuple[str, str, int]] = {}
         self._titles: dict[str, str] = {}
         self._title_counts: dict[str, int] = {}
 
+    def system_prompt(self, text: str) -> None:
+        """在任务记录之前写一次系统提示原文。"""
+        self._append({"task": "system", "content": text}, f"## 系统提示\n\n{text}\n\n---\n\n")
+
     def success(self, entry: dict, result: ExecutionResult) -> None:
         output = result.output.model_dump() if isinstance(result.output, BaseModel) else result.output
-        self._write({**entry, **({"requests": result.requests} if result.requests else {}), "status": "success",
-                     **({"memory_chars": len(output["memory"])} if isinstance(output, dict) and "memory" in output else {}),
+        self._write({**entry, "status": "success",
                      "messages": ModelMessagesTypeAdapter.dump_python(result.messages, mode="json"),
                      "request_errors": result.request_errors,
                      "result": output})
 
     def failure(self, entry: dict, error: CallFailedError) -> None:
-        self._write({**entry, **({"requests": error.requests} if error.requests else {}), "status": "failed",
+        self._write({**entry, "status": "failed",
                      "messages": ModelMessagesTypeAdapter.dump_python(error.messages, mode="json"),
                      "request_errors": error.request_errors,
                      "error": {"type": type(error).__name__, "message": str(error)}})
 
-    def begin(self, entry):
-        """请求前分配现有任务序号，默认工具引用与最终任务审计共用。"""
-        self._task_number += 1
-        return {"task_id": f"task-{self._task_number:04d}", **entry}
-
     def _write(self, entry: dict) -> None:
         if self.path is None:
             return
-        if "task_id" not in entry:
-            entry = self.begin(entry)
-        # 只关联相同输入的连续失败；关联同时写入审计，成功后结束。
+        self._task_number += 1
+        entry = {"task_id": f"task-{self._task_number:04d}", **entry}
+        # 只关联相同输入的连续失败；成功后结束关联。
         key = (entry["phase"], entry["task"], entry.get("context", ""), tuple(_inputs(entry)))
         first_task, previous_task, reruns = self._failed_tasks.get(key, (None, None, 0))
         entry.update(first_task=first_task, previous_task=previous_task, reruns=reruns)
@@ -172,26 +138,26 @@ class AgentLog:
             title += f"补跑{reruns}"
         count = self._title_counts.get(title, 0) + 1
         self._title_counts[title] = count
-        readable_title = title if count == 1 else f"{title}记录{count}"
-        self._titles[entry["task_id"]] = readable_title
-        entry.update(readable_title=readable_title,
-                     first_title=self._titles.get(first_task),
-                     previous_title=self._titles.get(previous_task))
-        requests = entry.pop("requests", [])
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        self.capture.append(entry, requests)
+        title = title if count == 1 else f"{title}记录{count}"
+        self._titles[entry["task_id"]] = title
+        self._append(entry, render_markdown_entry(entry, title, self._titles.get(first_task),
+                                                  self._titles.get(previous_task)))
         if entry["status"] == "failed":
             self._failed_tasks[key] = (first_task or entry["task_id"], entry["task_id"], reruns + 1)
         else:
             self._failed_tasks.pop(key, None)
-        md_path = self.readable_path
-        if md_path is None:
+
+    def _append(self, record: dict, markdown: str) -> None:
+        if self.path is None:
             return
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-        is_new = not md_path.exists()
-        with md_path.open("a", encoding="utf-8") as file:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if self.readable_path is None:
+            return
+        self.readable_path.parent.mkdir(parents=True, exist_ok=True)
+        is_new = not self.readable_path.exists()
+        with self.readable_path.open("a", encoding="utf-8") as file:
             if is_new:
                 file.write(f"# {self.name} · 私人对话（含私有策略）\n\n")
-            file.write(render_markdown_entry(entry, self.result_renderer))
+            file.write(markdown)

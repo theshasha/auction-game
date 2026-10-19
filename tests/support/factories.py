@@ -32,8 +32,7 @@ TEST_GAME = GameSettings(
 )
 
 CHANNELS = {
-    "hub": {"base_url": "https://offline.invalid/v1", "api_key_env": "FAKE_KEY",
-            "responses_profile": {"supports_forced_tool_choice": False}},
+    "hub": {"base_url": "https://offline.invalid/v1", "api_key_env": "FAKE_KEY"},
     "anthropic": {"base_url": "https://offline.invalid/anthropic", "api_key_env": "FAKE_KEY"},
 }
 
@@ -245,8 +244,13 @@ def make_player(task_runner, tmp_path=None, game=TEST_GAME):
     log_path = (tmp_path / "ai_Alpha.jsonl") if tmp_path else None
     return AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
                     task_runner, game=game, log_path=log_path,
-                    readable_path=log_path.with_suffix(".md") if log_path else None,
-                    capture_path=tmp_path / "capture.jsonl" if tmp_path else None)
+                    readable_path=log_path.with_suffix(".md") if log_path else None)
+
+
+def task_entries(path):
+    """读玩家 JSONL 里的任务记录，跳过开头的系统提示。"""
+    entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    return [entry for entry in entries if entry["task"] != "system"]
 
 
 def bid_reply(bid, super_bid=None, strategy="我的私有分析"):

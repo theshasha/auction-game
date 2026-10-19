@@ -71,7 +71,7 @@ def effective_capabilities(key: str, model: dict, snapshot: dict) -> dict:
             "matched_id": entry.get("matched_id"), "canonical_model_id": entry.get("canonical_model_id"),
             "limit": {field: positive_integer(limit.get(field)) for field in ("context", "input", "output")},
             "reasoning": entry.get("reasoning"), "reasoning_options": options,
-            "tool_call": entry.get("tool_call"), "output_fallback_reason": fallback,
+            "output_fallback_reason": fallback,
             "reasoning_status": status, "reasoning_detail": detail,
         },
     }

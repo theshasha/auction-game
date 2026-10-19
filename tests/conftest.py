@@ -34,7 +34,7 @@ def config_files(tmp_path, monkeypatch):
     catalog = yaml.safe_load(models_path.read_text(encoding="utf-8"))["models"]
     data = {"official": {"models": {
         f"source-{letter}": {"id": f"source-{letter}", "limit": {"context": 1000, "output": budget},
-                              "reasoning": letter == "c", "tool_call": True,
+                              "reasoning": letter == "c",
                               "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high"]}] if letter == "c" else []}
         for letter, budget in zip("abc", (123, 456, 789))
     }}}

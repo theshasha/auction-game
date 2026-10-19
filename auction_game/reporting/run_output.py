@@ -11,7 +11,6 @@ from auction_game.ai import prompts
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES, FORMAT_VERSION, validate_run_config
-from auction_game.reporting.tool_records import ToolWriter
 
 
 def make_run_dir(mode: str) -> Path:
@@ -72,7 +71,6 @@ def initialize_run(run_dir, snapshot, rules):
     paths.prepare()
     paths.config.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (run_dir / "RULES.md").write_text(rules, encoding="utf-8")
-    ToolWriter(paths)  # 即使未发请求也有明确的阅读入口。
     write_readme(paths)
     return paths
 
@@ -86,13 +84,11 @@ def write_readme(paths, standings=None):
         model_note = "全员使用本地 Bot，无模型调用。"
     lines = ["# 拍卖个人赛", f"运行类型：{RUN_TYPES[config['run_type']]}。",
              model_note,
-             "[本场规则](RULES.md)", "[本场工具定义](tools.md)",
+             "[本场规则](RULES.md)",
              "本场配置见 [配置快照](data/run_config.json)，统计以此为准。"]
-    for name, title in (("speeches.md", "公开发言"), ("replay.md", "关键节点回放")):
-        if (paths.root / name).exists():
-            lines.append(f"[{title}]({name})")
+    if (paths.root / "speeches.md").exists():
+        lines.append("[公开发言](speeches.md)")
     if standings is not None:
-        standings = [StandingsEntry(**entry) if isinstance(entry, dict) else entry for entry in standings]
         lines.extend(["## 截至当前的结果", prompts.render_standings(standings)])
     lines.append("## 逐局结果")
     lines.extend(f"- [第 {int(path.stem)} 局](matches/{path.name})" for path in sorted((paths.root / "matches").glob("*.md")))
