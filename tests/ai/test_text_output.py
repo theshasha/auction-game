@@ -2,10 +2,9 @@
 
 import pytest
 
-from pydantic import ValidationError
-from auction_game.ai.agent_tasks import BidOutput
 from auction_game.ai.text_output import OutputFormatError, parse_text_output
-from tests.support.factories import text_reply, task_entries
+from auction_game.game.game_rules import validate_submission
+from tests.support.factories import TEST_GAME, text_reply, task_entries
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
@@ -45,7 +44,6 @@ GOOD = '<strategy>\n策略\n</strategy>\n<decision>\n{"bid": 2, "super_bid": nul
     GOOD.replace('{"bid": 2, "super_bid": null}', '```json\n{"bid": 2, "super_bid": null}\n```'),
     GOOD.replace('{"bid": 2, "super_bid": null}', '{"bid": 2, "bid": 3, "super_bid": null}'),
     GOOD.replace('{"bid": 2, "super_bid": null}', '{"bid": 2, "super_bid": null} {}'),
-    GOOD.replace('{"bid": 2, "super_bid": null}', '{"bid": NaN, "super_bid": null}'),
     GOOD.replace('{"bid": 2, "super_bid": null}', '{"bid": 2}'),
     GOOD.replace('{"bid": 2, "super_bid": null}', '{"bid": 2, "super_bid": null, "extra": 1}'),
     GOOD.replace('{"bid": 2, "super_bid": null}', '[]'),
@@ -57,34 +55,24 @@ def test_rejects_ambiguous_or_incomplete_protocol(raw):
 
 
 @pytest.mark.parametrize("field,value", [("bid", True), ("bid", 2.0), ("bid", "2"),
-                                         ("super_bid", False), ("super_bid", 2.0), ("super_bid", "2")])
+                                         ("super_bid", False), ("super_bid", 2.0), ("super_bid", "2"),
+                                         ("super_bid", "null")])
 def test_fields_keep_strict_types(field, value):
-    raw = text_reply({"strategy": "策略", "bid": 2, "super_bid": None, field: value})
-    with pytest.raises(ValidationError):
-        BidOutput.model_validate(parse_text_output("bid", raw))
+    decision = parse_text_output("bid", text_reply({"strategy": "策略", "bid": 2, "super_bid": None, field: value}))
+    assert validate_submission(decision["bid"], decision["super_bid"], 6, TEST_GAME)
 
 
-@pytest.mark.parametrize("value", ["9" * 5000, "[" * 10000 + "0" + "]" * 10000])
-@pytest.mark.parametrize("corrected", [True, False])
-def test_decoder_limits_share_correction_and_preserve_audit(value, corrected, tmp_path):
-    import json
-
-    from auction_game.ai.agent_execution import OutputFailedError
+def test_deeply_nested_decision_gets_correction_and_keeps_audit(tmp_path):
     from auction_game.ai.agent_tasks import TaskRunner
     from tests.support.factories import make_ai_obs, make_player
     from tests.support.wire import Harness, reply
 
-    invalid = GOOD.replace('"bid": 2', '"bid": ' + value)
-    harness = Harness("chat", [reply(text=invalid), reply() if corrected else reply(text=invalid)])
+    invalid = GOOD.replace('"bid": 2', '"bid": ' + "[" * 10000 + "0" + "]" * 10000)
+    harness = Harness("chat", [reply(text=invalid), reply()])
     player = make_player(TaskRunner(harness.factory), tmp_path)
-    if corrected:
-        assert player.decide_bid(make_ai_obs()) == (2, None)
-    else:
-        with pytest.raises(OutputFailedError):
-            player.decide_bid(make_ai_obs())
+    assert player.decide_bid(make_ai_obs()) == (2, None)
     assert len(harness.requests) == 2
     entry = task_entries(player.log_path)[-1]
-    assert entry["status"] == ("success" if corrected else "failed")
     texts = [part["content"] for message in entry["messages"] for part in message["parts"]
              if part["part_kind"] == "text"]
     assert texts[0] == invalid

@@ -7,7 +7,6 @@ import html
 from pathlib import Path
 import re
 
-from pydantic import BaseModel
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
@@ -112,11 +111,10 @@ class AgentLog:
         self._append({"task": "system", "content": text}, f"## 系统提示\n\n{text}\n\n---\n\n")
 
     def success(self, entry: dict, result: ExecutionResult) -> None:
-        output = result.output.model_dump() if isinstance(result.output, BaseModel) else result.output
         self._write({**entry, "status": "success",
                      "messages": ModelMessagesTypeAdapter.dump_python(result.messages, mode="json"),
                      "request_errors": result.request_errors,
-                     "result": output})
+                     "result": result.output})
 
     def failure(self, entry: dict, error: CallFailedError) -> None:
         self._write({**entry, "status": "failed",

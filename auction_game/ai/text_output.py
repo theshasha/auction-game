@@ -38,10 +38,6 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     return result
 
 
-def _invalid_constant(value: str):
-    raise OutputFormatError(f"decision 含非法 JSON 数值 {value}。")
-
-
 def parse_text_output(task: str, text: str) -> dict | str:
     """完整匹配协议边界，只裁剪字段两端空白，保留正文内部原文。"""
     if task in ("memory", "summary"):
@@ -66,8 +62,8 @@ def parse_text_output(task: str, text: str) -> dict | str:
     if second == "speech":
         return {"strategy": strategy, "speech": body}
     try:
-        decision = json.loads(body, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
-    except OutputFormatError:
+        decision = json.loads(body, object_pairs_hook=_unique_object)
+    except OutputFormatError:  # 保留重复字段的具体报错
         raise
     except (ValueError, RecursionError) as exc:
         raise OutputFormatError("decision 必须是一个完整 JSON 对象，不加代码围栏或尾随正文。") from exc

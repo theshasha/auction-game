@@ -25,7 +25,7 @@ GOOD = {"strategy": "keep private reasoning", "bid": 2, "super_bid": None}
 
 
 def make_agent(model):
-    return production_agent(model, "bid", settings={"timeout": 3.0, "max_tokens": 123})
+    return production_agent(model, "bid")
 
 
 def sse(protocol, data=GOOD, *, ending="ok", text=None, thinking=None):
@@ -178,4 +178,4 @@ async def run(agent, prompt="today", history=(), coins=7):
             pass
     history = list(history) or [ModelRequest(parts=[SystemPromptPart(SYSTEM)])]
     return await agent.run(prompt, message_history=deepcopy(history), deps=AuctionDeps(TEST_GAME, coins),
-                           event_stream_handler=drain)
+                           model_settings={"timeout": 3.0, "max_tokens": 123}, event_stream_handler=drain)

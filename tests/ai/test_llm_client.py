@@ -114,7 +114,7 @@ def test_empty_complete_response_uses_one_output_correction(protocol, task):
     if task == "summary":
         assert result.output == "summary"
     else:
-        assert result.output.bid == 2
+        assert result.output["bid"] == 2
     assert len(h.requests) == 2 and h.closes == 1
     assert not result.request_errors
 
@@ -216,7 +216,7 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
                                            model_settings={"openai_reasoning_effort": "high"} if protocol != "anthropic" else {})
     assert factory.base_url == channel["base_url"]
     factory = replace(factory, base_url=h.factory.base_url, transport=h.factory.transport)
-    assert TaskRunner(factory)("summary", "ping", []).output == "configured reply"
+    assert TaskRunner(factory)("summary", "ping", [], game=TEST_GAME).output == "configured reply"
     request, body = h.requests[0]
     assert body["model"] == "custom-model-alias"
     assert body["max_output_tokens" if protocol == "responses" else "max_tokens"] == 321

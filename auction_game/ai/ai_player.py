@@ -65,7 +65,7 @@ class AIPlayer(Player):
         self._pending_day1_bid: tuple[int, int | None] | None = None
 
     def checkpoint(self):
-        """消息只追加或整体替换，不原地改写；列表快照可恢复跨局重置。"""
+        """消息只追加或整体替换，浅拷贝列表就能恢复，包括局末重置。"""
         return list(self.messages), list(self.review_messages), self.memory, self._pending_day1_bid
 
     def rollback(self, checkpoint) -> None:
@@ -84,7 +84,7 @@ class AIPlayer(Player):
             self.log.failure(entry, exc)
             raise
         if reset:
-            memory_message = f"{MEMORY_HEADER}\n{result.output.memory}"
+            memory_message = f"{MEMORY_HEADER}\n{result.output['memory']}"
             entry["history_reset"] = memory_message
             entry["history_note"] = f"此后对话从系统提示和一条消息重新开始，消息内容是“{MEMORY_HEADER}”加上面的结果。"
         self.log.success(entry, result)
@@ -93,7 +93,7 @@ class AIPlayer(Player):
             projection = completed_history(result.messages)
             self.review_messages.extend(projection)
             if reset:
-                self.memory = result.output.memory
+                self.memory = result.output["memory"]
                 self.messages = [self.messages[0], ModelRequest(parts=[UserPromptPart(memory_message)])]
                 self._pending_day1_bid = None
             else:
@@ -107,21 +107,21 @@ class AIPlayer(Player):
             return submission
         output = self._task("bid", prompts.bid_request(obs), "bid",
                             f"第{len(obs.past_match_logs) + 1}局第{obs.day}天", coins=obs.my_coins)
-        return output.bid, output.super_bid
+        return output["bid"], output["super_bid"]
 
     def give_speech(self, user_text: str, phase: str, context: str = "") -> str:
         """只返回公开字段，私有策略仅保留在自身规范消息及日志。"""
-        return self._task("speech", user_text, phase, context).speech
+        return self._task("speech", user_text, phase, context)["speech"]
 
     def plan_strategy(self, user_text: str, phase: str, context: str = "") -> None:
         """成功替换首日缓存；失败保留调用前历史与缓存。"""
         output = self._task("plan", user_text, phase, context, coins=self.game.initial_coins)
-        self._pending_day1_bid = output.bid, output.super_bid
+        self._pending_day1_bid = output["bid"], output["super_bid"]
 
     def save_memory(self, user_text: str, phase: str, context: str = "") -> None:
         """全部公开发言公布后整理；日志成功才替换记忆并清空历局对话。"""
         self._task("memory", user_text, phase, context, reset=True)
 
     def final_summary(self, user_text: str, context: str = "") -> str:
-        """只为观众读取全场去 thinking 业务回顾；请求及结果均不回写。"""
+        """用开局以来的全部对话写观众总结；请求和结果都不写回历史。"""
         return self._task("summary", user_text, "final_summary", context, commit=False)

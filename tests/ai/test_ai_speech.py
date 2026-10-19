@@ -14,43 +14,70 @@ from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import ScriptedPlayer
 
 
-def test_director_passes_game_to_both_plans(monkeypatch, tmp_path):
+class RecordingPlayer:
+    """记录收到的任务，发言返回固定文本。"""
+
+    def __init__(self, name):
+        self.name, self.calls = name, []
+
+    def checkpoint(self):
+        return None
+
+    def rollback(self, checkpoint):
+        pass
+
+    def give_speech(self, text, phase, context):
+        self.calls.append((phase, text))
+        return f"发言{self.name}"
+
+    def plan_strategy(self, text, phase, context):
+        self.calls.append((phase, text))
+
+    def save_memory(self, text, phase, context):
+        self.calls.append((phase, text))
+
+
+def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp_path):
+    from auction_game.controller import Controller
+
     game = GameSettings(
         initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
         super_cost=1, super_bounty=5, super_hit_score=2,
         regular_matches=2, max_playoffs=0,
     )
-    players = [ScriptedPlayer.constant(name, 0) for name in ("甲", "乙")]
-    director = ai_speech.AISpeechDirector(players, None, tmp_path, game=game)
-    plans = []
+    players = [RecordingPlayer(name) for name in ("甲", "乙")]
+    director = ai_speech.AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None),
+                                          tmp_path, game=game)
 
-    def request(others, actual_game, *index):
+    def plan_request(others, actual_game, *index):
         assert actual_game is game
-        plans.append((others, index))
-        return "规划"
+        return f"规划 {others} {index}"
 
-    monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", request)
-    monkeypatch.setattr(ai_speech.prompts, "next_match_plan_request", request)
-    monkeypatch.setattr(ai_speech.prompts, "match_end_speech_request", lambda *args: "局末发言")
-    monkeypatch.setattr(director, "_run_round", lambda *args: {"甲": "发言甲", "乙": "发言乙"})
-    monkeypatch.setattr(director, "_publish_speeches", lambda *args: None)
+    monkeypatch.setattr(ai_speech.prompts, "opening_speech_request", lambda: "开局")
+    monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", plan_request)
+    monkeypatch.setattr(ai_speech.prompts, "next_match_plan_request", plan_request)
+    monkeypatch.setattr(ai_speech.prompts, "match_end_speech_request", lambda *args: "局末")
+    monkeypatch.setattr(ai_speech.prompts, "memory_request", lambda others: f"记忆 {others}")
     director.on_opening()
     director.on_match_end(SimpleNamespace(match_index=1), [])
-    assert plans == [({"乙": "发言乙"}, ()), ({"甲": "发言甲"}, ()), ([], (2,)), ([], (2,))]
+    assert players[0].calls == [
+        ("opening_speech", "开局"), ("opening_plan", "规划 {'乙': '发言乙'} ()"),
+        ("match_1_speech", "局末"), ("match_1_memory", "记忆 {'乙': '发言乙'}"), ("match_1_plan", "规划 [] (2,)"),
+    ]
+    assert players[1].calls[1] == ("opening_plan", "规划 {'甲': '发言甲'} ()")
 
 
-@pytest.mark.parametrize("phase", ["opening_speech", "match_1_speech", "final_speech", "final_summary"])
-def test_director_orders_parallel_results_by_initial_players(monkeypatch, tmp_path, phase):
+def test_director_orders_parallel_results_by_initial_players(monkeypatch, tmp_path):
     players = [ScriptedPlayer.constant(name, 0) for name in ("乙", "甲", "丙")]
     director = ai_speech.AISpeechDirector(players, None, tmp_path, game=None)
     monkeypatch.setattr(ai_speech, "run_parallel_round",
                         lambda *args, **kwargs: {"丙": "发言丙", "甲": "发言甲", "乙": "发言乙"})
 
-    speeches = director._run_round({p: ("请发言", phase) for p in reversed(players)}, phase)
+    speeches = director._run_round("开局发言", lambda player: None)
 
     assert list(speeches.items()) == [("乙", "发言乙"), ("甲", "发言甲"), ("丙", "发言丙")]
     assert list(director._others(speeches, "甲")) == ["乙", "丙"]
-    director._publish_speeches(phase, speeches)
+    director._publish_speeches("开局发言", speeches)
     public_log = director.speeches_log.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
 

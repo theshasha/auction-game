@@ -12,22 +12,15 @@ from auction_game.game.engine import calculate_day_scores
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
-from auction_game.ai.text_output import output_requirement
 
 
-def bid_format_hint(game: GameSettings) -> str:
-    """系统规则已说明出价要求，这里只提醒当前任务。"""
-    return "请分析局势并提交今日出价。"
+# 出价要求在系统提示的规则里，这里只提醒当前任务。
+BID_HINT = "请分析局势并提交今日出价。"
 
 
 def speech_format_hint() -> str:
     """告诉玩家哪些内容会公开。"""
     return "speech 块是公开发言，其他玩家都能看到。strategy 块是发言策略，仅自己可见。"
-
-
-def with_output_requirement(prompt: str, task: str) -> str:
-    """每个任务只追加一次权威文本格式。"""
-    return prompt + "\n\n" + output_requirement(task)
 
 
 def build_system_prompt(
@@ -79,7 +72,7 @@ def _remaining_scores_info(game: GameSettings, match_index: int, day: int, today
 
 
 def _total_scores_line(standings: list[StandingsEntry]) -> str:
-    """每日直接使用结算后的累计分数，不从历史重新计算。"""
+    """使用每日结算后的累计分数。"""
     return "全员累计总分：" + "、".join(
         f"{entry.player} {entry.total_score} 分" for entry in standings
     ) + "。"
@@ -102,7 +95,7 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) ->
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
         + _day1_constant_info(game)
         + "\n\n全员累计总分：全员 0 分。\n\n"
-        + bid_format_hint(game)
+        + BID_HINT
     )
 
 
@@ -172,7 +165,7 @@ def bid_request(obs: Observation) -> str:
     )
     status_line += _remaining_scores_info(obs.game, match_index, obs.day, obs.today_pool)
     if not obs.today_history:
-        return f"当前是第 {match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{bid_format_hint(obs.game)}"
+        return f"当前是第 {match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{BID_HINT}"
 
     yesterday = obs.today_history[-1]
     winner = None if yesterday["winner"] == "流局" else yesterday["winner"]
@@ -203,7 +196,7 @@ def bid_request(obs: Observation) -> str:
     if my_last_line is not None:
         lines.extend([my_last_line, ""])
     lines.append(status_line)
-    return "\n".join(lines) + "\n\n" + bid_format_hint(obs.game)
+    return "\n".join(lines) + "\n\n" + BID_HINT
 
 
 def render_match_log(log: MatchLog) -> str:
@@ -325,7 +318,7 @@ def next_match_plan_request(standings: list[StandingsEntry], game: GameSettings,
         f"请结合之前保存的私人笔记，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)
         + "\n\n"
-        + bid_format_hint(game)
+        + BID_HINT
     )
 
 

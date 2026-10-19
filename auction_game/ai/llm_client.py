@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field
 import os
 
@@ -24,12 +23,12 @@ from auction_game.paths import ENV_PATH
 
 
 class IncompleteStream(RuntimeError):
-    """输出截断或缺少明确成功状态；不交付部分结果。"""
+    """输出截断或缺少成功结束标记。"""
 
 
 def retryable_request_error(exc: Exception) -> bool:
-    """按 SDK 异常类型及状态码判断；配置错误与截断不重试。"""
-    if isinstance(exc, (ModelHTTPError, openai.APIStatusError, anthropic.APIStatusError)):
+    """超时、限流、5xx 和网络错误可以重试。"""
+    if isinstance(exc, ModelHTTPError):
         return exc.status_code in (408, 429) or 500 <= exc.status_code <= 599
     if isinstance(exc, ModelAPIError) and exc.__cause__ is not None:
         return retryable_request_error(exc.__cause__)
@@ -38,17 +37,16 @@ def retryable_request_error(exc: Exception) -> bool:
 
 
 class BufferedRequest(WrapperModel):
-    """完整消费后才交付，失败流隔离；每个请求至多重发一次。
+    """完整消费流并确认正常结束后才交付；每个请求至多重发一次。
 
-    Anthropic 公开响应可观测 stop_reason，无法单独识别缺失的原始 message_stop。
-    这里沿用已验证的明确成功 finish_reason 边界，不另写 SSE 框架。
+    Anthropic 公开响应只提供 stop_reason，原始 message_stop 缺失时无法单独识别。
     """
 
     def __init__(self, wrapped, *, attempts=2):
         super().__init__(wrapped)
         self.request_errors: list[dict] = []
         self.attempts = attempts
-        self._request_number = 0  # 包装器每任务创建；网络重发共用同一请求序号
+        self._request_number = 0  # 每个任务新建包装器；网络重发共用同一请求序号
 
     @asynccontextmanager
     async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
@@ -71,16 +69,15 @@ class BufferedRequest(WrapperModel):
                                             "message": str(exc), "retryable": retryable})
                 if attempt == self.attempts or not retryable:
                     raise
-        # yield 在重试范围外：Agent 校验失败不会重新执行已完成的请求。
+        # yield 在重试范围外：Agent 要求纠错时发新请求，不重发已完成的请求。
         yield CompletedStreamedResponse(response, model_request_parameters=model_request_parameters)
 
 
 @dataclass(frozen=True)
 class ModelFactory:
-    """只保存配置；在调用所在的循环内创建及关闭 SDK/HTTP 客户端。
+    """保存模型配置；open() 在调用方的事件循环里创建并关闭 SDK 和 HTTP 客户端。
 
-    transport 仅供离线注入。任务在自己的事件循环中使用 open() 及 settings。
-    配置的校验入口是 configuration.load_configuration。
+    transport 用于测试和离线演示注入假传输。
     """
 
     protocol: str
@@ -90,12 +87,12 @@ class ModelFactory:
     timeout: float
     max_tokens: int
     transport: http.AsyncBaseTransport | None = None
-    request_attempts: int = 2  # 连通探测只请求一次；比赛每个请求最多尝试两次。
+    request_attempts: int = 2  # 连通检查只请求一次；比赛每个请求最多尝试两次。
     model_settings: dict = field(default_factory=dict)
 
     @property
     def settings(self) -> dict:
-        return {**deepcopy(self.model_settings), "timeout": self.timeout, "max_tokens": self.max_tokens}
+        return {**self.model_settings, "timeout": self.timeout, "max_tokens": self.max_tokens}
 
     @asynccontextmanager
     async def open(self):
@@ -104,7 +101,7 @@ class ModelFactory:
                 sdk = AsyncAnthropic(base_url=self.base_url, api_key=self.api_key,
                                      http_client=client, max_retries=0)
                 model = AnthropicModel(self.model, provider=AnthropicProvider(anthropic_client=sdk))
-            elif self.protocol in ("chat", "responses"):
+            else:
                 sdk = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key,
                                   http_client=client, max_retries=0)
                 provider = OpenAIProvider(openai_client=sdk)
@@ -115,9 +112,7 @@ class ModelFactory:
                     })
                 else:
                     model = OpenAIResponsesModel(self.model, provider=provider)
-            else:
-                raise ValueError(f"未知 protocol：{self.protocol!r}")
-            # SDK 使用注入的 HTTP 客户端；由外层唯一所有者关闭（也覆盖构造异常）。
+            # SDK 使用注入的 HTTP 客户端，由外层 async with 统一关闭，构造失败时也会关闭。
             yield BufferedRequest(model, attempts=self.request_attempts)
 
 
@@ -136,9 +131,9 @@ def _require_env(name: str, provider: str) -> str:
 
 
 def make_model_factory(*, provider: str, channel: dict, model: str, protocol: str,
-                       timeout: float, max_tokens: int, request_attempts: int = 2,
-                       model_settings: dict | None = None) -> ModelFactory:
-    """启动时解析密钥并合并实际执行模型覆盖，确保缺密钥在创建日志前暴露。"""
+                       timeout: float, max_tokens: int, model_settings: dict,
+                       request_attempts: int = 2) -> ModelFactory:
+    """启动时读取密钥，缺密钥在创建日志前报错。"""
     return ModelFactory(protocol, model, channel["base_url"],
                         _require_env(channel["api_key_env"], provider), timeout, max_tokens,
-                        request_attempts=request_attempts, model_settings=deepcopy(model_settings or {}))
+                        request_attempts=request_attempts, model_settings=model_settings)

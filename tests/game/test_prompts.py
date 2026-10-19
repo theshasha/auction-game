@@ -92,14 +92,6 @@ class TestSpeechFields:
         assert "不会给其他玩家看到" in text
 
 
-@pytest.mark.parametrize("task", ["plan", "bid", "speech", "memory", "summary"])
-def test_output_reminder_uses_current_text_protocol(task):
-    from auction_game.ai.text_output import output_requirement
-    text = prompts.with_output_requirement("任务正文", task)
-    assert text == "任务正文\n\n" + output_requirement(task)
-    assert "工具" not in text
-
-
 def test_memory_body_keeps_task_boundaries_without_tool_instruction():
     text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"})
     assert "save_memory" not in text
@@ -113,13 +105,6 @@ def test_memory_body_keeps_task_boundaries_without_tool_instruction():
     assert "不要逐日复述或完整抄录出价序列" in text
     assert "具体报价仅作为判断的必要证据保留" in text
 
-
-def test_memory_description_keeps_replacement_without_full_record_instruction():
-    from auction_game.ai.agent_tasks import MemoryOutput
-
-    text = MemoryOutput.model_fields["memory"].description
-    assert "私人笔记" in text and "替换旧记忆" in text
-    assert "完整" not in text
 
 class TestPlayoffNotice:
     """局末发言只在还有下一局时发出；正赛打完后还有下一局就预告加赛。"""
@@ -162,10 +147,6 @@ class TestPlanBidMerge:
         assert "本局最后一天，结束后金币清零。" in prompts.next_match_plan_request([], game, 2)
 
     """规划请求保留首日资源、权威分数与策略要求；schema 定义格式。"""
-
-    def test_bid_format_hint_only_requests_current_task(self):
-        text = prompts.bid_format_hint(TEST_GAME)
-        assert text == "请分析局势并提交今日出价。"
 
     @pytest.mark.parametrize(
         "build, speech_kind, strategy, bid_task",

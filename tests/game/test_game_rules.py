@@ -71,16 +71,16 @@ def test_unknown_and_missing_fields_name_the_field(settings_data, tmp_path, chan
 
 
 @pytest.mark.parametrize("bid,super_bid,coins,reason", [
-    (True, None, 11, "bid 不是整数（True）"),
-    (1.5, None, 11, "bid 不是整数（1.5）"),
+    (True, None, 11, "bid 必须是不加引号的整数，收到 True"),
+    (1.5, None, 11, "bid 必须是不加引号的整数，收到 1.5"),
     (-1, None, 11, "出价 -1 超出 0~9 的范围"),
     (10, None, 11, "出价 10 超出 0~9 的范围"),
     (9, None, 8, "出价 9 超过当前余额 8"),
-    (1, False, 11, "super_bid 不是整数（False）"),
-    (1, "2", 11, "super_bid 不是整数（'2'）"),
+    (1, False, 11, "super_bid 必须是不加引号的整数，不使用超级出价时填 JSON null，收到 False"),
+    (1, "2", 11, "super_bid 必须是不加引号的整数，不使用超级出价时填 JSON null，收到 '2'"),
     (1, -1, 11, "超级出价 -1 超出 0~9 的范围"),
     (1, 10, 11, "超级出价 10 超出 0~9 的范围"),
-        (1, 1, 11, "超级出价 1 与你的正常出价相同，请选择不同的数值"),
+    (1, 1, 11, "超级出价 1 与你的正常出价相同，请选择不同的数值"),
     (6, 9, 8, "正常出价 6 加超级出价成本 3 金币，合计超过当前余额 8"),
     (0, None, 0, None),
     (9, None, 9, None),

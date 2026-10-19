@@ -70,7 +70,7 @@ def validate_submission(
 ) -> str | None:
     """检查一次完整出价，返回违规原因供模型纠正；符合规则时返回 None。"""
     if type(raw_bid) is not int:
-        return f"bid 不是整数（{raw_bid!r}）"
+        return f"bid 必须是不加引号的整数，收到 {raw_bid!r}"
     if raw_bid < 0 or raw_bid > game.max_bid:
         return f"出价 {raw_bid} 超出 0~{game.max_bid} 的范围"
     if raw_bid > coins:
@@ -78,7 +78,7 @@ def validate_submission(
     if raw_super_bid is None:
         return None
     if type(raw_super_bid) is not int:
-        return f"super_bid 不是整数（{raw_super_bid!r}）"
+        return f"super_bid 必须是不加引号的整数，不使用超级出价时填 JSON null，收到 {raw_super_bid!r}"
     if raw_super_bid < 0 or raw_super_bid > game.max_bid:
         return f"超级出价 {raw_super_bid} 超出 0~{game.max_bid} 的范围"
     if raw_super_bid == raw_bid:

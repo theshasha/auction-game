@@ -7,7 +7,7 @@ import pytest
 
 from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
 from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.ai.prompts import with_output_requirement
+from auction_game.ai.text_output import output_requirement
 from auction_game.reporting.agent_log import AgentLog, render_markdown_entry
 from tests.support.factories import bid_reply, fake_task_runner, make_ai_obs, make_player, task_entries
 from tests.support.wire import Harness, reply
@@ -21,7 +21,7 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     assert player.give_speech(prompt, "opening_speech") == speech
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "## 开局发言" in markdown and "## opening_speech" not in markdown
-    assert "### 输入原文\n\n" + with_output_requirement(prompt, "speech") in markdown
+    assert "### 输入原文\n\n" + prompt + "\n\n" + output_requirement("speech") in markdown
     assert "<summary>" not in markdown and "<br>" not in markdown
     assert markdown.count(strategy) == markdown.count(speech) == 1
     assert "tool-return" not in markdown and "call-1" not in markdown
@@ -113,7 +113,7 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
     markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
     assert "首次无效策略" not in markdown
     assert markdown.count("最终策略原文") == 1
-    assert "纠错 1 次，已通过（bid: Input should be a valid integer）。" in markdown
+    assert "纠错 1 次，已通过（bid 必须是不加引号的整数" in markdown
     assert "网络尝试" not in markdown
     audit = player.log_path.read_text(encoding="utf-8")
     assert "首次无效策略" in audit and "最终策略原文" in audit and "retry-prompt" in audit
@@ -168,17 +168,6 @@ def test_phase_titles(phase, title):
     entry = {"task_id": "task-0001", "phase": phase, "context": "第3局第2天", "task": "bid",
              "status": "success", "messages": [], "request_errors": [], "result": "原文"}
     assert f"## {title}" in render_markdown_entry(entry)
-
-
-def test_bid_instructions_only_describe_canonical_types():
-    from auction_game.ai.agent_tasks import BidOutput
-
-    reminder = with_output_requirement("出价", "bid")
-    assert "<strategy>\n" in reminder and "<decision>\n" in reminder
-    assert '"bid"' in reminder and '"super_bid"' in reminder and "null" in reminder
-    text = BidOutput.model_json_schema()["properties"]["super_bid"]["description"]
-    assert "必填" in text and "JSON null" in text
-    assert all(fragment not in text for fragment in ('"null"', '"None"', "兼容", "类型示例"))
 
 
 def test_unknown_failure_is_short_and_audit_stays_complete(tmp_path):

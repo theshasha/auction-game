@@ -15,7 +15,6 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart
 
 from tests.support.factories import text_reply, task_entries
-from auction_game.ai.agent_tasks import BidOutput as Bid
 from tests.support.wire import PROTOCOLS, MODEL, SYSTEM, GOOD, Harness, reply, run, make_agent
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
@@ -24,7 +23,7 @@ def test_real_sdk_stream_contract(protocol):
         data = dict(GOOD, super_bid=0)
         async with Harness(protocol, [reply(data)]) as h:
             result = await run(make_agent(h.model), coins=4)
-            assert result.output == Bid(**data)
+            assert result.output == data
             assert len(h.requests) == 1
             request, body = h.requests[0]
             assert request.url.path == {"chat": "/v1/chat/completions", "responses": "/v1/responses",
@@ -50,16 +49,16 @@ def test_real_sdk_stream_contract(protocol):
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("replies,succeeds", [
-    ([reply(dict(GOOD, bid="2")), reply()], True),
-    ([reply(dict(GOOD, bid=6)), reply(dict(GOOD, bid="2"))], False),
-], ids=["schema-then-success", "business-then-schema-exhausts"])
+    ([reply(text="missing sections"), reply()], True),
+    ([reply(dict(GOOD, bid=6)), reply(text="missing sections")], False),
+], ids=["format-then-success", "business-then-format-exhausts"])
 def test_one_shared_correction_budget(protocol, replies, succeeds):
     async def scenario():
         h = Harness(protocol, replies)
         async with h:
             if succeeds:
                 result = await run(make_agent(h.model), coins=5)
-                assert result.output.bid == 2
+                assert result.output["bid"] == 2
             else:
                 with pytest.raises(UnexpectedModelBehavior, match="retries"):
                     await run(make_agent(h.model), coins=5)
@@ -68,11 +67,10 @@ def test_one_shared_correction_budget(protocol, replies, succeeds):
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("super_bid", [None, "null"])
-def test_bare_json_exhausts_correction(protocol, super_bid):
+def test_bare_json_exhausts_correction(protocol):
     async def scenario():
         # 出价 JSON 必须放在完整的 strategy/decision 文本结构内。
-        h = Harness(protocol, [reply(text=json.dumps(dict(GOOD, super_bid=super_bid)))] * 2)
+        h = Harness(protocol, [reply(text=json.dumps(GOOD))] * 2)
         async with h:
             with pytest.raises(UnexpectedModelBehavior):
                 await run(make_agent(h.model))
@@ -84,9 +82,8 @@ def test_bare_json_exhausts_correction(protocol, super_bid):
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("first,second", [
     (reply(text=json.dumps(GOOD)), reply(dict(GOOD, super_bid="None"))),
-    (reply(dict(GOOD, super_bid="None")), reply(text=json.dumps(GOOD))),
-    (reply(text="missing sections"), reply(dict(GOOD, bid=99))),
-])
+    (reply(dict(GOOD, bid=99)), reply(text="missing sections")),
+], ids=["format-then-business", "business-then-format"])
 def test_mixed_corrections_share_two_request_limit(protocol, first, second):
     from auction_game.ai.agent_tasks import TaskRunner
     from auction_game.ai.agent_execution import OutputFailedError
@@ -97,37 +94,30 @@ def test_mixed_corrections_share_two_request_limit(protocol, first, second):
     assert len(h.requests) == 2 and h.closes == 1
 
 
-@pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("value", ["None", "3", True, False, 2.0, " null", "null ", "NULL", "Null", ""])
-def test_super_bid_feedback_explains_required_json_null(protocol, value):
+@pytest.mark.parametrize("value", ["None", "null", True, 2.0])
+def test_non_integer_super_bid_gets_correction(value):
     from auction_game.ai.agent_tasks import TaskRunner
     from tests.support.factories import TEST_GAME
-    h = Harness(protocol, [reply(dict(GOOD, super_bid=value)), reply()])
+    h = Harness("chat", [reply(dict(GOOD, super_bid=value)), reply()])
     result = TaskRunner(h.factory)("plan", "plan", [], game=TEST_GAME, coins=6)
-    assert result.output.super_bid is None and len(h.requests) == 2
-    body = json.dumps(h.requests[1][1], ensure_ascii=False)
-    assert "super_bid 必填，必须为不加引号的整数或 JSON null。" in body
-    assert all(not body.get("tools") and "tool_choice" not in body for _, body in h.requests)
-    schema = Bid.model_json_schema()
-    assert schema["properties"]["super_bid"]["anyOf"] == [{"type": "integer"}, {"type": "null"}]
-    assert "super_bid" in schema["required"]
+    assert result.output["super_bid"] is None and len(h.requests) == 2
+    assert "super_bid" in json.dumps(h.requests[1][1]["messages"][-1], ensure_ascii=False)
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("value", [None, "null"])
-def test_super_bid_null_compatibility_preserves_raw_audit(protocol, value, tmp_path):
+def test_bid_keeps_raw_reply_in_audit_and_history(protocol, tmp_path):
     from pydantic_ai.messages import ModelMessagesTypeAdapter
     from auction_game.ai.agent_tasks import TaskRunner
     from tests.support.factories import make_ai_obs, make_player
 
-    h = Harness(protocol, [reply(dict(GOOD, super_bid=value))])
+    h = Harness(protocol, [reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
     assert player.decide_bid(make_ai_obs()) == (2, None)
     assert len(h.requests) == h.closes == 1
     entry = task_entries(player.log_path)[-1]
     assert entry["result"]["super_bid"] is None
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-    expected = text_reply(dict(GOOD, super_bid=value))
+    expected = text_reply(GOOD)
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [expected]
     assert [p.content for m in player.messages for p in m.parts if isinstance(p, TextPart)] == [expected]
 
