@@ -5,7 +5,7 @@
 超级出价不限次数（每天最多 1 笔），每次提交固定消耗 2 金币，0~7、不能等于
 当天正常出价、与正常出价合计不得超过余额、不能获胜；命中（其数值上 ≥1 笔
 正常出价）则该数值全部正常出价按撞车处理，狙击者获得系统印发的 3 金币悬赏。
-任何非法提交整单强制为正常出价 0、无超级出价。
+引擎收到不符合规则的出价时抛出 ValueError。
 第 2 天起每天开始时公布昨日完整出价明细与全场每人金币余额。
 """
 
@@ -23,7 +23,7 @@ from tests.support.factories import (
     run_one_match,
     run_scenario,
 )
-from auction_game.game.engine import calculate_day_scores, run_match, validate_submission
+from auction_game.game.engine import calculate_day_scores, run_match
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import RandomBot, ScriptedPlayer
 from auction_game.configuration import load_game_settings
@@ -63,27 +63,9 @@ class TestDayScores:
         ) == expected
 
 
-class TestValidateSubmission:
-    """整单校验：任何非法提交一律整单作废为（正常出价 0, 无超级出价）。"""
-
-    @pytest.mark.parametrize(
-        "bid, super_bid, balance, expected",
-        [
-            (3, None, 6, (3, "ok", None)),
-            (8, None, 100, (0, "illegal", None)),  # 正常出价非法，保留整单审计状态
-            (3, 5, 7, (3, "ok", 5)),      # 合法超级：3 + 2 ≤ 7
-            (5, 5, 7, (0, "illegal", None)),  # 同值：整单作废
-            (4, 5, 5, (0, "illegal", None)),   # 4 + 2 > 5：总耗资超余额
-        ],
-        ids=["normal-ok", "normal-illegal", "super-ok", "super-same-value", "total-over-balance"],
-    )
-    def test_validate_submission(self, bid, super_bid, balance, expected):
-        assert validate_submission(bid, super_bid, balance, TEST_GAME) == expected
-
-
 class TestWinningRules:
     def test_highest_unique_bid_wins(self):
-        log = run_one_match(constant_strategies([5, 4, 3, 2, 1, 0]))
+        log = run_scenario({1: [5, 4, 3, 2, 1, 0]})
         day1 = log.days[0]
         assert day1.winner == "甲"
         assert day1.winning_bid == 5
@@ -94,7 +76,7 @@ class TestWinningRules:
 
     def test_collision_at_top_falls_through_to_next_unique(self):
         # 5 撞车、3 三人撞车，唯一 4 获胜；撞车价位公布具体数值（3 和 5）
-        log = run_one_match(constant_strategies([5, 5, 4, 3, 3, 3]))
+        log = run_scenario({1: [5, 5, 4, 3, 3, 3]})
         day1 = log.days[0]
         assert day1.winner == "丙"
         assert day1.winning_bid == 4
@@ -115,43 +97,33 @@ class TestCoinSettlement:
 
     def test_winner_pays_unique_losers_refunded(self):
         # 第 1 天全价位唯一：甲出 5 获胜付 5（余额 2）；其余人唯一未中全额退还（余额仍 7）
-        # 第 2 天工资 +3：甲 5、其余 10 —— 甲出 6 非法（余额 5），乙出 7 合法（余额 10）
-        log = run_scenario({1: [5, 4, 3, 2, 1, 0], 2: [6, 7, 0, 0, 0, 0]})
+        # 第 2 天工资 +3：甲 5、其余 10
+        captured = {}
+        log = run_scenario({1: [5, 4, 3, 2, 1, 0], 2: [5, 7, 0, 0, 0, 0]}, capture=captured)
         day1, day2 = log.days[0], log.days[1]
         assert day1.winner == "甲" and day1.winning_bid == 5
-
-        record_jia = next(r for r in day2.bids if r.player == "甲")
-        assert record_jia.raw_bid == 6
-        assert record_jia.bid == 0 and record_jia.status == "illegal"  # 余额 5 不够出 6
-        record_yi = next(r for r in day2.bids if r.player == "乙")
-        assert record_yi.bid == 7 and record_yi.status == "ok"  # 退还+工资后余额 10
-        assert day2.winner == "乙"  # 0 撞车（甲丙丁戊己），唯一 7 获胜
+        assert captured["甲"][1].all_coins == {"甲": 5, "乙": 10, "丙": 10, "丁": 10, "戊": 10, "己": 10}
+        assert day2.winner == "乙"  # 0 撞车（丙丁戊己），7 最高唯一
 
     def test_colliders_pay_on_normal_day(self):
         # 第 1 天 [5,5,4,3,3,3]：丙唯一 4 获胜付 4（余额 3）；甲乙撞车各付 5（余额 2）；
         # 丁戊己撞车各付 3（余额 4）。第 2 天工资 +3：甲乙 5、丙 6、丁戊己 7
-        log = run_scenario({1: [5, 5, 4, 3, 3, 3], 2: [6, 4, 6, 7, 0, 0]})
+        captured = {}
+        log = run_scenario({1: [5, 5, 4, 3, 3, 3], 2: [5, 4, 6, 7, 0, 0]}, capture=captured)
         day2 = log.days[1]
         assert log.days[0].winner == "丙"
-
-        records = {r.player: r for r in day2.bids}
-        assert records["甲"].status == "illegal"  # 余额 5 出 6 不行
-        assert records["乙"].bid == 4 and records["乙"].status == "ok"   # 余额 5
-        assert records["丙"].bid == 6 and records["丙"].status == "ok"   # 余额 6
-        assert records["丁"].bid == 7 and records["丁"].status == "ok"   # 余额 7
-        assert day2.winner == "丁" and day2.winning_bid == 7  # 0 撞车，7/6/4 中 7 最高唯一
+        assert captured["甲"][1].all_coins == {"甲": 5, "乙": 5, "丙": 6, "丁": 7, "戊": 7, "己": 7}
+        assert day2.winner == "丁" and day2.winning_bid == 7  # 0 撞车，7/6/5/4 中 7 最高唯一
 
     def test_void_day_colliders_still_pay(self):
         # 流局日撞车照扣：第 1 天全员出 7 撞车流局，各付 7（余额 0）；
-        # 第 2 天工资 +3：甲出 4 非法（余额 3），乙出 3 合法且唯一获胜
-        log = run_scenario({1: [7, 7, 7, 7, 7, 7], 2: [4, 3, 0, 0, 0, 0]})
+        # 第 2 天工资 +3 后全员余额 3，乙出 3 唯一获胜
+        captured = {}
+        log = run_scenario({1: [7, 7, 7, 7, 7, 7], 2: [0, 3, 0, 0, 0, 0]}, capture=captured)
         day1, day2 = log.days[0], log.days[1]
         assert day1.is_void and day1.winner is None
         assert day1.collision_values == [7]
-
-        record_jia = next(r for r in day2.bids if r.player == "甲")
-        assert record_jia.raw_bid == 4
-        assert record_jia.bid == 0 and record_jia.status == "illegal"
+        assert set(captured["甲"][1].all_coins.values()) == {3}
         assert day2.winner == "乙" and day2.winning_bid == 3
         assert day2.pool == 4
         assert log.auction_scores["乙"] == 4
@@ -191,7 +163,6 @@ class TestFixedSixDays:
         assert [day.pool for day in log.days] == [4, 4, 4, 4, 4, 4]
         assert all(day.winner == "甲" for day in log.days)
         assert log.auction_scores["甲"] == 24
-        assert all(record.status == "ok" for day in log.days for record in day.bids)
 
     def test_observation_carries_pool_and_salary(self):
         # 全员每天出 0 撞车：天天流局、无人花钱；每天奖池 4 分，工资每天 +3
@@ -211,20 +182,9 @@ class TestFixedSixDays:
         ]
 
 
-class TestIllegalBidInMatch:
-    def test_illegal_bids_recorded_as_zero(self):
-        # 甲出 8（超上限）、乙出 -1（负数）、丙出 2.5（非整数），均记 0 并撞车；
-        # 丁戊出 5 撞车，己的唯一 3 获胜
-        log = run_one_match(constant_by_name({"甲": 8, "乙": -1, "丙": 2.5, "丁": 5, "戊": 5, "己": 3}))
-        day1 = log.days[0]
-
-        for name in ["甲", "乙", "丙"]:
-            record = next(r for r in day1.bids if r.player == name)
-            assert record.bid == 0
-            assert record.status == "illegal"
-        assert day1.winner == "己"
-        assert day1.winning_bid == 3
-        assert day1.collision_values == [0, 5]  # 0 与 5 两个撞车价位
+def test_rule_breaking_bid_is_a_program_error():
+    with pytest.raises(ValueError, match="甲 的出价不符合规则"):
+        run_one_match(constant_by_name({"甲": 8, "乙": 0, "丙": 0, "丁": 5, "戊": 5, "己": 3}))
 
 
 class TestConfiguredMatch:
@@ -283,8 +243,8 @@ class TestConfiguredMatch:
             regular_matches=2, max_playoffs=1,
         )
         names = ["甲", "乙", "丙"]
-        bids = {"甲": [9, 4, 5], "乙": [3, 8, 2], "丙": [2, 2, 5]}
-        supers = {"甲": {2: 8}, "乙": {1: 9, 2: 9}}
+        bids = {"甲": [9, 0, 5], "乙": [3, 8, 2], "丙": [2, 2, 5]}
+        supers = {"乙": {1: 9, 2: 9}}
         captured = {name: [] for name in names}
 
         def strategy(obs):
@@ -309,7 +269,6 @@ class TestConfiguredMatch:
         assert captured["乙"][2].my_match_score == 7
         assert log.days[0].super_uses == [{"player": "乙", "value": 9, "hit": True}]
         assert log.days[1].super_uses == [{"player": "乙", "value": 9, "hit": False}]
-        assert log.days[1].bids[0].status == "illegal"  # 甲余额 4，正常 4 加成本 4 超余额
         # 首日甲被狙付 9；乙付正常 3、成本 4、获赏 6；丙退还正常 2。
         assert captured["甲"][1].all_coins == {"甲": 4, "乙": 12, "丙": 13}
         # 第二日乙付正常 8 和落空成本 4；第三日再加工资 2。

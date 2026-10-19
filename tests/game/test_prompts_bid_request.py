@@ -182,10 +182,6 @@ class TestMyLastDayLine:
             (dict(my_last_bid=1, my_last_deduction=1, my_last_collided=True),
              dict(winner="流局", winning_bid=None, auction_score=0),
              "昨日你的金币结算：\n\n- 所有正常出价都撞车，昨天流局，你的正常出价扣除 1 金币。"),
-            # 整单口径：非法提交整单记为正常出价 0
-            (dict(my_last_bid=0, my_last_deduction=0, my_last_bid_illegal=True),
-             {},
-             "昨日你的金币结算：\n\n- 提交不符合规则，已改为正常出价 0，且不使用超级出价。\n- 正常出价没有撞车，但也没有获胜，金币全额退还。"),
             # 超级出价落空：无效果，但照扣 2 金币成本；正常出价分段照常
             (dict(my_last_bid=4, my_last_deduction=0, my_last_super_bid=6),
              dict(super_uses=[{"player": "甲", "value": 6, "hit": False}]),
@@ -200,7 +196,7 @@ class TestMyLastDayLine:
              dict(super_uses=[{"player": "甲", "value": 3, "hit": False}]),
              "昨日你的金币结算：\n\n- 正常出价撞车，扣除 4 金币。\n- 超级出价花费 2 金币。"),
         ],
-        ids=["won", "collided", "refunded", "sniped", "void", "illegal-zero",
+        ids=["won", "collided", "refunded", "sniped", "void",
              "super-miss", "super-hit-bounty", "super-miss-collided"],
     )
     def test_last_day_line_segments(self, obs_kwargs, history_overrides, expected):
@@ -273,7 +269,6 @@ class TestEngineScorePrompts:
         expected_scores = dict(zip(NAMES, scores))
         assert log.days[0].winner == winner
         assert log.scores == expected_scores
-        assert all(record.status == "ok" for day in log.days for record in day.bids)
         hits = "昨日命中得分：" + "、".join(
             f"{name} 5 分" for name in super_bids
         ) + "。"

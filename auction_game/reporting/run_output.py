@@ -10,13 +10,11 @@ from pathlib import Path
 from auction_game.ai import prompts
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.paths import LOG_DIR
-from auction_game.reporting.run_paths import RunPaths, RUN_TYPES, FORMAT_VERSION, validate_run_config
+from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
 
 
 def make_run_dir(mode: str) -> Path:
-    """为本场运行创建独立日志目录 logs/<时间戳>_<模式>/。"""
-    if mode not in RUN_TYPES:
-        raise ValueError(f"未知运行类型：{mode}")
+    """为本场运行创建独立日志目录 logs/<时间戳>_<模式>/，同名时加后缀。"""
     base_name = f"{datetime.now():%Y%m%d_%H%M%S}_{mode}"
     run_dir = LOG_DIR / base_name
     suffix = 2
@@ -37,7 +35,6 @@ def make_publish(log_dir: Path):
     """将完整出价和累计排名写入 JSON/Markdown 文件，终端只提示阅读位置。"""
 
     paths = RunPaths(log_dir)
-    paths.prepare()
 
     def publish(log: MatchLog, standings: list[StandingsEntry]) -> None:
         payload = {
@@ -65,9 +62,8 @@ def initialize_run(run_dir, snapshot, rules):
     paths = RunPaths(run_dir)
     if run_dir.exists() and any(run_dir.iterdir()):
         raise FileExistsError(f"场次已存在，拒绝覆盖：{run_dir}")
-    snapshot = {**snapshot, "format_version": FORMAT_VERSION,
-                 "players": [{"number": index, **pc} for index, pc in enumerate(snapshot["players"], 1)]}
-    validate_run_config(snapshot)
+    snapshot = {**snapshot,
+                "players": [{"number": index, **pc} for index, pc in enumerate(snapshot["players"], 1)]}
     paths.prepare()
     paths.config.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (run_dir / "RULES.md").write_text(rules, encoding="utf-8")
@@ -77,11 +73,14 @@ def initialize_run(run_dir, snapshot, rules):
 
 def write_readme(paths, standings=None):
     config = paths.read_config()
-    model_note = "全员调用测试模型，角色身份不变。" if config["mode"] == "test_model" else "各玩家使用配置中的模型。"
     if config["run_type"] == "offline":
         model_note = "全员使用假模型，无真实调用。"
     elif config["run_type"] == "bot":
         model_note = "全员使用本地 Bot，无模型调用。"
+    elif config["mode"] == "test_model":
+        model_note = "全员调用测试模型，角色身份不变。"
+    else:
+        model_note = "各玩家使用配置中的模型。"
     lines = ["# 拍卖个人赛", f"运行类型：{RUN_TYPES[config['run_type']]}。",
              model_note,
              "[本场规则](RULES.md)",

@@ -114,10 +114,7 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
     is_void = yesterday["winner"] == "流局"
     won = yesterday["winner"] == obs.my_name
 
-    if obs.my_last_bid_illegal:
-        segments = ["提交不符合规则，已改为正常出价 0，且不使用超级出价"]
-    else:
-        segments = []
+    segments = []
     if is_void:
         segments.append(f"所有正常出价都撞车，昨天流局，你的正常出价扣除 {obs.my_last_deduction} 金币")
     elif won:

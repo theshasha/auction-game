@@ -88,20 +88,18 @@ def run_ai(*, model_factory=None, run_dir=None, controller=None,
     run_type = run_type or ("ai-test" if test_model else "ai")
     run_dir = run_dir if run_dir is not None else make_run_dir(run_type)
     run_dir.mkdir(parents=True, exist_ok=True)
-    # 只保存本场公开配置，不保存环境变量值；回放无需读取今天的配置或密钥。
+    # 本场配置快照，统计和展示只读它。
     snapshot = {
         "run_type": run_type,
         "mode": "test_model" if test_model else "regular",
         "game": game.to_dict(),
-        "timeout_seconds": timeout,
         "max_concurrency": max_concurrency,
         "prompts": dict(config["prompts"]),
         "players": [{
             "name": pc["name"], "persona_title": pc["persona_title"], "persona_text": pc["persona_text"],
             "predicted_win_rate": pc.get("predicted_win_rate", 0),
             "identity_model": pc["identity_model"],
-            "execution_model": {"key": pc["model_key"], **{key: pc[key] for key in EXECUTION_FIELDS},
-                                "base_url": config["llm"]["channels"][pc["provider"]]["base_url"]},
+            "execution_model": {"key": pc["model_key"], **{key: pc[key] for key in EXECUTION_FIELDS}},
         } for pc in player_configs],
     }
     paths = initialize_run(run_dir, snapshot, render_rules(game, all_names))

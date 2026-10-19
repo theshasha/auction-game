@@ -56,7 +56,7 @@ def test_benchmark_uses_one_game_without_logs(monkeypatch, capsys, tmp_path):
     assert not log_dir.exists()
     assert calls == [BOT_NAMES] * 2 + [["最高可付价玩家"] + BOT_NAMES[:5]] * 2
     assert strategy_records
-    assert all(record.status == "ok" and not record.is_super for record in strategy_records)
+    assert not any(record.is_super for record in strategy_records)
     output = capsys.readouterr().out
     assert "两组各 2 场，共 4 场" in output
     assert "最高可付价对照：2 场（上限 9，无超级，5 个随机对手）" in output

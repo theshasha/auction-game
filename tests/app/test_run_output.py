@@ -81,10 +81,9 @@ def test_final_result_counts_actual_regular_matches_and_reports_scores(capsys, t
 def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected):
     paths = initialize_run(
         tmp_path / "run",
-        {"run_type": run_type, "mode": mode, "game": TEST_GAME.to_dict(), "timeout_seconds": 3,
+        {"run_type": run_type, "mode": mode, "game": TEST_GAME.to_dict(),
          "players": [{"name": name, "identity_model": {"model": "identity"},
-                      "execution_model": {"protocol": "chat", "model": "execution", "max_tokens": 100,
-                                          "base_url": "https://offline.invalid/v1"}} for name in NAMES]},
+                      "execution_model": {"protocol": "chat", "model": "execution"}} for name in NAMES]},
         render_rules(TEST_GAME, NAMES),
     )
     assert expected in (paths.root / "README.md").read_text(encoding="utf-8")
@@ -93,7 +92,7 @@ def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected)
 def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     game = replace(TEST_GAME, initial_coins=20, max_bid=9, super_bounty=5, daily_pool=(1, 2, 3))
     log = run_scenario(
-        {1: [4, 4, 9, 2, 1, 0], 2: [2, 2, 1, 1, 0, 0], 3: [-1, 0, 1, 1, 2, 2]},
+        {1: [4, 4, 9, 2, 1, 0], 2: [2, 2, 1, 1, 0, 0], 3: [0, 0, 1, 1, 2, 2]},
         super_strategies={
             "乙": lambda obs: 3 if obs.day == 1 else None,
             "丁": lambda obs: {1: 4, 2: 2}.get(obs.day),
@@ -144,9 +143,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
         {"player": "丁", "value": 4, "hit": True},
     ]
     assert len(days[0]["bids"]) == 8
-    assert days[2]["bids"][0] == {
-        "player": "甲", "raw_bid": -1, "bid": 0, "status": "illegal", "is_super": False,
-    }
+    assert days[2]["bids"][0] == {"player": "甲", "bid": 0, "is_super": False}
     assert days[1]["is_void"] and days[2]["is_void"]
     assert [day["pool"] for day in days] == [1, 2, 3]
     assert [day["auction_score"] for day in days] == [1, 0, 0]

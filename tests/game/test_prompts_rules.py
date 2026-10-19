@@ -73,7 +73,7 @@ class TestRulesText:
         assert "必须能用当前余额支付" in text and "不能预支命中后获得的金币悬赏" in text
         assert "用来狙击某个正常出价的价位，填的是目标价位，不是支付金额" in text
         assert "超级出价只用于狙击，不能用来赢得拍卖" in text
-        assert "正常出价 0，无超级出价" in text
+        assert "提交不符合规则时须重新提交" in text
 
     def test_settlement_steps_present(self):
         text = render_rules(TEST_GAME, NAMES)
@@ -91,7 +91,6 @@ class TestRulesText:
         text = render_rules(TEST_GAME, NAMES)
         assert "拍卖奖池中的分数直接计入获胜者的成绩" in text
         assert "份额" not in text and "胜场" not in text
-        assert "先按上述规则处理不符合要求的提交，再看所有人的正常出价" in text
         assert "只要有正常出价就算命中" in text
         assert "判断是否有多人出同一个价格时，只数正常出价；超级出价不计入这个数量" in text
         reward = text.split("每名使用超级出价并命中的玩家，由系统", 1)[1].split("\n", 1)[0]

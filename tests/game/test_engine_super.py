@@ -8,15 +8,15 @@
 
 from copy import deepcopy
 
+import pytest
+
 from auction_game.game.engine import resolve_bids
 from tests.support.factories import make_day, run_scenario, super_by_day
 
 
-def test_resolve_bids_is_pure_and_uses_effective_normal_bids():
+def test_resolve_bids_is_pure():
     day = make_day(1, [0, 4, 3, 2, 2, 1], 1, "丙", 3, [2, 4],
                    super_bids={"丙": (4, True), "己": (4, True), "丁": (7, False)})
-    day.bids[0].raw_bid = 7
-    day.bids[0].status = "illegal"
     original = deepcopy(day.bids)
     winner, collisions, hits = resolve_bids(day.bids)
     assert winner is day.bids[2]
@@ -37,7 +37,7 @@ class TestSuperBid:
         # （丁戊各扣 3），丙未撞车最高 5 获胜扣 5；乙 -2 成本 +3 悬赏，正常出价 4 退还
         captured = {}
         log = run_scenario(
-            {1: [6, 4, 5, 3, 3, 2], 2: [6, 6, 0, 0, 0, 0]},
+            {1: [6, 4, 5, 3, 3, 2], 2: [0, 6, 0, 0, 0, 0]},
             super_strategies={"乙": super_by_day({1: 6, 2: 5})},
             capture=captured,
         )
@@ -46,12 +46,10 @@ class TestSuperBid:
         assert day1.super_uses == [{"player": "乙", "value": 6, "hit": True}]
         assert day1.collision_values == [3, 6]  # 甲被狙的 6 + 丁戊互撞的 3
 
-        records = {r.player: r for r in log.days[1].bids if not r.is_super}
-        # 甲被狙扣 6：余额 7-6+3=4，出 6 应非法
-        assert records["甲"].bid == 0 and records["甲"].status == "illegal"
+        # 甲被狙扣 6：余额 7-6+3=4
+        assert captured["甲"][1].my_coins == 4
         # 乙第 1 天净 +1（-2 成本 +3 悬赏）：次日余额 7-2+3+3=11。
         assert captured["乙"][1].my_coins == 11
-        assert records["乙"].bid == 6 and records["乙"].status == "ok"
         # 不限次数：第 2 天乙的超级出价（5，异于正常出价 6，6+2≤11）再次被受理
         day2_super = next(
             (r for r in log.days[1].bids if r.player == "乙" and r.is_super), None
@@ -76,17 +74,12 @@ class TestSuperBid:
         assert log.scores == {"甲": 4, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
 
     def test_super_bid_requires_balance_headroom(self):
-        # 总耗资约束：正常出价 + 2 成本不得超过余额，否则整单作废
-        # 甲第 1 天出 6 获胜余额 1；第 2 天 +3 后正常出 3 再狙 6：3+2>4 → 整单作废
-        log = run_scenario(
-            {1: [6, 1, 1, 1, 1, 1], 2: [3, 0, 0, 0, 0, 0]},
-            super_strategies={"甲": super_by_day({2: 6})},
-        )
-        day2 = log.days[1]
-        assert day2.super_uses == []
-        record_jia = next(r for r in day2.bids if r.player == "甲" and not r.is_super)
-        assert record_jia.raw_bid == 3
-        assert record_jia.bid == 0 and record_jia.status == "illegal"
+        # 甲第 1 天出 6 获胜余额 1；第 2 天 +3 后正常出 3 再狙 6：3+2>4
+        with pytest.raises(ValueError, match="合计超过当前余额 4"):
+            run_scenario(
+                {1: [6, 1, 1, 1, 1, 1], 2: [3, 0, 0, 0, 0, 0]},
+                super_strategies={"甲": super_by_day({2: 6})},
+            )
 
     def test_pure_snipe_with_zero_normal_bid(self):
         # 正常出 0 + 超级出价（纯狙击）：0+2 ≤ 余额即合法。
@@ -104,27 +97,18 @@ class TestSuperBid:
         assert log.days[2].pool == 4
         assert captured["甲"][2].my_coins == 5  # 7-6+3-2+3，纯狙击仍扣成本
 
-    def test_super_bid_equal_to_normal_voids_whole_submission(self):
-        # 同值属非法提交：整单作废为正常出价 0、无超级出价。
-        # 甲正常出 5 + 超级出 5 → 甲记非法 0；0 撞车（甲己），乙的唯一 4 获胜
-        log = run_scenario(
-            {1: [5, 4, 3, 2, 1, 0]},
-            super_strategies={"甲": super_by_day({1: 5})},
-        )
-        day1 = log.days[0]
-        assert day1.super_uses == []
-        assert not any(r.is_super for r in day1.bids)
-        record_jia = next(r for r in day1.bids if r.player == "甲" and not r.is_super)
-        assert record_jia.raw_bid == 5
-        assert record_jia.bid == 0 and record_jia.status == "illegal"
-        assert day1.winner == "乙" and day1.winning_bid == 4
-        assert day1.collision_values == [0]
+    def test_super_bid_equal_to_normal_is_rejected(self):
+        with pytest.raises(ValueError, match="与你的正常出价相同"):
+            run_scenario(
+                {1: [5, 4, 3, 2, 1, 0]},
+                super_strategies={"甲": super_by_day({1: 5})},
+            )
 
     def test_multi_snipers_same_value_both_rewarded(self):
         # 多人命中同一数值各得 3 金币：乙、己的超级 6 同时命中甲的唯一 6
         captured = {}
         log = run_scenario(
-            {1: [6, 4, 5, 3, 3, 2], 2: [6, 6, 0, 0, 0, 6]},
+            {1: [6, 4, 5, 3, 3, 2], 2: [0, 6, 0, 0, 0, 6]},
             super_strategies={"乙": super_by_day({1: 6}), "己": super_by_day({1: 6})},
             capture=captured,
         )
@@ -134,12 +118,10 @@ class TestSuperBid:
             {"player": "己", "value": 6, "hit": True},
         ]
         assert day1.winner == "丙" and day1.winning_bid == 5
-        records = {r.player: r for r in log.days[1].bids if not r.is_super}
-        # 乙/己各净 +1（-2 +3）：次日余额均为 11；甲被狙扣 6：余额 4，出 6 非法
+        # 乙/己各净 +1（-2 +3）：次日余额均为 11；甲被狙扣 6：余额 4
         assert captured["乙"][1].my_coins == 11
         assert captured["己"][1].my_coins == 11
-        assert records["乙"].status == "ok" and records["己"].status == "ok"
-        assert records["甲"].status == "illegal"
+        assert captured["甲"][1].my_coins == 4
         assert log.scores == {"甲": 0, "乙": 2, "丙": 4, "丁": 0, "戊": 0, "己": 2}
         assert captured["乙"][1].my_match_score == 2
         assert captured["己"][1].my_match_score == 2
@@ -193,7 +175,6 @@ class TestSuperBid:
             },
             capture=captured,
         )
-        assert all(record.status == "ok" for day in log.days for record in day.bids)
         assert log.days[0].is_void and log.days[-1].is_void
         assert log.days[0].super_uses == [
             {"player": "甲", "value": 0, "hit": True},

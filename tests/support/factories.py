@@ -47,11 +47,11 @@ def make_day(day, bids, pool, winner, winning_bid, collision_values, auction_sco
     {玩家: (数值, 是否命中)}，每个使用者在出价表里追加一笔 is_super=True
     的记录，并在 super_uses 里登记 {"player", "value", "hit"}。
     collision_values 为当天撞车价位的具体数值（升序）。"""
-    records = [BidRecord(player=name, raw_bid=bid, bid=bid) for name, bid in zip(NAMES, bids)]
+    records = [BidRecord(player=name, bid=bid) for name, bid in zip(NAMES, bids)]
     super_uses = []
     for name, super_spec in (super_bids or {}).items():
         value, hit = super_spec if isinstance(super_spec, tuple) else (super_spec, False)
-        records.append(BidRecord(player=name, raw_bid=value, bid=value, is_super=True))
+        records.append(BidRecord(player=name, bid=value, is_super=True))
         super_uses.append({"player": name, "value": value, "hit": hit})
     return DayResult(
         day=day,
@@ -66,14 +66,17 @@ def make_day(day, bids, pool, winner, winning_bid, collision_values, auction_sco
     )
 
 
-def make_log(match_index=1, is_playoff=False, days=None, auction_scores=None, game=TEST_GAME, *, scores=None):
+def make_log(match_index=1, is_playoff=False, days=None, auction_scores=None, game=TEST_GAME, *,
+             scores=None, remaining_coins=None):
+    players = auction_scores if auction_scores is not None else NAMES
     return MatchLog(
         match_index=match_index,
         is_playoff=is_playoff,
         game=game,
         days=days if days is not None else [make_day(1, [5, 4, 3, 2, 1, 0], 1, "甲", 5, [], 1)],
         auction_scores=auction_scores if auction_scores is not None else {name: 0 for name in NAMES},
-        scores=scores if scores is not None else {name: 0 for name in (auction_scores if auction_scores is not None else NAMES)},
+        scores=scores if scores is not None else {name: 0 for name in players},
+        remaining_coins=remaining_coins if remaining_coins is not None else {name: 0 for name in players},
     )
 
 
@@ -108,7 +111,7 @@ def history(**overrides):
 
 def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, pool=1, coins=7,
              my_last_bid=None, my_last_deduction=None,
-             my_last_collided=False, my_last_sniped=False, my_last_bid_illegal=False,
+             my_last_collided=False, my_last_sniped=False,
              my_last_super_bid=None, my_last_super_hit=False,
              all_coins=None,
              past_match_logs=None, game=TEST_GAME, *, match_score=0, total_score=0):
@@ -130,7 +133,6 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
         my_last_deduction=my_last_deduction,
         my_last_collided=my_last_collided,
         my_last_sniped=my_last_sniped,
-        my_last_bid_illegal=my_last_bid_illegal,
         my_last_super_bid=my_last_super_bid,
         my_last_super_hit=my_last_super_hit,
         all_coins=all_coins,
@@ -154,7 +156,7 @@ def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=
 
 
 def constant_by_name(bids_by_name: dict):
-    """每人每天固定出价：{名字: 出价}（可表达非法原始值，如 7 / -1 / 2.5）。"""
+    """每人每天固定出价：{名字: 出价}。"""
     return {name: (lambda b: lambda obs: b)(bid) for name, bid in bids_by_name.items()}
 
 

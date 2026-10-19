@@ -14,7 +14,7 @@ from auction_game.game.players import ScriptedPlayer
 
 
 class TestMyLastDayObservation:
-    """Observation 携带昨日自我结算结果（出价/扣款/撞车/非法），供提示词直接告知。"""
+    """Observation 携带昨日自我结算结果（出价/扣款/撞车），供提示词直接告知。"""
 
     def test_day1_has_no_last_day_fields(self):
         captured = {}
@@ -23,7 +23,7 @@ class TestMyLastDayObservation:
         assert len(seen) == 6  # 六人的第 1 天观察
         for obs in seen:
             assert obs.my_last_bid is None and obs.my_last_deduction is None
-            assert not obs.my_last_collided and not obs.my_last_bid_illegal
+            assert not obs.my_last_collided
 
     def test_crash_winner_refund_fields(self):
         # 第 1 天：己唯一 1 获胜；第 2 天：6、5、5、3、2、0 →
@@ -42,16 +42,15 @@ class TestMyLastDayObservation:
         assert (day3["戊"].my_last_bid, day3["戊"].my_last_deduction) == (2, 0)
         assert not day3["戊"].my_last_collided
 
-    def test_illegal_bid_marked_and_zero_collision_on_void_day(self):
-        # 甲第 1 天出 7 获胜扣 7（余额 0）；第 2 天 +3 后出 5 非法记 0，
-        # 全员出 0 撞车流局——甲的非法出价记 0 且撞车、扣款 0
+    def test_zero_collision_on_void_day(self):
+        # 甲第 1 天出 7 获胜扣 7；第 2 天全员出 0 撞车流局——甲撞车、扣款 0
         captured = {}
-        log = run_scenario({1: [7, 0, 0, 0, 0, 0], 2: [5, 0, 0, 0, 0, 0]}, capture=captured)
+        log = run_scenario({1: [7, 0, 0, 0, 0, 0], 2: [0, 0, 0, 0, 0, 0]}, capture=captured)
         assert log.days[1].is_void
 
         day2_obs, day3_obs = captured["甲"][1], captured["甲"][2]
         assert (day2_obs.my_last_bid, day2_obs.my_last_deduction) == (7, 7)
-        assert day3_obs.my_last_bid == 0 and day3_obs.my_last_bid_illegal
+        assert day3_obs.my_last_bid == 0
         assert day3_obs.my_last_deduction == 0 and day3_obs.my_last_collided
 
 
@@ -96,7 +95,8 @@ class TestMatchLogPublication:
         }
 
     def test_match_log_to_dict_contains_full_bid_history(self):
-        log = run_one_match(constant_strategies([5, 4, 3, 2, 1, 0]))
+        later = [1, 0, 0, 0, 0, 0]  # 甲之后每天唯一获胜
+        log = run_scenario({1: [5, 4, 3, 2, 1, 0], **{day: later for day in range(2, 7)}})
         data = log.to_dict()
 
         assert data["game"] == TEST_GAME.to_dict()
@@ -125,10 +125,7 @@ class TestMatchLogPublication:
 
     def test_super_bid_visible_in_match_end_log(self):
         # 局末完整日志含超级出价的数值与命中结果（对局内次日也公开出价明细）
-        log = run_one_match(
-            constant_strategies([5, 4, 3, 2, 1, 0]),
-            super_strategies={"乙": super_by_day({1: 6})},
-        )
+        log = run_scenario({1: [5, 4, 3, 2, 1, 0]}, super_strategies={"乙": super_by_day({1: 6})})
         day1 = log.to_dict()["days"][0]
         super_records = [b for b in day1["bids"] if b["is_super"]]
         assert len(super_records) == 1

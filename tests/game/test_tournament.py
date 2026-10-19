@@ -241,7 +241,6 @@ class TestDirectorWillContinue:
         assert {entry.player: entry.total_score for entry in playoff_opening[0].standings} == {
             "甲": 2, "乙": 2, "丙": 0,
         }
-        assert all(record.status == "ok" for log in result.match_logs for day in log.days for record in day.bids)
 
     def test_score_tie_at_cap_keeps_champions_with_different_auction_scores(self):
         game = replace(TEST_GAME, daily_pool=(1, 1), regular_matches=1,

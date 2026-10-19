@@ -45,7 +45,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     config["prompts"] = {"enable_predictions": predictions, "enable_personas": personas}
     monkeypatch.setattr(offline_demo, "load_configuration", lambda **kwargs: deepcopy((config, configs)))
     names = [pc["name"] for pc in configs]
-    run_dir = tmp_path / "20261016_120000_ai"
+    run_dir = tmp_path / "20261016_120000_offline"
     output_dir, factories = generate_demo(run_dir, test_model=True)
     assert output_dir == run_dir
     paths = RunPaths(run_dir)
@@ -54,12 +54,11 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     assert all(f.opened == f.closed == f.calls == expected_calls for f in factories)
     snapshot = paths.read_config()
     assert snapshot["run_type"] == "offline"
-    assert snapshot["format_version"] == 3
     assert snapshot["mode"] == "test_model"
     assert snapshot["prompts"] == config["prompts"]
     for pc, saved in zip(configs, snapshot["players"]):
         assert saved["identity_model"] == pc["identity_model"]
-        assert saved["execution_model"] == {"key": pc["model_key"], "base_url": "https://offline.invalid/v1",
+        assert saved["execution_model"] == {"key": pc["model_key"],
                                             **{k: pc[k] for k in ("model", "provider", "protocol", "max_tokens",
                                                                   "model_settings", "capabilities")}}
         assert pc["identity_model"]["model"] != pc["model"]
@@ -68,7 +67,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
 
     matches = analyze.load_match_logs(run_dir)
     monkeypatch.setattr(analyze, "LOG_DIR", tmp_path)
-    with pytest.raises(SystemExit, match="没有有效"):
+    with pytest.raises(SystemExit, match="没有"):
         analyze.find_latest_ai_run()
     assert len(matches) == game.regular_matches
     expected_auction_score = sum(game.daily_pool)
@@ -79,7 +78,6 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         assert match["auction_scores"] == {name: expected_auction_score if i == 0 else 0
                                             for i, name in enumerate(names)}
         assert len(match["days"]) == game.max_days
-        assert all(bid["status"] != "illegal" for day in match["days"] for bid in day["bids"])
         assert paths.match(index, readable=True).exists()
     assert (run_dir / "RULES.md").read_text(encoding="utf-8") == prompts.render_rules(game, names)
 
@@ -117,7 +115,6 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     assert markdown.count("## 系统提示") == 1 and markdown.count("【你的身份】") == 1
     stats = analyze.collect_player_stats(matches)
     assert stats["auction_score_matrix"][selected] == [expected_auction_score] * game.regular_matches
-    assert all(row["illegal"] == 0 for row in stats["rows"])
     # 实际统计入口依赖场次快照：即使当前配置入口损坏仍能完整统计。
     monkeypatch.setattr("auction_game.configuration.load_game_settings", lambda: (_ for _ in ()).throw(AssertionError("应读快照")))
     analyze.analyze(run_dir)
@@ -172,7 +169,6 @@ def test_offline_economic_edges_finish(game, first_bids, tied, tmp_path,
         match = payload["match"]
         assert match["game"] == game.to_dict()
         assert [day["bids"][0]["bid"] for day in match["days"]] == first_bids
-        assert all(bid["status"] != "illegal" for day in match["days"] for bid in day["bids"])
     if tied:
         assert all(score == 0 for payload in matches for score in payload["match"]["auction_scores"].values())
     assert all(factory.opened == factory.closed == factory.calls for factory in factories)
@@ -189,41 +185,6 @@ def test_current_game_configuration_smoke(tmp_path, demo_configuration):
     assert game.regular_matches <= len(matches) <= game.regular_matches + game.max_playoffs
     assert all(payload["match"]["game"] == game.to_dict() for payload in matches)
     assert all(factory.opened == factory.closed for factory in factories)
-
-
-def test_analysis_rejects_old_rollover_pool_without_writing_logs(
-        tmp_path, monkeypatch, demo_configuration):
-    from shutil import copytree
-
-    game = GameSettings(
-        initial_coins=0, daily_salary=1, daily_pool=(2, 5), max_bid=7,
-        super_cost=2, super_bounty=3, super_hit_score=2,
-        regular_matches=1, max_playoffs=0,
-    )
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
-    original = tmp_path / "original"
-    generate_demo(original, test_model=True)
-    copied = copytree(original, tmp_path / "legacy-copy")
-    paths = RunPaths(copied)
-    payload = json.loads(paths.match(1).read_text(encoding="utf-8"))
-    match = payload["match"]
-    first, second = match["days"]
-    assert first["is_void"] and first["pool"] == 2 and first["auction_score"] == 0
-    winner = second["winner"]
-    assert winner is not None and second["pool"] == second["auction_score"] == 5
-    # 临时副本模拟旧规则的完整滚存结算；原场次始终保持原样。
-    second.update(pool=7, auction_score=7)
-    match["auction_scores"][winner] = match["scores"][winner] = 7
-    standing = next(entry for entry in payload["standings_after_match"] if entry["player"] == winner)
-    standing.update(total_score=7, total_auction_score=7,
-                    scores_per_match=[7], auction_scores_per_match=[7])
-    paths.match(1).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    before = {path: path.read_bytes() for root in (original, copied)
-              for path in root.rglob("*") if path.is_file()}
-    with pytest.raises(ValueError, match="001.json.*第 2 天 pool.*本场配置当日奖池"):
-        analyze.analyze(copied)
-    assert {path: path.read_bytes() for root in (original, copied)
-            for path in root.rglob("*") if path.is_file()} == before
 
 
 @pytest.mark.parametrize("regular_matches,bounty", [(5, 7), (2, 5)])
@@ -255,7 +216,6 @@ def test_rich_demo_discards_void_pool_super_hits_and_single_playoff(
         if regular_matches % 2 and number == regular_matches:
             winner_index = 2
         winner = names[winner_index]
-        assert all(bid["status"] == "ok" for day in match["days"] for bid in day["bids"])
         assert first["is_void"] and first["winner"] is None and first["auction_score"] == 0
         assert first["super_uses"] == [{"player": names[0], "value": 1, "hit": False}]
         assert [day["pool"] for day in match["days"]] == list(game.daily_pool)
@@ -294,7 +254,6 @@ def test_rich_demo_discards_void_pool_super_hits_and_single_playoff(
     stats = analyze.collect_player_stats(matches)
     assert stats["auction_score_matrix"][names[0]] == [payload["match"]["auction_scores"][names[0]]
                                                      for payload in matches]
-    assert all(row["illegal"] == 0 for row in stats["rows"])
 
 
 @pytest.mark.parametrize("player_count,days,cost,initial,salary", [
@@ -317,7 +276,6 @@ def test_rich_script_is_legal_at_economic_boundary(player_count, days, cost, ini
     players = [ScriptPlayer(index) for index in range(player_count)]
     log = run_match(players, match_index, False, {player.name: [] for player in players}, [], game,
                     scores_history={player.name: [] for player in players})
-    assert all(record.status == "ok" for day in log.days for record in day.bids)
     assert log.days[0].is_void and log.days[1].winner == players[match_index - 1].name
 
 

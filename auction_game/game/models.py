@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from auction_game.game.game_rules import GameSettings
 
 
 @dataclass
 class BidRecord:
-    """一笔出价记录（次日即公开，局末再随完整日志公开）。一名玩家一天最多产生两笔：
-    正常出价 + 超级出价（is_super=True，狙击工具：不能获胜、不参与撞车笔数，
-    每次提交消耗本场配置的固定成本，命中——其数值上 ≥1 笔正常出价——使该数值
-    全部正常出价按撞车处理，并获得本场配置的金币悬赏与命中分）。"""
+    """一笔出价。每名玩家每天一笔正常出价，可再加一笔超级出价（is_super=True）。"""
 
     player: str
-    raw_bid: Any          # 玩家提交的原始值，用于审计非法出价
-    bid: int              # 校验后的出价；提交不符合规则时，整次提交改为正常出价 0
-    status: str = "ok"    # "ok" | "illegal"（超级出价只可能为 "ok"，非法则在收集层拦截重试）
+    bid: int
     is_super: bool = False
 
 
@@ -80,7 +75,8 @@ class MatchLog:
     game: GameSettings
     days: list[DayResult] = field(default_factory=list)
     auction_scores: dict[str, int] = field(default_factory=dict)  # 本局各人的拍卖分（含零分）
-    scores: dict[str, int] = field(default_factory=dict)  # 本局总分，结算后覆盖全员（含零分）
+    scores: dict[str, int] = field(default_factory=dict)  # 本局总分（含零分）
+    remaining_coins: dict[str, int] = field(default_factory=dict)  # 最近一天结算后的余额；局末即局末余额
 
     def to_dict(self) -> dict:
         return {
@@ -89,17 +85,12 @@ class MatchLog:
             "is_playoff": self.is_playoff,
             "auction_scores": dict(self.auction_scores),
             "scores": dict(self.scores),
+            "remaining_coins": dict(self.remaining_coins),
             "days": [
                 {
                     "day": day.day,
                     "bids": [
-                        {
-                            "player": b.player,
-                            "raw_bid": b.raw_bid,
-                            "bid": b.bid,
-                            "status": b.status,
-                            "is_super": b.is_super,
-                        }
+                        {"player": b.player, "bid": b.bid, "is_super": b.is_super}
                         for b in day.bids
                     ],
                     "pool": day.pool,
@@ -141,13 +132,12 @@ class Observation:
     standings: list[StandingsEntry]   # 截至昨日结算后的累计排名
     past_match_logs: list[dict]  # 已结束各局的完整公开日志
     game: GameSettings          # 本场不可变规则参数，与裁判和日志共用
-    # 昨日自己的结算结果（第 1 天用默认值）。这些信息都来自公开记录；
-    # 直接列出，避免模型误算扣款，进而误判其他玩家的余额。
-    my_last_bid: Optional[int] = None      # 昨日自己的有效正常出价（非法提交整单记 0）
+    # 昨日本人的结算结果（第 1 天用默认值）。都能从公开记录推出，
+    # 直接列出是为了避免模型算错扣款，进而误判其他玩家的余额。
+    my_last_bid: Optional[int] = None      # 昨日自己的正常出价
     my_last_deduction: Optional[int] = None  # 昨日正常出价的扣款（退还为 0；超级成本另列）
     my_last_collided: bool = False         # 昨日自己的正常出价是否撞车（互撞或被狙）
     my_last_sniped: bool = False           # 昨日自己的正常出价是否被超级出价狙中
-    my_last_bid_illegal: bool = False      # 昨日提交是否非法（整单强制为正常出价 0）
     my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
     my_last_super_hit: bool = False        # 昨日自己的超级出价是否命中（金币悬赏与命中分）
     # 全场每人金币余额（含自己，含当日工资）：规则四.1 规定第 2 天起每天

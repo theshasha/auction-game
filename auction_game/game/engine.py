@@ -1,12 +1,12 @@
-"""单局规则引擎（裁判）。与玩家实现完全解耦，只依赖 Player 接口。"""
+"""单局规则引擎，只依赖 Player 接口。"""
 
 from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
-from auction_game.game.game_rules import GameSettings, validate_submission as submission_error
+from auction_game.game.game_rules import GameSettings, validate_submission
 from auction_game.game.models import (
     BidRecord,
     DayResult,
@@ -20,38 +20,8 @@ from auction_game.game.players import Player
 DayEndCallback = Callable[[MatchLog, list[StandingsEntry], dict[str, int]], None]
 
 
-def validate_submission(
-    raw_bid: object, raw_super_bid: object, coins: int, game: GameSettings
-) -> tuple[int, str, Optional[int]]:
-    """整单校验：任何非法提交一律强制为（正常出价 0, 无超级出价），
-    返回 (有效正常出价, 状态, 有效超级出价或 None)。
-
-    非法情形：正常出价非整数/超 0~上限/超余额/未提交；超级出价非整数/
-    超 0~上限/与当天正常出价同值；正常出价 + 固定超级成本总耗资超余额。
-
-    AI 模式下非法提交由 Agent 共享校验及输出纠错拦截，这里是
-    Bot 模式与防御性兜底。
-    """
-    if submission_error(raw_bid, raw_super_bid, coins, game) is not None:
-        return 0, "illegal", None
-    return raw_bid, "ok", raw_super_bid
-
-
-def normalize_bid_submission(submission: Any) -> tuple[Any, Any]:
-    """把 decide_bid 的返回值统一为 (正常出价, 超级出价)。
-
-    约定返回 (raw_bid, raw_super_bid) 二元组；兼容裸 int（无超级出价）。
-    """
-    if isinstance(submission, tuple):
-        return submission
-    return submission, None
-
-
 def resolve_bids(bids: list[BidRecord]) -> tuple[Optional[BidRecord], set[int], set[int]]:
-    """按有效报价判定当天结果，返回获胜记录、撞车价位、超级命中价位。
-
-    不重新校验提交，不修改记录，也不处理金币或次日奖池；只有正常报价能获胜。
-    """
+    """判定当天结果，返回获胜记录、撞车价位和超级命中价位；只有正常出价能获胜。"""
     normal_bids = [record for record in bids if not record.is_super]
     normal_counts = Counter(record.bid for record in normal_bids)
     sniped_values = {
@@ -130,16 +100,13 @@ def run_match(
     scores_history: dict[str, list[int]],
     on_day_end: DayEndCallback | None = None,
 ) -> MatchLog:
-    """按本场参数运行一局（正赛局或加赛局规则相同），返回完整局日志。
+    """运行一局（正赛和加赛规则相同），返回局日志。
 
-    auction_scores_history / scores_history: 每名玩家在已结束各局的拍卖分与总分。
-    past_logs: 已结束各局的完整日志，局末公开后玩家可见。
-    bid_collector: 可选，签名为 list[(player, obs)] -> list[出价提交]（顺序对齐，
-    每个提交为 (正常出价, 超级出价) 二元组），AI 模式注入并行收集；
-    默认逐个顺序调用 decide_bid。暂停/失败的重跑由 run_parallel_round
-    内部处理，对本函数透明。
-    on_day_end: 出价整轮已提交并结算后，收到截至当日的局日志、累计排名和
-    结算后余额快照；仅供观众展示，不加入玩家输入。局日志会随后续天数增长。
+    auction_scores_history / scores_history：每名玩家已结束各局的拍卖分和总分。
+    bid_collector：list[(player, obs)] -> list[(正常出价, 超级出价)]，顺序对齐；
+    AI 模式用它并行收集，默认逐个调用 decide_bid。
+    on_day_end：每天结算后收到局日志、累计排名和余额快照，只给观众看。
+    出价不符合规则时抛出 ValueError：AI 的违规在代理层纠错，到这里就是程序错误。
     """
     coins = {player.name: game.initial_coins for player in players}
     match_auction_scores = {player.name: 0 for player in players}
@@ -153,41 +120,28 @@ def run_match(
                 coins[name] += game.daily_salary
         pool = game.daily_pool[day - 1]
 
-        # 昨日各玩家的自我结算结果（正常出价/扣款/撞车/被狙/非法/超级出价命中），
-        # 复用昨日 DayResult 结算。my_last_deduction 只含正常出价的扣款（获胜或撞车）；
-        # 超级出价的成本与悬赏在「昨日你的结果」行单独表述。
-        my_last_by_player: dict[str, tuple[int, int, bool, bool, bool, Optional[int], bool]] = {}
+        # 昨日本人的结算结果；扣款只含正常出价，超级出价的成本和悬赏另列。
+        my_last_by_player: dict[str, dict] = {}
         if log.days:
-            yesterday_result = log.days[-1]
-            yesterday_sniped_values = {
-                use["value"] for use in yesterday_result.super_uses if use["hit"]
-            }
-            yesterday_super_by_player = {
-                use["player"]: use for use in yesterday_result.super_uses
-            }
-            for record in yesterday_result.bids:
+            yesterday = log.days[-1]
+            sniped_values = {use["value"] for use in yesterday.super_uses if use["hit"]}
+            super_by_player = {use["player"]: use for use in yesterday.super_uses}
+            for record in yesterday.bids:
                 if record.is_super:
                     continue
-                sniped = record.bid in yesterday_sniped_values
-                collided = record.bid in yesterday_result.collision_values
-                won_with_normal = (
-                    record.player == yesterday_result.winner
-                    and record.bid == yesterday_result.winning_bid
-                )
-                paid = won_with_normal or collided
-                my_super_use = yesterday_super_by_player.get(record.player)
-                my_last_by_player[record.player] = (
-                    record.bid,
-                    record.bid if paid else 0,
-                    collided,
-                    sniped,
-                    record.status != "ok",
-                    my_super_use["value"] if my_super_use else None,
-                    bool(my_super_use and my_super_use["hit"]),
-                )
+                collided = record.bid in yesterday.collision_values
+                paid = record.player == yesterday.winner or collided
+                super_use = super_by_player.get(record.player)
+                my_last_by_player[record.player] = {
+                    "my_last_bid": record.bid,
+                    "my_last_deduction": record.bid if paid else 0,
+                    "my_last_collided": collided,
+                    "my_last_sniped": record.bid in sniped_values,
+                    "my_last_super_bid": super_use["value"] if super_use else None,
+                    "my_last_super_hit": bool(super_use and super_use["hit"]),
+                }
 
-        # 同一天内全场玩家的排名快照完全相同，循环外算一次；全场每人余额
-        # （规则四.1，第 2 天起公布）同理，取工资发放后的值，快照防当日结算后漂移
+        # 全员余额第 2 天起公布，取发工资后的值；复制一份，当天结算不会改动它。
         all_coins_snapshot = dict(coins) if day >= 2 else None
         standings_snapshot = compute_standings(
             auction_scores_history,
@@ -197,15 +151,6 @@ def run_match(
         )
         observations = []
         for player in players:
-            (
-                last_bid,
-                last_deduction,
-                last_collided,
-                last_sniped,
-                last_illegal,
-                last_super,
-                last_super_hit,
-            ) = my_last_by_player.get(player.name, (None, None, False, False, False, None, False))
             observations.append(
                 (
                     player,
@@ -222,14 +167,8 @@ def run_match(
                         standings=standings_snapshot,
                         past_match_logs=past_log_dicts,
                         game=game,
-                        my_last_bid=last_bid,
-                        my_last_deduction=last_deduction,
-                        my_last_collided=last_collided,
-                        my_last_sniped=last_sniped,
-                        my_last_bid_illegal=last_illegal,
-                        my_last_super_bid=last_super,
-                        my_last_super_hit=last_super_hit,
                         all_coins=all_coins_snapshot,
+                        **my_last_by_player.get(player.name, {}),
                     ),
                 )
             )
@@ -241,47 +180,26 @@ def run_match(
 
         bids: list[BidRecord] = []
         super_uses: list[dict] = []
-        for (player, _), submission in zip(observations, submissions):
-            raw_bid, raw_super_bid = normalize_bid_submission(submission)
-            # 整单校验：任何非法（含同值、总耗资超余额）整单强制为正常出价 0
-            bid, status, super_value = validate_submission(
-                raw_bid, raw_super_bid, coins[player.name], game
-            )
-            bids.append(
-                BidRecord(player=player.name, raw_bid=raw_bid, bid=bid, status=status)
-            )
-            if super_value is not None:
-                bids.append(
-                    BidRecord(
-                        player=player.name,
-                        raw_bid=raw_super_bid,
-                        bid=super_value,
-                        status="ok",
-                        is_super=True,
-                    )
-                )
-                super_uses.append({"player": player.name, "value": super_value, "hit": False})
+        for (player, _), (bid, super_bid) in zip(observations, submissions):
+            reason = validate_submission(bid, super_bid, coins[player.name], game)
+            if reason is not None:
+                raise ValueError(f"{player.name} 的出价不符合规则：{reason}")
+            bids.append(BidRecord(player=player.name, bid=bid))
+            if super_bid is not None:
+                bids.append(BidRecord(player=player.name, bid=super_bid, is_super=True))
+                super_uses.append({"player": player.name, "value": super_bid, "hit": False})
 
         winning_record, burned_normal_values, sniped_values = resolve_bids(bids)
         for use in super_uses:
             use["hit"] = use["value"] in sniped_values
 
-        if winning_record is not None:
-            winning_bid = winning_record.bid
-            winner = winning_record.player
-            auction_score = pool  # 任何价位获胜都拿全部拍卖分
+        winner = winning_record.player if winning_record else None
+        winning_bid = winning_record.bid if winning_record else None
+        auction_score = pool if winning_record else 0
+        if winner is not None:
             match_auction_scores[winner] += auction_score
-            is_void = False
-        else:
-            winner = None
-            winning_bid = None
-            auction_score = 0
-            is_void = True
 
-        # 金币结算：获胜与撞车的正常出价全额扣除（流局日必然全员撞车，
-        # 即全员扣除），其余正常出价全额退还，扣除部分系统没收；
-        # 超级出价每次提交扣本场固定成本（无论是否命中），
-        # 命中悬赏由系统发放（多人命中同一数值各得一份）。
+        # 获胜和撞车的正常出价全额扣除，其余退还；超级出价每次扣固定成本，命中各领一份悬赏。
         for record in bids:
             if record.is_super:
                 continue
@@ -312,11 +230,12 @@ def run_match(
                 auction_score=auction_score,
                 super_uses=super_uses,
                 collision_values=sorted(burned_normal_values),
-                is_void=is_void,
+                is_void=winner is None,
             )
         )
         log.auction_scores = dict(match_auction_scores)
         log.scores = dict(match_scores)
+        log.remaining_coins = dict(coins)
         if on_day_end is not None:
             standings = compute_standings(
                 auction_scores_history,
