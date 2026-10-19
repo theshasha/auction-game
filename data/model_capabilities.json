@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-10-17T08:03:10.794732+00:00",
+  "fetched_at": "2026-10-19T07:23:04.839952+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -91,12 +91,11 @@
     "deepseek_flash": {
       "source": {
         "provider": "deepseek",
-        "model": "deepseek-v4-flash",
-        "canonical_model_id": "deepseek/deepseek-v4.1-flash"
+        "model": "deepseek-flash"
       },
       "status": "matched",
-      "matched_id": "deepseek-v4-flash",
-      "canonical_model_id": "deepseek/deepseek-v4.1-flash",
+      "matched_id": "deepseek-flash",
+      "canonical_model_id": "deepseek/deepseek-v4.1-flash-1017",
       "limit": {
         "context": 1000000,
         "input": null,
@@ -355,6 +354,27 @@
       ],
       "tool_call": true
     },
+    "mimo_flash": {
+      "source": {
+        "provider": "xiaomi",
+        "model": "mimo-v2.6-flash"
+      },
+      "status": "matched",
+      "matched_id": "mimo-v2.6-flash",
+      "canonical_model_id": null,
+      "limit": {
+        "context": 1048576,
+        "input": null,
+        "output": 131072
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "tool_call": true
+    },
     "kimi_k3": {
       "source": {
         "provider": "moonshotai",
@@ -377,27 +397,6 @@
             "high",
             "max"
           ]
-        }
-      ],
-      "tool_call": true
-    },
-    "mimo_flash": {
-      "source": {
-        "provider": "xiaomi",
-        "model": "mimo-v2.6-flash"
-      },
-      "status": "matched",
-      "matched_id": "mimo-v2.6-flash",
-      "canonical_model_id": null,
-      "limit": {
-        "context": 1048576,
-        "input": null,
-        "output": 131072
-      },
-      "reasoning": true,
-      "reasoning_options": [
-        {
-          "type": "toggle"
         }
       ],
       "tool_call": true

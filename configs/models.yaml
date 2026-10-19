@@ -28,14 +28,12 @@ models:
       model: gpt-6-luna
   deepseek_flash:
     name: deepseek妹妹
-    model: deepseek-flash
+    model: deepseek-v4.1-flash
     provider: hub
     protocol: chat
     models_dev:
       provider: deepseek
-      # 上游官方条目保留旧键，但 canonical ID 明确对应当前型号；同步时校验。
-      model: deepseek-v4-flash
-      canonical_model_id: deepseek/deepseek-v4.1-flash
+      model: deepseek-flash
   gemini_flash:
     name: 双子妹妹
     model: gemini-3.8-flash
