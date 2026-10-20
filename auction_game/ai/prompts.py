@@ -18,11 +18,6 @@ from auction_game.game.rules import render_rules
 BID_HINT = "请分析局势并提交今日出价。"
 
 
-def speech_format_hint() -> str:
-    """告诉玩家哪些内容会公开。"""
-    return "speech 块是公开发言，其他玩家都能看到。strategy 块是发言策略，仅自己可见。"
-
-
 def build_system_prompt(
     name: str,
     persona_title: str,
@@ -53,14 +48,11 @@ def build_system_prompt(
 
 
 def opening_speech_request() -> str:
-    return (
-        "比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。\n\n"
-        + speech_format_hint()
-    )
+    return "比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。"
 
 
 def _remaining_scores_info(game: GameSettings, match_index: int, day: int, today_pool: int) -> str:
-    """最后一局正赛和加赛显示剩余分数；命中分上限按每人分别计算。"""
+    """最后一局正赛和加赛显示剩余分数。"""
     if match_index < game.regular_matches:
         return ""
     remaining_auction_score = today_pool + sum(game.daily_pool[day:])
@@ -94,8 +86,7 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) ->
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
         + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
         + _day1_constant_info(game)
-        + "\n\n全员累计总分：全员 0 分。\n\n"
-        + BID_HINT
+        + "\n\n全员累计总分：全员 0 分。"
     )
 
 
@@ -291,7 +282,6 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry]) -> 
     if log.match_index >= log.game.regular_matches:
         lines.append("第一名总分并列，全员进入加赛。")
     lines.append("请向全体玩家发表本局结束后的感想（不超过 300 字）。")
-    lines.append(speech_format_hint())
     return "\n\n".join(lines)
 
 
@@ -300,15 +290,13 @@ def memory_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家在本局结束后的公开发言：\n\n"
         + "\n\n".join(f"【{name}】{text}" for name, text in others_speeches.items())
-        + "\n\n请结合旧记忆、本局经历和公开发言，整理一份只有自己能看的笔记，直接返回笔记正文。\n\n"
-        "这份新记忆会完整替换旧记忆。下一局你看不到之前各局的原始对话和公开发言，"
-        "需要继续使用的信息都应保存在这份笔记中。\n\n"
-        "- 保留之前仍然有用的经验，修正已经失效的判断，并区分事实与猜测。\n"
-        "- 重点保留对手的行为判断、自己需要调整的策略，以及支持或推翻判断的关键例子。\n"
-        "- 不要逐日复述或完整抄录出价序列；具体报价仅作为判断的必要证据保留。\n"
+        + "\n\n请结合旧记忆、本局经历和公开发言，整理一份只有自己能看的笔记。"
+        "它会完整替换旧记忆；下一局你看不到之前各局的原始对话和公开发言，要继续用的信息都写在这里。\n\n"
+        "- 记下对手的出价倾向和自己要做的调整，每条都要能直接用于下一局的出价。\n"
+        "- 保留仍然有用的旧经验，改掉被本局推翻的判断。\n"
+        "- 只写结论，不写例子和出价记录。\n"
         "- 规则与最新成绩会另行提供，无需抄写。\n\n"
-        "尽量整理成一页简短笔记，篇幅可以根据有用信息的多少调整，无需凑字数或精确计字。"
-        "如果没有值得保留的信息，直接说明即可。"
+        "全文不超过 1000 字。"
     )
 
 
@@ -317,8 +305,6 @@ def next_match_plan_request(standings: list[StandingsEntry], game: GameSettings,
         f"截至当前的最新累计成绩：\n\n{render_standings(standings)}\n\n"
         f"请结合之前保存的私人笔记，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)
-        + "\n\n"
-        + BID_HINT
     )
 
 
@@ -329,8 +315,7 @@ def final_speech_request(standings: list[StandingsEntry], log: MatchLog) -> str:
         f"第 {log.match_index} 局（{kind}）结束，这也是最后一局。\n\n本局完整出价日志：\n\n"
         f"{render_match_log(log)}\n\n"
         f"比赛全部结束。最终排名与分数明细：\n\n{render_standings(standings)}\n\n"
-        "请向全体玩家发表你的最终感言。\n\n"
-        + speech_format_hint()
+        "请向全体玩家发表你的最终感言。"
     )
 
 
@@ -338,5 +323,5 @@ def final_summary_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家的最终感言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
-        + "\n最后，请写一段只给观众看的总结发言（不会给其他玩家看到）。"
+        + "\n最后，请写一段只给观众看的总结发言。"
     )

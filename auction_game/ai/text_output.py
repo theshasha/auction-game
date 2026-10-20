@@ -7,10 +7,10 @@ import re
 
 
 TASK_FORMATS = {
-    "bid": '<strategy>\n你的私人策略，可正常分段。\n</strategy>\n'
-           '<decision>\n{"bid": 2, "super_bid": null}\n</decision>',
-    "speech": '<strategy>\n你的私人发言策略。\n</strategy>\n'
-              '<speech>\n向其他玩家公开的完整发言。\n</speech>',
+    "bid": '<strategy>\n仅自己可见的出价分析和策略，可正常分段。\n</strategy>\n'
+           '<decision>\n{"bid": 正常出价, "super_bid": 超级出价或 null}\n</decision>',
+    "speech": '<strategy>\n仅自己可见的发言策略。\n</strategy>\n'
+              '<speech>\n其他玩家都能看到的公开发言。\n</speech>',
 }
 TASK_FORMATS["plan"] = TASK_FORMATS["bid"]
 _MARKER = re.compile(r"^[ \t]*(</?(?:strategy|decision|speech)>)[ \t]*\r?$", re.MULTILINE)
@@ -23,9 +23,9 @@ class OutputFormatError(ValueError):
 def output_requirement(task: str) -> str:
     if task in ("memory", "summary"):
         return "请直接返回完整正文，正常换行，不加格式标签或 JSON 外壳。"
-    hint = "请按以下格式提交完整结果，标签各占一行，正文正常换行，块外只留空白：\n"
+    hint = "请按以下格式提交完整结果，标签各占一行，块外只留空白：\n"
     if task in ("bid", "plan"):
-        hint += "decision 只包含 bid 和 super_bid；两者必填，使用整数，不使用超级出价时填 JSON null。\n"
+        hint += "decision 是只含 bid 和 super_bid 的 JSON 对象，出价写不加引号的整数，不使用超级出价时填 null。\n"
     return hint + TASK_FORMATS[task]
 
 

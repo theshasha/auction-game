@@ -1,7 +1,6 @@
-"""提示词文案的测试：system 提示词、发言格式、加赛预告、
-规划与首日出价合并、非法出价提醒重试。
+"""提示词文案：system 提示词、局末结果、记忆、加赛预告、规划与首日出价合并。
 每日出价消息见 test_prompts_bid_request.py；表格渲染见 test_prompts_render.py；
-规则文本与局末重申见 test_prompts_rules.py；共享工厂见 conftest.py。"""
+规则文本见 test_prompts_rules.py。"""
 
 from dataclasses import replace
 
@@ -51,21 +50,7 @@ class TestSystemPrompt:
 
 
 class TestSpeechFields:
-    """公开字段边界；观众总结提示信息不变。"""
-
-    def test_public_speech_requests_ask_for_speech_block(self):
-        auction_scores = {name: 3 if name == "甲" else 0 for name in NAMES}
-        scores = auction_scores.copy()
-        standings = make_standings({name: [auction_scores[name]] for name in NAMES},
-                                   scores_history={name: [scores[name]] for name in NAMES})
-        for text in (
-            prompts.opening_speech_request(),
-            prompts.match_end_speech_request(make_log(auction_scores=auction_scores, scores=scores), standings),
-            prompts.final_speech_request(standings, make_log(match_index=5, auction_scores=auction_scores, scores=scores)),
-        ):
-            assert "strategy" in text and "speech" in text
-            assert "strategy 块是发言策略，仅自己可见" in text
-            assert "speech 块是公开发言，其他玩家都能看到" in text
+    """局末结果和观众总结。"""
 
     @pytest.mark.parametrize("final", [False, True], ids=["match-end", "final"])
     def test_results_show_settled_scores_and_score_based_ranking(self, final):
@@ -89,21 +74,14 @@ class TestSpeechFields:
         assert "【甲】感言A" in text
         assert "【乙】感言B" in text
         assert "只给观众看的总结发言" in text
-        assert "不会给其他玩家看到" in text
 
 
-def test_memory_body_keeps_task_boundaries_without_tool_instruction():
+def test_memory_request_lists_other_speeches_and_key_requirements():
     text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"})
-    assert "save_memory" not in text
     assert "公开发言：\n\n【乙】公开信号\n\n【丙】另一条公开信号\n\n请结合" in text
-    for required in ("【乙】公开信号", "完整替换旧记忆", "下一局你看不到之前各局的原始对话和公开发言",
-                     "保留之前仍然有用的经验", "修正已经失效的判断", "区分事实与猜测",
-                     "篇幅可以根据有用信息的多少调整，无需凑字数或精确计字",
-                     "直接返回笔记正文", "规则与最新成绩会另行提供"):
+    for required in ("完整替换旧记忆", "保留仍然有用的旧经验", "改掉被本局推翻的判断",
+                     "只写结论", "不超过 1000 字"):
         assert required in text
-    assert "支持或推翻判断的关键例子" in text
-    assert "不要逐日复述或完整抄录出价序列" in text
-    assert "具体报价仅作为判断的必要证据保留" in text
 
 
 class TestPlayoffNotice:
@@ -166,7 +144,7 @@ class TestPlanBidMerge:
         assert strategy in text and bid_task in text
         if opening:
             assert "【甲】发言A" in text and "【乙】发言B" in text
-            assert text.count("\n\n全员累计总分：全员 0 分。\n\n") == 1
+            assert text.count("全员累计总分：全员 0 分。") == 1
         else:
             assert "局末发言" not in text and "之前保存的私人笔记" in text
             assert "| 排名 | 玩家 | 总分 | 第1局 | 拍卖分 |" in text
@@ -175,8 +153,6 @@ class TestPlanBidMerge:
             assert "全员累计总分：" not in text
         for fact in ("你有 11 枚金币", "今日奖池为 2 分"):
             assert fact in text
-        assert '请分析局势并提交今日出价' in text
-        assert "```json" not in text
 
     @pytest.mark.parametrize("opening, match_index", [(True, 1), (False, 2), (False, 3), (False, 4)],
                              ids=["opening", "early-regular", "last-regular", "playoff"])
