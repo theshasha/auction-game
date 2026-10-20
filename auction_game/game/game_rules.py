@@ -78,7 +78,7 @@ def validate_submission(
     if raw_super_bid is None:
         return None
     if type(raw_super_bid) is not int:
-        return f"super_bid 必须是不加引号的整数，不使用超级出价时填 JSON null，收到 {raw_super_bid!r}"
+        return f"super_bid 必须是不加引号的整数，不使用超级出价时填 null，收到 {raw_super_bid!r}"
     if raw_super_bid < 0 or raw_super_bid > game.max_bid:
         return f"超级出价 {raw_super_bid} 超出 0~{game.max_bid} 的范围"
     if raw_super_bid == raw_bid:

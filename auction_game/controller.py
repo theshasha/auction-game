@@ -65,8 +65,14 @@ class Controller:
                 self._mode = "step"
                 message = "[控制] 切换到单步模式"
             elif command == "q":
+                if self._quit_requested:
+                    return
                 self._quit_requested = True
                 self._gate.set()
+                message = "[退出] 等已启动任务结束后撤销本轮并退出比赛。"
+            else:
+                # 用 repr 显示终端混入的控制字符，便于判断按键是否被破坏。
+                message = f"[控制] 无法识别：{command!r}"
             self._changed.notify_all()
         if message:
             self._announce(message)

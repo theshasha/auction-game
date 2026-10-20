@@ -217,11 +217,21 @@ class TestController:
             thread.join(timeout=5)
             assert "result" in outcome
 
-    def test_quit_raises_tournament_aborted(self):
-        controller = Controller(mode="continuous", announce=lambda msg: None)
+    def test_quit_is_acknowledged_once_and_raises_tournament_aborted(self):
+        announcements = []
+        controller = Controller(mode="continuous", announce=announcements.append)
         controller.offer_command("q")
+        controller.offer_command("q")
+        assert sum(message.startswith("[退出]") for message in announcements) == 1
         with pytest.raises(TournamentAborted):
             controller.wait_for_turn("测试调用")
+
+    def test_unrecognized_command_is_shown_and_ignored(self):
+        announcements = []
+        controller = Controller(mode="continuous", announce=announcements.append)
+        controller.offer_command("\x1b[Iq")
+        assert len(announcements) == 1 and "'\\x1b[Iq'" in announcements[0]
+        controller.wait_for_turn("测试调用")  # 未退出，连续模式直接通过
 
     def test_mode_switch_anytime(self):
         first_gate = threading.Event()
