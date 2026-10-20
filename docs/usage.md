@@ -1,154 +1,111 @@
 # 使用说明
 
-以下命令均在项目根目录运行。先用现有 Python 安装依赖：
-
-```bash
-python -m pip install -r requirements.txt
-```
+命令都在项目根目录运行。
 
 ## 准备配置
 
-手工配置放在 `configs/` 中，按用途修改：
+- `configs/game.yaml`：局数、金币、奖池和超级出价参数。
+- `configs/models.yaml`：模型目录。每个条目写调用的模型 ID、渠道、协议和 models.dev 来源；有 `name` 的条目可以参赛，`name` 就是角色名。
+- `configs/players.yaml`：参赛阵容、人设和虚构的预测胜率。
+- `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。
 
-- `game.yaml`：比赛局数、金币和奖池等参数。
-- `models.yaml`：模型目录、角色名、调用协议，以及 models.dev 的精确来源。
-- `players.yaml`：参赛阵容、玩家人设和虚构预测胜率。
-- `config.yaml`：渠道、超时、并发上限、测试模型及提示开关。
+密钥写在根目录的 `.env` 里，变量名是渠道的 `api_key_env`，可以照 `.env.example` 写。
 
-密钥只放在项目根目录的 `.env` 中。变量名使用配置指定的环境变量名。
+### 接入模型
 
-比赛启动时，会在创建日志和请求模型前更新根 `RULES.md`。同步失败会停止启动。
+在 `config.yaml` 的 `llm.channels` 里加渠道，再在 `models.yaml` 里用 `provider` 引用它。`protocol` 取 `chat`、`responses` 或 `anthropic`。OpenAI 协议的渠道地址保留 `/v1`；Anthropic 渠道的地址不带 `/v1`，SDK 会自己追加 `/v1/messages`。
 
-根规则使用配置中的角色身份，本场规则使用实际参赛名单。两者使用同一份规则模板。修改规则正文时，请编辑 `RULES.template.md` 并同步检查代码。
+每次请求允许的最大输出取自能力快照 `data/model_capabilities.json` 里该模型的最大输出；快照里没有时用 64000，启动时会显示预算提醒。推理档位按以下顺序确定：
 
-`daily_pool` 设置每天的拍卖奖池。赢家获得当日奖池，流局当天奖池立即作废，不滚存。金币结算和超级命中奖励照常执行。
+1. 模型条目里写了 `reasoning_effort: low | medium | high`（只用于 chat 和 responses），就用它。
+2. 否则 chat 和 responses 模型的来源列出了 `medium`，就用 `medium`。
+3. 其余情况用渠道默认档位。
 
-超级出价命中另得 `super_hit_score` 分，当天计入成绩。比赛按累计总分排名。
+改了 `models_dev` 来源或要更新能力数据时，同步快照（免费，联网读取 models.dev）：
+
+```bash
+python -m auction_game.cli.sync_models                              # 预览差异
+python -m auction_game.cli.sync_models --write                      # 写入快照
+python -m auction_game.cli.sync_models --input "path/to/api.json" --write  # 用本地下载的 models.dev 数据
+```
 
 ## 运行比赛
 
 ```bash
-python -m auction_game.cli.offline_demo  # 免费离线完整赛，无需密钥或键盘推进
+python -m auction_game.cli.offline_demo  # 假模型完整赛，无需密钥
 python main.py --seed 42                # Bot 比赛，固定种子
-python main.py --benchmark 50           # 两组各 50 场，不写日志
+python main.py --benchmark 50           # Bot 对照，两组各 50 场，不写日志
 ```
 
-benchmark 分两组运行。第一组全部使用随机 Bot，只供查看过程统计。第二组由一个策略玩家对阵五个随机 Bot：策略玩家每天出 `min(出价上限, 当前余额)`，不使用超级出价。策略玩家与随机对手的平均总分都取自第二组。
+离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空和加赛。`--test-model` 改用测试模型的配置，`--output 目录` 指定输出位置（目录须不存在或为空）。
 
-离线赛的可选参数见[离线赛与运行环境](reference.md#离线赛与运行环境)。
+benchmark 的第一组全是随机 Bot；第二组是一个策略玩家对五个随机 Bot，策略玩家每天出 `min(出价上限, 当前余额)`，不用超级出价。报告里策略玩家和随机对手的平均分都取自第二组。
 
-以下命令调用真实服务并可能收费，由用户亲自运行：
+**以下命令调用真实服务，可能收费：**
 
 ```bash
 python main.py --ai --test-model
 python main.py --ai
 ```
 
-首次真实比赛先运行 `--ai --test-model`，完成整场测试赛。检查并确认结果后，再运行 `--ai`，使用常规阵容。测试赛、正式赛和重跑均由用户亲自执行。
+`--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容。
 
-要切换测试模型，修改 `configs/config.yaml` 中的 `test_model`，填入模型目录键。测试赛全员使用这个模型的调用配置，但保留各自的身份、人设和独立历史。实际调用设置保存在本场的 `data/run_config.json` 中。
-
-## 交互控制
-
-AI 比赛默认使用单步模式。回车推进下一轮任务，例如一轮出价或发言；`c` 切换为连续模式，`s` 切回单步模式。`p` 暂停，`q` 退出。
-
-每天确认提交并完成结算后，终端显示赢家、超级命中得分与累计排名。金币列是当天结算后余额，尚未加次日工资。战报只展示公开事实，不回写玩家对话；完整结果仍在局末保存。Bot 比赛和离线演示也显示战报，benchmark 保持原有汇总输出。
-
-暂停和失败后的处理如下：
-
-- 暂停后，程序停止启动新任务，先等已经启动的任务结束。这些任务内部的网络重试和输出纠错仍可能继续。
-- 程序保留成功结果。恢复后只补跑失败或尚未启动的任务，成功任务不会重复调用。
-- 暂停后，即使本轮任务全部成功，也要等用户确认继续，本轮结果才会交给后续流程。
-- 出现失败后，需要重新按回车或 `c` 确认补跑。回车按单步继续，`c` 按连续模式继续。失败公告出现后的确认有效，之前按过的键无效。
-- 按 `q` 后，程序先等已经启动的任务结束，再撤销本轮结果并退出比赛。已经写入的请求日志仍会保留。
-
-## 阅读场次
-
-场次保存在 `logs/<时间>_<ai|ai-test|bot|offline>/` 中。先打开场次内的 `README.md`，查看结果和文件链接。**`ai-test` 也会调用真实服务，可能收费。**
-
-- `RULES.md`：本场规则。
-- `speeches.md`：公开发言。
-- `matches/`：逐局结果。
-- `players/`：可读的私人对话日志。
-- `data/run_config.json`：本场实际执行配置。
-- `data/matches/`：完整结算数据。
-- `data/players/`：任务记录，包含原始模型回复和错误。
-
-比赛期间请用只读预览查看日志，避免覆盖程序正在追加的内容。私人对话和原始数据包含私有策略，分享前请检查。
-
-玩家在一局内保留对话。每局结束后，先公布全员发言，再把有用的信息整理成只有自己能看的笔记，最后规划下一局。最后一局跳过记忆整理。
-
-新记忆完整替换旧记忆，下一局无法读取之前各局的原始对话。因此，有用的经验需要写进记忆，并根据本局结果修正旧判断，区分事实和猜测。规划中保存的首日出价只使用一次，首日执行时不再请求模型。
-
-私人笔记重点保存判断与关键证据，不逐日复述或完整抄录出价序列；具体报价只保留用于支持或修正判断的必要例子。篇幅仍是建议目标，不设硬字数限制。
-
-私有策略和记忆在比赛中仅本人可见。发言时，只把公开内容发给对手，私有策略留在本人对话中。观众总结只供观众阅读，不写回玩家历史。
-
-模型通过普通文本提交结果。出价和规划按顺序包含 `<strategy>` 与 `<decision>` 两块，各标签独占一行；策略直接写正文，决策使用 `{"bid": 2, "super_bid": null}` 这样的 JSON。发言使用 `<strategy>` 与 `<speech>` 两块，记忆和观众总结直接返回正文。正文支持正常换行，无需转义成 JSON 字符串。格式错误与出价校验错误共用一次纠错机会。
-
-已完成任务的原始思考内容保留在审计日志中，后续玩家对话会去掉这些内容。
-
-私人日志的“输入原文”只展示当次新增输入。若要查看完整请求，需要在启动比赛时[开启捕获](reference.md#完整请求捕获与回放)。
-
-## 分析与排查
-
-```bash
-python -m auction_game.reporting.analyze
-python -m auction_game.reporting.analyze "logs/场次目录"
-```
-
-不传目录时，命令会选取最新有效的 `ai` 或 `ai-test` 场次，两种类型同等参与选择。分析 Bot 或 offline 场次时，需要指定目录。请把示例中的场次目录替换为实际路径。指标含义见[统计说明](analyze.md)。
-
-分析和回放只支持当前规则及格式版本 3，含滚存奖池的旧场次会报错。旧日志原样保留。读取历史时使用本场配置快照，缺少必需字段就报错，不从当前配置补值。
-
-检查测试模型连通性（真实调用，可能收费，由用户亲自运行）：
-
-```bash
-python -m auction_game.cli.check_llm --test-model
-```
-
-连通检查通过普通文本探测，收到非空回复就算通过，并显示回复内容。每个目标至多请求一次，失败不重试；比赛输出格式由离线验证和后续测试赛检查。指定模型和探测输出长度的方法见[连通检查参数](reference.md#连通检查参数)。智能体获准排查连通性后，每次只能执行一次最小请求；扩大检查范围仍需确认。
-
-查看工具定义时，打开场次的 `tools.md`。查看调用错误时，打开 `data/players/<编号>.jsonl`，按 `task_id` 对照任务。完整消息历史的读取方法见[捕获与回放](reference.md#完整请求捕获与回放)。
-
-## 常用调整
-
-配置修改均在下次启动时生效。
-
-`configs/config.yaml` 中的两个提示开关独立生效，默认都开启：
-
-```yaml
-prompts:
-  enable_predictions: true
-  enable_personas: true
-```
-
-关闭 `enable_predictions` 会移除模型输入中的赛前胜率与专家预测。关闭 `enable_personas` 会移除人设及相关提醒。做公平对照时可将两项都设为 `false`；角色名仍保留模型身份信息。原有玩家配置保持，启动时显示本场开关，实际设置保存在 `data/run_config.json` 的 `prompts` 中。历史场次没有这个字段时，开关状态未记录。
-
-- 并发：修改 `configs/config.yaml` 的 `llm.max_concurrency`。它必须是正整数，设为 1 时串行运行。降低并发可缓解负载。
-- 协议与渠道 URL：见[模型接入](reference.md#模型接入)。
-- 推理档位：在模型目录设置 `reasoning_effort: low | medium | high`，适用于 Chat/Responses。删除这项配置后，恢复按能力快照选择的策略。
-
-比赛启动时会离线读取能力快照 `data/model_capabilities.json`。以下命令只同步公共能力数据，免费：
-
-```bash
-python -m auction_game.cli.sync_models          # 联网预览
-python -m auction_game.cli.sync_models --write  # 联网更新
-```
-
-输出预算就是请求中允许的最大输出 token 数，按以下规则设置：
-
-- 使用能力快照中的有效最大输出值。上限未知时，回退为 **64000**。
-- `input` 和 `context` 只作为能力元数据保存。程序不会据此裁剪历史，也不会缩减输出预算。
-- 渠道拒绝请求，或回复被截断时，程序直接报错。失败后仍保留原输出预算。
-
-推理档位优先使用模型目录中填写的值。如果没有填写，只有 Chat/Responses 且能力数据明确支持 `medium` 时才自动使用 `medium`；其余情况沿用渠道默认值。程序不会自行换算推理 token 数，也不会开启未经确认支持的档位。
-
-实际生效值见本场的 `data/run_config.json`。已有公共数据文件的导入方法见[能力快照导入](reference.md#能力快照导入)。
-
-改规则后可手动生成或检查：
+启动时会生成根目录的 `RULES.md`；生成失败就不启动。改了 `RULES.template.md` 或 `game.yaml` 后也可以手动生成或检查：
 
 ```bash
 python -m auction_game.game.rules          # 更新 RULES.md
-python -m auction_game.game.rules --check  # 只读检查，过期或模板错误返回非零
+python -m auction_game.game.rules --check  # 过期或模板有错时返回非零
 ```
+
+## 交互控制
+
+AI 比赛默认单步：回车执行下一轮任务（如一轮出价或发言），`c` 切到连续模式，`s` 切回单步，`p` 暂停，`q` 退出。每天结算后终端显示赢家、超级命中和累计排名，金币列是当天结算后、发次日工资前的余额。
+
+模型回复格式不对或出价违规时，程序会让它改一次；还不对，这个任务就算失败。可重试的网络或服务错误会自动重发一次。
+
+- 暂停或有任务失败时，程序不再启动新任务，等已启动的任务结束后停下等你确认。
+- 回车或 `c` 继续，只补跑失败和没启动的任务，成功的不重跑。每次出现新的失败都要重新确认。
+- `q` 等已启动的任务结束后撤销本轮结果并退出，已写入的日志保留。
+
+## 阅读场次
+
+每场写在 `logs/<时间>_<ai|ai-test|bot|offline>/`，先打开里面的 `README.md`。
+
+- `RULES.md`：本场规则。
+- `speeches.md`：公开发言和观众总结。
+- `matches/`：逐局结果。
+- `players/`：每名玩家的私人对话。开头是系统提示，之后每节是当次新增的输入和最终结果；局末整理记忆后，对话从系统提示和新记忆重新开始。
+- `data/run_config.json`：本场实际使用的模型、输出预算、推理档位和提示开关。
+- `data/matches/`：完整结算数据。
+- `data/players/<编号>.jsonl`：任务记录，含模型原始回复、thinking 和完整错误。
+
+私人对话和 `data/players/` 里有玩家的私有策略、记忆和 thinking，分享前请检查。比赛进行中用只读方式查看日志，免得编辑器保存时覆盖程序正在追加的内容。
+
+## 分析
+
+```bash
+python -m auction_game.reporting.analyze                    # 最新的 ai 或 ai-test 场次
+python -m auction_game.reporting.analyze "logs/场次目录"   # 指定场次，Bot 和离线赛要这样指定
+```
+
+未完赛的场次只统计已经结束的局。各项指标的口径见[统计说明](analyze.md)。
+
+## 连通检查
+
+**会调用真实服务，可能收费。** 每个模型最多请求一次，不重试，不建场次，收到非空回复就算通过并显示回复内容。
+
+```bash
+python -m auction_game.cli.check_llm --test-model         # 只查测试模型
+python -m auction_game.cli.check_llm --model 目录键       # 只查指定模型，可重复
+python -m auction_game.cli.check_llm                      # 查常规阵容用到的全部模型
+```
+
+`--max-tokens` 设探测的输出上限，默认 2048，不超过该模型的比赛输出预算。
+
+## 常用调整
+
+改配置后下次启动生效。
+
+- 提示开关：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测；`prompts.enable_personas` 关掉后，模型看不到人设。两项都关适合做公平对照，角色名仍带模型身份。
+- 并发：`llm.max_concurrency`，1 为串行。渠道负载高时调低。
+- 超时：`llm.timeout_seconds`，单次请求的秒数。

@@ -181,7 +181,7 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "命中原本互撞价 0 次（按超级使用笔数计，包含流局）" in output
     assert "使用超级出价：1 天" in output
     assert "改变当日结果：1 天" in output
-    assert "含有效正常报价及超级数值" in output
+    assert "含正常报价及超级数值" in output
     assert "获胜价平均" in output
 
 

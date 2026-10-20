@@ -1,6 +1,4 @@
-# 稳定目录键供 players.yaml / config.test_model 引用；名称只在这里维护。
-# models_dev 是精确公共来源，与 Hub API ID 分开；预算由离线能力快照生成。
-# high 支持以同步条目的 reasoning_options 为准，公开设置按 protocol 选择。
+# 目录键供 players.yaml 和 config.yaml 的 test_model 引用；models_dev 是该模型在 models.dev 里的条目，可能和渠道的 model ID 不同。
 models:
   gpt_astra:
     name: GPT姐姐
@@ -47,7 +45,6 @@ models:
     model: gemini-4-argon
     provider: hub
     protocol: chat
-    # 官方能力支持 medium，按快照自动选择该推理档位。
     models_dev:
       provider: google
       model: gemini-4-argon
@@ -120,7 +117,6 @@ models:
     model: kimi-k3
     provider: hub
     protocol: chat
-    # 官方来源未列 medium，推理档位沿用渠道默认。
     models_dev:
       provider: moonshotai
       model: kimi-k3

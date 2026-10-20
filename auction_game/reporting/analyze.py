@@ -88,14 +88,14 @@ def collect_player_stats(matches: list[dict]) -> dict:
             normal_bid_counts = Counter(bid["bid"] for bid in day["bids"] if not bid["is_super"])
             if day["super_uses"]:
                 super_days += 1
-                # 固定当天有效正常报价，移除全部超级后重新判定；不推演未来。
-                effective_normal_bids = [BidRecord(player=bid["player"], bid=bid["bid"])
-                                         for bid in day["bids"] if not bid["is_super"]]
+                # 固定当天正常报价，移除全部超级后重新判定，只比较当天结果。
+                normal_only = [BidRecord(player=bid["player"], bid=bid["bid"])
+                               for bid in day["bids"] if not bid["is_super"]]
                 super_collision_hits += sum(
                     use["hit"] and normal_bid_counts[use["value"]] >= 2
                     for use in day["super_uses"]
                 )
-                without_super, _, _ = resolve_bids(effective_normal_bids)
+                without_super, _, _ = resolve_bids(normal_only)
                 without_super_winner = without_super.player if without_super is not None else None
                 if (without_super_winner, without_super is None) != (day["winner"], day["is_void"]):
                     super_changed_days += 1
@@ -148,7 +148,7 @@ def collect_player_stats(matches: list[dict]) -> dict:
 
 
 def print_player_stats(stats: dict) -> None:
-    """每玩家一个小块，分数与余额共用明确标注正赛/加赛的列序。"""
+    """每玩家一个小块，分数与余额共用标注了正赛/加赛的列序。"""
     match_labels = stats["match_labels"]
     print("玩家明细（按总分排序）")
     print(f"各局顺序：{' / '.join(match_labels)}")
@@ -198,7 +198,7 @@ def analyze(run_dir: Path) -> None:
 
     total_days = 0
     void_days = 0
-    # 按「第几天」聚合非流局日的全部有效出价；奖池包括流局日
+    # 按「第几天」聚合非流局日的全部出价；奖池包括流局日
     bids_by_day_index: dict[int, list[int]] = {}
     pools_by_day_index: dict[int, list[int]] = {}
     winning_bids: list[int] = []
@@ -258,7 +258,7 @@ def analyze(run_dir: Path) -> None:
     print()
 
     print("平均出价与奖池：")
-    print("  出价排除流局日，含有效正常报价及超级数值；奖池包含流局日")
+    print("  出价排除流局日，含正常报价及超级数值；奖池包含流局日")
     for day_index in sorted(pools_by_day_index):
         pools = pools_by_day_index[day_index]
         bids = bids_by_day_index.get(day_index, [])

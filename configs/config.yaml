@@ -1,12 +1,11 @@
 # models.yaml 的 provider 引用这里的渠道；OpenAI 地址保留 /v1。
-# 测试模式整体采用此目录条目的调用配置，身份与历史保持独立。
-# 推理强度按能力快照选择；启动提示显示实际选择。
+# --test-model 时全员使用的模型目录键。
 test_model: deepseek_flash
 prompts:
   enable_predictions: false
   enable_personas: false
 llm:
-  # 整轮任务并发上限；1 为串行，启动时读取一次。
+  # 同时请求的任务数上限，1 为串行。
   max_concurrency: 10
   timeout_seconds: 900
   channels:
