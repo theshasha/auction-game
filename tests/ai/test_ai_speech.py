@@ -97,24 +97,24 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     player = make_player(runner, tmp_path)
     assert player.give_speech("请发言", "opening_speech") == speech
     assert len(runner.calls) == 1
-    entry = task_entries(player.log_path)[-1]
+    entry = task_entries(player.log.path)[-1]
     assert entry["result"] == speech_reply(speech)
     assert "烟雾弹" in ModelMessagesTypeAdapter.dump_json(player.messages).decode()
-    md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    md = player.log.readable_path.read_text(encoding="utf-8")
     assert speech in md and "私有策略" in md
 
 
 @pytest.mark.parametrize("invalid", [speech_reply("  "), "missing sections"])
-def test_speech_schema_failure_gets_one_correction(invalid):
+def test_speech_schema_failure_gets_one_correction(invalid, tmp_path):
     runner = fake_task_runner([invalid, speech_reply("补上的发言")])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     assert player.give_speech("请发言", "opening_speech") == "补上的发言"
     assert len(runner.calls) == 2
 
 
-def test_failed_speech_leaves_history_unchanged():
+def test_failed_speech_leaves_history_unchanged(tmp_path):
     runner = fake_task_runner(["private analysis", "more private"])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
         player.give_speech("请发言", "opening_speech")
@@ -125,10 +125,10 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
     from pydantic_ai.messages import TextPart
     runner = fake_task_runner([bid_reply(1), speech_reply(" "), speech_reply(" ")])
     player = make_player(runner, tmp_path)
-    player.plan_strategy("plan", "plan")
+    player.plan_strategy("plan", "opening_plan")
     with pytest.raises(OutputFailedError):
-        player.give_speech("speech", "speech")
-    entry = task_entries(player.log_path)[-1]
+        player.give_speech("speech", "match_1_speech")
+    entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     # SDK 合并历史末尾请求后，失败审计仍只包含本任务的两次原文。
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
@@ -136,27 +136,27 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
     assert audit[0].parts[-1].content.startswith("speech\n\n请按以下格式提交完整结果")
 
 
-def test_blank_summary_gets_output_correction():
+def test_blank_summary_gets_output_correction(tmp_path):
     runner = fake_task_runner(["  \n", "给观众的话"])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     assert player.final_summary("总结") == "给观众的话"
     assert len(runner.calls) == 2 and player.messages == before
     assert "retry-prompt" in ModelMessagesTypeAdapter.dump_json(runner.calls[-1]).decode()
 
 
-def test_double_blank_summary_fails_and_keeps_history():
+def test_double_blank_summary_fails_and_keeps_history(tmp_path):
     runner = fake_task_runner([" ", " \n"])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
         player.final_summary("总结")
     assert player.messages == before and len(runner.calls) == 2
 
 
-def test_cache_consumed_once_and_restored_with_history_by_checkpoint():
+def test_cache_consumed_once_and_restored_with_history_by_checkpoint(tmp_path):
     runner = fake_task_runner([bid_reply(2, 6), bid_reply(1)])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     player.plan_strategy("规划", "opening_plan")
     checkpoint = player.checkpoint()
     history = deepcopy(player.messages)
@@ -170,26 +170,26 @@ def test_cache_consumed_once_and_restored_with_history_by_checkpoint():
 
 
 @pytest.mark.parametrize("fails", [False, True])
-def test_replan_transaction_and_round_rollback(fails):
+def test_replan_transaction_and_round_rollback(fails, tmp_path):
     replies = [bid_reply("bad"), bid_reply(99)] if fails else [bid_reply(4)]
     runner = fake_task_runner([bid_reply(2, 6), *replies])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     player.plan_strategy("旧规划", "opening_plan")
     checkpoint = player.checkpoint()
     before = deepcopy(player.messages)
     if fails:
         with pytest.raises(OutputFailedError):
-            player.plan_strategy("新规划", "next_plan")
+            player.plan_strategy("新规划", "match_1_plan")
         assert player.messages == before and player._pending_day1_bid == (2, 6)
     else:
-        player.plan_strategy("新规划", "next_plan")
+        player.plan_strategy("新规划", "match_1_plan")
         assert player._pending_day1_bid == (4, None)
     player.rollback(checkpoint)
     assert player.messages == before and player._pending_day1_bid == (2, 6)
 
 
-def test_rollback_new_plan_removes_new_cache():
-    player = make_player(fake_task_runner([bid_reply(3)]))
+def test_rollback_new_plan_removes_new_cache(tmp_path):
+    player = make_player(fake_task_runner([bid_reply(3)]), tmp_path)
     checkpoint = player.checkpoint()
     player.plan_strategy("规划", "opening_plan")
     player.rollback(checkpoint)
@@ -200,8 +200,8 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
     from auction_game.controller import Controller
     game = replace(TEST_GAME, initial_coins=13, daily_pool=(2, 1, 3), max_bid=9,
                    super_cost=1, super_hit_score=2, regular_matches=1)
-    a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6), bid_reply(1)]), game=game)
-    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), game=game)
+    a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6), bid_reply(1)]), tmp_path / "a", game=game)
+    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), tmp_path / "b", game=game)
     b.name = "Bravo"
     director = ai_speech.AISpeechDirector([a, b], Controller(mode="continuous", announce=lambda _: None),
                                         tmp_path, game=a.game)

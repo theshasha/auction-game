@@ -4,7 +4,7 @@
 
 ## 准备配置
 
-- `configs/game.yaml`：局数、金币、奖池和超级出价参数。
+- `configs/game.yaml`：局数、金币、奖池、出价上限和超级出价参数。
 - `configs/models.yaml`：模型目录。每个条目写调用的模型 ID、渠道、协议和 models.dev 来源；有 `name` 的条目可以参赛，`name` 就是角色名。
 - `configs/players.yaml`：参赛阵容、人设和虚构的预测胜率。
 - `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。
@@ -21,7 +21,7 @@
 2. 否则 chat 和 responses 模型的来源列出了 `medium`，就用 `medium`。
 3. 其余情况用渠道默认档位。
 
-改了 `models_dev` 来源或要更新能力数据时，从 models.dev 同步快照：
+新增模型、改了 `models_dev` 来源或要更新能力数据时，从 models.dev 同步快照：
 
 ```bash
 python -m auction_game.cli.sync_models                              # 预览差异
@@ -50,7 +50,7 @@ python main.py --ai
 
 `--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容。
 
-启动时会生成根目录的 `RULES.md`。改了 `RULES.template.md` 或 `game.yaml` 后也可以手动生成或检查：
+启动时会生成根目录的 `RULES.md`。改了 `RULES.template.md`、`game.yaml` 或阵容后也可以手动生成或检查：
 
 ```bash
 python -m auction_game.game.rules          # 更新 RULES.md
@@ -63,7 +63,8 @@ AI 比赛默认单步：回车执行下一轮任务（如一轮出价或发言�
 
 模型回复格式不对或出价违规时，程序会让它改一次；还不对，这个任务就算失败。可重试的网络或服务错误会自动重发一次。
 
-- 暂停或有任务失败时，程序不再启动新任务，等已启动的任务结束后停下等你确认。
+- 暂停后，程序不再启动新任务，等已启动的任务结束后停下等你确认。
+- 有任务失败时，本轮其余任务照常跑完，然后停下等你确认。
 - 回车或 `c` 继续，只补跑失败和没启动的任务，成功的不重跑。每次出现新的失败都要重新确认。
 - `q` 等已启动的任务结束后撤销本轮结果并退出，已写入的日志保留。
 
@@ -86,11 +87,11 @@ python -m auction_game.reporting.analyze                    # 最新的 ai 或 a
 python -m auction_game.reporting.analyze "logs/场次目录"   # 指定场次，Bot 和离线赛要这样指定
 ```
 
-未完赛的场次只统计已经结束的局。各项指标的口径见[统计说明](analyze.md)。
+各项指标的口径见[统计说明](analyze.md)。
 
 ## 连通检查
 
-**会调用真实服务，可能收费。** 每个模型最多请求一次，不重试，收到非空回复就算通过并显示回复内容。
+**会调用真实服务，可能收费。** 每个模型最多请求一次，不重试，收到非空回复就算通过并显示回复开头。
 
 ```bash
 python -m auction_game.cli.check_llm --test-model         # 只查测试模型

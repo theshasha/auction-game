@@ -50,13 +50,14 @@ def running(controller, fn, *release_events):
             raise error
 
 
-def make_named_player(name, task_runner):
-    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, task_runner, game=TEST_GAME)
+def make_named_player(name, task_runner, tmp_path):
+    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, task_runner, game=TEST_GAME,
+                    log_path=tmp_path / f"{name}.jsonl", readable_path=tmp_path / f"{name}.md")
 
 
 @pytest.mark.parametrize("failure", [False, True], ids=["paused-success", "failed-task"])
 @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
-def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, capsys, failure, command):
+def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, capsys, failure, command, tmp_path):
     from auction_game.game import engine
     from auction_game.game.tournament import run_tournament
     from auction_game.reporting.run_output import print_day_result
@@ -70,10 +71,10 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         controller.offer_command("p")
         return bid_reply(2)
 
-    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1, 2)]))
+    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1, 2)]), tmp_path)
     bravo = make_named_player("Bravo", fake_task_runner(
         [ModelAPIError("offline", "unavailable"), bid_reply(2)] if failure else [pause_and_reply],
-    ))
+    ), tmp_path)
     for player in (alpha, bravo):
         player.game = game
     alpha.plan_strategy("首日规划", "opening_plan")
@@ -127,7 +128,7 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
 
 
 @pytest.mark.parametrize("command", ["", "q"], ids=["resume-only-failed-memory", "abort-restores-context"])
-def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command):
+def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command, tmp_path):
     gate = threading.Event()
 
     def announce(message):
@@ -135,9 +136,9 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
             gate.set()
 
     controller = Controller(mode="continuous", announce=announce)
-    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1), {"memory": "alpha cumulative"}]))
+    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1), {"memory": "alpha cumulative"}]), tmp_path)
     bravo = make_named_player("Bravo", fake_task_runner([bid_reply(2), ModelAPIError("offline", "unavailable"),
-                                                        {"memory": "bravo cumulative"}]))
+                                                        {"memory": "bravo cumulative"}]), tmp_path)
     players = [alpha, bravo]
     for player in players:
         player.plan_strategy("prior match context", "opening_plan")
@@ -567,7 +568,7 @@ class TestParallelRound:
             assert stateless_calls == [1]
 
     @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
-    def test_pause_keeps_consumed_plan_before_result_collection(self, monkeypatch, command):
+    def test_pause_keeps_consumed_plan_before_result_collection(self, monkeypatch, command, tmp_path):
         ready = threading.Event()
         release_collection = threading.Event()
         gate = threading.Event()
@@ -583,7 +584,7 @@ class TestParallelRound:
             announce=announce,
         )
         task_runner = fake_task_runner([bid_reply(2, 6)])
-        player = make_named_player("Alpha", task_runner)
+        player = make_named_player("Alpha", task_runner, tmp_path)
         player.plan_strategy("请规划", "opening_plan")
         checkpoint = player.checkpoint()
         history = deepcopy(player.messages)
@@ -632,7 +633,7 @@ class TestParallelRound:
         ([ModelAPIError("offline", "service unavailable")], "service unavailable"),
         (["格式不对", "还是不对"], "retries"),
     ], ids=["service", "output"])
-    def test_failure_reruns_only_failed_player(self, failures, reason):
+    def test_failure_reruns_only_failed_player(self, failures, reason, tmp_path):
         gate = threading.Event()
         announcements = []
 
@@ -643,9 +644,9 @@ class TestParallelRound:
 
         controller = Controller(mode="continuous", announce=announce)
         alpha_chat = fake_task_runner([bid_reply(1)])
-        alpha = make_named_player("Alpha", alpha_chat)
+        alpha = make_named_player("Alpha", alpha_chat, tmp_path)
         bravo_chat = fake_task_runner([*failures, bid_reply(2)])
-        bravo = make_named_player("Bravo", bravo_chat)
+        bravo = make_named_player("Bravo", bravo_chat, tmp_path)
         tasks = [
             RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
             RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
@@ -672,7 +673,7 @@ class TestParallelRound:
             assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(2))]
 
     @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
-    def test_pause_keeps_collected_and_inflight_success(self, monkeypatch, command):
+    def test_pause_keeps_collected_and_inflight_success(self, monkeypatch, command, tmp_path):
         gate_announced = threading.Event()
 
         def announce(msg):
@@ -682,7 +683,7 @@ class TestParallelRound:
         controller = Controller(mode="continuous", announce=announce)
         alpha_collected = threading.Event()
         alpha_chat = fake_task_runner([bid_reply(1)])
-        alpha = make_named_player("Alpha", alpha_chat)
+        alpha = make_named_player("Alpha", alpha_chat, tmp_path)
 
         original_as_completed = controller_module.as_completed
 
@@ -705,7 +706,7 @@ class TestParallelRound:
             assert release_bravo.wait(timeout=5)
             return bid_reply(2)
 
-        bravo = make_named_player("Bravo", fake_task_runner([bravo_chat, bravo_chat]))
+        bravo = make_named_player("Bravo", fake_task_runner([bravo_chat, bravo_chat]), tmp_path)
         checkpoints = [p.checkpoint() for p in (alpha, bravo)]
         tasks = [
             RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),

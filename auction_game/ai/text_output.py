@@ -65,7 +65,7 @@ def parse_text_output(task: str, text: str) -> dict | str:
         decision = json.loads(body, object_pairs_hook=_unique_object)
     except OutputFormatError:  # 保留重复字段的具体报错
         raise
-    except (ValueError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:  # 嵌套过深的 JSON 只让本任务纠错，不中断比赛
         raise OutputFormatError("decision 必须是一个完整 JSON 对象，不加代码围栏或尾随正文。") from exc
     if not isinstance(decision, dict) or set(decision) != {"bid", "super_bid"}:
         raise OutputFormatError("decision 必须且只能包含 bid 和 super_bid 两个字段。")

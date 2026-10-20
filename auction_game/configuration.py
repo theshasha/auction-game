@@ -78,7 +78,7 @@ def load_configuration(
                 f"{ROOT_DIR / models_path}：models.{key}.provider 未知渠道：{model['provider']!r}"
             )
     test_key = config.get("test_model")
-    if test_key not in catalog:
+    if not isinstance(test_key, str) or test_key not in catalog:
         raise ConfigurationError(f"{config_path}：test_model 必须引用 models.yaml 中的目录键")
     config["models"] = catalog
     players = load_players(players_path, models_path, catalog=catalog)

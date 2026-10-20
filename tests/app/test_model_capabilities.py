@@ -37,10 +37,11 @@ def test_explicit_reasoning_override_only_changes_selected_model(config_files, e
     assert normal == unchanged
 
 
-def test_reasoning_override_rejected_for_anthropic(config_files):
+@pytest.mark.parametrize("protocol,effort", [("anthropic", "low"), ("responses", "auto")])
+def test_invalid_reasoning_override_rejected(config_files, protocol, effort):
     path = config_files[2]
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    data["models"]["substitute"].update(protocol="anthropic", reasoning_effort="low")
+    data["models"]["substitute"].update(protocol=protocol, reasoning_effort=effort)
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(ValueError, match="reasoning_effort"):
         load_configuration(*config_files)

@@ -36,7 +36,7 @@ def test_immutable_settings_and_json_snapshot(settings_data):
 
 
 @pytest.mark.parametrize("field,value,match", [
-    ("max_bid", -1, "max_bid"), ("daily_pool", [1, 0], r"daily_pool\[1\]"),
+    ("max_bid", -1, "max_bid"), ("daily_pool", [1, 0], r"daily_pool\[1\]"), ("daily_pool", {3: 1}, "daily_pool"),
 ])
 def test_invalid_values(settings_data, field, value, match):
     settings_data[field] = value

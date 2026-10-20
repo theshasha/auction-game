@@ -77,7 +77,7 @@ class BufferedRequest(WrapperModel):
 class ModelFactory:
     """保存模型配置；open() 在调用方的事件循环里创建并关闭 SDK 和 HTTP 客户端。
 
-    transport 用于测试和离线演示注入假传输。
+    transport 用于测试注入假传输。
     """
 
     protocol: str
@@ -106,6 +106,7 @@ class ModelFactory:
                                   http_client=client, max_retries=0)
                 provider = OpenAIProvider(openai_client=sdk)
                 if self.protocol == "chat":
+                    # SDK 默认把缺结束原因的截断流当成正常结束；部分中转渠道不认 max_completion_tokens。
                     model = OpenAIChatModel(self.model, provider=provider, profile={
                         "openai_chat_streaming_requires_finish_reason": True,
                         "openai_chat_supports_max_completion_tokens": False,

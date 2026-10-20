@@ -172,8 +172,13 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
     for entry in snapshot["models"].values():
         entry["limit"]["output"] = None
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    config_path = config_files[0]
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["llm"].update(max_concurrency=3, timeout_seconds=7)
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    factories = []
     monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
-    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: factories.append(kwargs))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / mode)
     monkeypatch.setattr(runners.Controller, "start_stdin_reader", lambda self: None)
     monkeypatch.setattr(runners, "run_tournament",
@@ -192,3 +197,7 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
     snapshot = json.loads((tmp_path / ("ai-test" if test_model else "ai") / "data" / "run_config.json")
                           .read_text(encoding="utf-8"))
     assert snapshot["mode"] == ("test_model" if test_model else "regular")
+    assert snapshot["max_concurrency"] == 3
+    first = factories[0]
+    assert (first["model"], first["protocol"], first["channel"], first["timeout"]) == (
+        ("test-model-c", "responses") if test_model else ("test-model-a", "chat")) + (CHANNELS["hub"], 7)

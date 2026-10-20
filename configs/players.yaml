@@ -1,4 +1,4 @@
-# model 引用 models.yaml 目录键；增减条目即可调整阵容，角色名随目录绑定。
+# model 引用 models.yaml 目录键，角色名取自该目录条目。
 # 人设只约束公开发言口吻，不含策略指令；预测夺冠率是虚构公开信息。
 players:
   - model: gpt_astra

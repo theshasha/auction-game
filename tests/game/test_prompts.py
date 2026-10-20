@@ -117,12 +117,12 @@ class TestPlayoffNotice:
 
 
 class TestPlanBidMerge:
+    """规划请求保留首日资源、累计分数与策略要求。"""
+
     def test_single_day_plan_reminds_coins_reset(self):
         game = replace(TEST_GAME, daily_pool=(1,))
         assert "本局最后一天，结束后金币清零。" in prompts.opening_plan_request({}, game)
         assert "本局最后一天，结束后金币清零。" in prompts.next_match_plan_request([], game, 2)
-
-    """规划请求保留首日资源、权威分数与策略要求；schema 定义格式。"""
 
     @pytest.mark.parametrize(
         "build, speech_kind, strategy, bid_task",

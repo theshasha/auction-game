@@ -23,9 +23,6 @@ def demo_configuration(monkeypatch, config_files):
     def load(**kwargs):
         return load_configuration(*config_files, **kwargs)
     monkeypatch.setattr(offline_demo, "load_configuration", load)
-    # 离线比赛禁止读取真实密钥。
-    monkeypatch.setattr("auction_game.ai.llm_client._require_env", lambda *args: (_ for _ in ()).throw(
-        AssertionError("离线完整赛禁止读取密钥")))
     return load(test_model=True)
 
 

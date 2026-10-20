@@ -29,7 +29,7 @@ class TestBidRequest:
         assert "昨日公布" not in text
         assert "已含今日工资" not in text  # 第 1 天没有工资
         assert first_line == "当前是第 2 局第 1 天。"
-        assert "\n\n你的累计总分：17 分。" in text
+        assert "\n\n全员累计总分：甲 17 分、" in text
 
     @pytest.mark.parametrize("day", [1, 2])
     def test_live_totals_include_all_players(self, day):
@@ -109,7 +109,7 @@ class TestBidRequest:
             "| 己 | 1 | — | — | 0 |\n\n"
         ) in text
         assert "- 今日奖池：1 分。\n- 你的金币余额：10（已含今日工资，正常出价上限：7）。\n- 本局得分：7 分。" in text
-        assert "你的累计总分：23 分。" in text
+        assert "全员累计总分：甲 23 分、" in text
         # 余额行必须在昨日公布之后
         assert text.index("昨日公布") < text.index("你的金币余额")
 
@@ -132,13 +132,12 @@ class TestBidRequest:
         ))
         lines = text.splitlines()
 
-        assert "昨日出价明细：\n\n| 玩家 | 正常出价 | 超级出价 | 命中情况 |\n" in text
-        assert "| 甲 | 6 | — | — |" in lines
-        assert "| 乙 | 5 | — | — |" in lines
-        assert "| 丙 | 4 | 6 | 命中 |" in lines
-        assert "| 丁 | 3 | 5 | 落空 |" in lines
-        assert "| 戊 | 2 | — | — |" in lines
-        assert "| 己 | 0 | — | — |" in lines
+        assert "| 甲 | 6 | — | — | 7 |" in lines
+        assert "| 乙 | 5 | — | — | 7 |" in lines
+        assert "| 丙 | 4 | 6 | 命中 | 7 |" in lines
+        assert "| 丁 | 3 | 5 | 落空 | 7 |" in lines
+        assert "| 戊 | 2 | — | — | 7 |" in lines
+        assert "| 己 | 0 | — | — | 7 |" in lines
         assert "昨日命中得分：丙 2 分。" in lines
 
     def test_void_day_announcement_has_no_winner_wording(self):

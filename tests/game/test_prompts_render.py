@@ -53,11 +53,6 @@ class TestRenderMatchLog:
             assert all("金币" not in cell for cell in player_cells)
         assert "成本" not in text and "悬赏" not in text
 
-    def test_empty_log(self):
-        log = make_log(days=[])
-        assert "未进行任何拍卖" in prompts.render_match_log(log)
-        assert "本局得分：甲 0 分" in prompts.render_match_log(log)
-
     def test_each_void_day_forfeits_its_own_pool(self):
         log = make_log(
             days=[

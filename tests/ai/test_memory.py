@@ -74,7 +74,7 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         assert "resp_1" in correction  # 当前任务 SDK auto 链接仍有效
     elif protocol == "responses":
         assert "encrypted_old_reasoning" in correction and "rs_old" in correction
-    audit = player.log_path.read_text(encoding="utf-8")
+    audit = player.log.path.read_text(encoding="utf-8")
     assert thinking in audit and "thinking" in audit
     if protocol == "responses":
         assert "encrypted_old_reasoning" in audit and "resp_1" in audit
@@ -100,10 +100,10 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_sdk_plain_memory_and_cross_match_replacement(protocol):
+def test_sdk_plain_memory_and_cross_match_replacement(protocol, tmp_path):
     h = Harness(protocol, [reply(speech_reply("old public signal")), reply({"memory": "cumulative-v1"}),
                            reply(bid_reply(1)), reply({"memory": "cumulative-v2"}), reply(bid_reply(2))])
-    player = make_player(TaskRunner(h.factory))
+    player = make_player(TaskRunner(h.factory), tmp_path)
     player.give_speech("old match raw", "match_1_speech")
     player.save_memory(prompts.memory_request({"Bravo": "other signal"}), "match_1_memory")
     assert "不加格式标签或 JSON 外壳" in json.dumps(h.requests[-1][1], ensure_ascii=False)
@@ -147,9 +147,9 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     assert "第一版经验" not in third_input and len(runner.calls) == 6  # 超软目标只请求一次
     player.final_summary("review all matches")
     assert "first match raw" in encoded(runner.calls[-1]) and "second match raw" in encoded(runner.calls[-1])
-    entries = task_entries(player.log_path)
+    entries = task_entries(player.log.path)
     assert entries[4]["history_reset"] == f"【累计私有记忆，仅自己可见】\n{long_memory}"
-    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert markdown.count("此后对话从系统提示和一条消息重新开始") == 2
     assert "这次请求带的是从开局到现在的全部对话" in markdown
     player.rollback(checkpoint)
@@ -157,9 +157,9 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
 
 
 @pytest.mark.parametrize("invalid", ["", "\r\n\t "])
-def test_memory_requires_nonempty_plain_body_and_shared_correction(invalid):
+def test_memory_requires_nonempty_plain_body_and_shared_correction(invalid, tmp_path):
     runner = fake_task_runner([invalid, {"memory": "saved"}])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     player.save_memory("整理", "match_1_memory")
     assert player.memory == "saved" and len(runner.calls) == 2
 
@@ -193,7 +193,7 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             assert "private-" not in text
             return {"memory": "private-" + name}
         p = make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6),
-                                         bid_reply(0)]), game=game)
+                                         bid_reply(0)]), tmp_path / name, game=game)
         p.name = name
         players.append(p)
     director = AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None), tmp_path, game=players[0].game)

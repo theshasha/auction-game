@@ -46,7 +46,7 @@ class GameSettings:
 
     @classmethod
     def from_dict(cls, data: dict) -> GameSettings:
-        """从 game.yaml 或场次快照加载；缺字段或未知字段由构造函数报 TypeError。"""
+        """从 game.yaml 或场次快照加载；daily_pool 之外的缺字段或未知字段由构造函数报 TypeError。"""
         pool = data.get("daily_pool")
         if not isinstance(pool, list):
             raise ValueError("daily_pool 必须是非空列表，各日奖池必须是正整数")

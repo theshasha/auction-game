@@ -14,13 +14,14 @@ from auction_game.ai import prompts
 
 @pytest.mark.parametrize("enable_predictions", [False, True])
 @pytest.mark.parametrize("enable_personas", [False, True])
-def test_player_passes_prompt_switches_into_native_request(enable_predictions, enable_personas):
+def test_player_passes_prompt_switches_into_native_request(enable_predictions, enable_personas, tmp_path):
     from auction_game.ai.ai_player import AIPlayer
 
     runner = fake_task_runner([bid_reply(1)])
     player = AIPlayer(
         "Alpha", "独特人设标题", "独特人设正文", [("Bravo", 73)], ["Alpha", "Bravo"],
-        runner, game=TEST_GAME, enable_predictions=enable_predictions, enable_personas=enable_personas,
+        runner, game=TEST_GAME, log_path=tmp_path / "a.jsonl", readable_path=tmp_path / "a.md",
+        enable_predictions=enable_predictions, enable_personas=enable_personas,
     )
     assert player.decide_bid(make_ai_obs()) == (1, None)
     system = next(part.content for message in runner.calls[0] for part in message.parts
@@ -36,9 +37,9 @@ def test_player_passes_prompt_switches_into_native_request(enable_predictions, e
 @pytest.mark.parametrize("invalid", [
     bid_reply("2"), "<strategy>missing standalone tags</strategy>", dict(bid_reply(2), extra=1),
 ])
-def test_invalid_output_uses_one_shared_correction(invalid):
+def test_invalid_output_uses_one_shared_correction(invalid, tmp_path):
     runner = fake_task_runner([invalid, bid_reply(2)])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     assert player.decide_bid(make_ai_obs(coins=4)) == (2, None)
     assert len(runner.calls) == 2
     assert any(isinstance(p, RetryPromptPart) for m in runner.calls[-1] for p in m.parts)
@@ -52,22 +53,22 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path):
     with pytest.raises(OutputFailedError):
         player.decide_bid(make_ai_obs(day=2, coins=3))
     assert len(runner.calls) == 2 and player.messages == before
-    entry = task_entries(player.log_path)[-1]
+    entry = task_entries(player.log.path)[-1]
     assert entry["status"] == "failed" and entry["error"]["type"] == "OutputFailedError"
     assert any(part["part_kind"] == "retry-prompt"
                for message in entry["messages"] for part in message["parts"])
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
         text_reply(bid_reply("2")), text_reply(bid_reply(7))]
-    md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    md = player.log.readable_path.read_text(encoding="utf-8")
     assert "纠错 1 次，仍失败" in md and "OutputFailedError" in md
     assert "retry-prompt" not in md
 
 
-def test_custom_game_and_realtime_balance_use_shared_rules():
+def test_custom_game_and_realtime_balance_use_shared_rules(tmp_path):
     game = replace(TEST_GAME, initial_coins=4, max_bid=9, super_cost=3)
     runner = fake_task_runner([bid_reply(5), bid_reply(1, 9), bid_reply(8, 9), bid_reply(7, 9)])
-    player = make_player(runner, game=game)
+    player = make_player(runner, tmp_path, game=game)
     assert player.plan_strategy(prompts.opening_plan_request({}, game), "opening_plan") is None
     assert player.decide_bid(make_ai_obs(coins=4, game=game)) == (1, 9)
     assert player.decide_bid(make_ai_obs(day=2, coins=10, game=game)) == (7, 9)
@@ -89,18 +90,18 @@ def test_business_history_and_original_audit_survive_rollback(tmp_path):
     assert player.messages == middle
     parts = [p for m in player.messages for p in m.parts]
     assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
-    entries = task_entries(player.log_path)
+    entries = task_entries(player.log.path)
     assert entries[0]["result"] == bid_reply(1)
     audit = ModelMessagesTypeAdapter.validate_python(entries[0]["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
     assert "我的私有分析" in ModelMessagesTypeAdapter.dump_json(middle).decode()
-    md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    md = player.log.readable_path.read_text(encoding="utf-8")
     assert md.startswith("# Alpha · 私人对话") and "私有策略" in md
 
 
-def test_program_errors_propagate_without_retry_or_state_change():
+def test_program_errors_propagate_without_retry_or_state_change(tmp_path):
     runner = fake_task_runner([RuntimeError("program defect")])
-    player = make_player(runner)
+    player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(RuntimeError, match="program defect"):
         player.decide_bid(make_ai_obs())
@@ -113,28 +114,28 @@ def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, m
     player = make_player(runner, tmp_path)
     player.plan_strategy("initial plan", "opening_plan")
     before = deepcopy(player.messages), player._pending_day1_bid
-    json_before = player.log_path.read_text(encoding="utf-8")
-    md_before = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    json_before = player.log.path.read_text(encoding="utf-8")
+    md_before = player.log.readable_path.read_text(encoding="utf-8")
     original_open = Path.open
     failure = OSError("audit disk failure")
 
     def open_file(path, mode="r", *args, **kwargs):
-        if path == player.log_path.with_suffix(suffix) and mode == "a":
+        if path == player.log.path.with_suffix(suffix) and mode == "a":
             raise failure
         return original_open(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", open_file)
     with pytest.raises(OSError) as caught:
-        player.plan_strategy("replacement", "next_plan")
+        player.plan_strategy("replacement", "match_1_plan")
     assert caught.value is failure
     assert (player.messages, player._pending_day1_bid) == before
     assert len(runner.calls) == (2 if valid_output else 3)
-    assert player.log_path.with_suffix(".md").read_text(encoding="utf-8") == md_before
-    json_after = player.log_path.read_text(encoding="utf-8")
+    assert player.log.readable_path.read_text(encoding="utf-8") == md_before
+    json_after = player.log.path.read_text(encoding="utf-8")
     if suffix == ".jsonl":
         assert json_after == json_before
     else:
         # 两个文件分别追加，Markdown 写入失败时 JSONL 里已有这条记录。
-        entries = task_entries(player.log_path)
+        entries = task_entries(player.log.path)
         assert len(entries) == 2
         assert entries[-1]["status"] == ("success" if valid_output else "failed")

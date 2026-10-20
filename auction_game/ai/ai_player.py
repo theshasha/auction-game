@@ -47,8 +47,8 @@ class AIPlayer(Player):
 
     def __init__(self, name: str, persona_title: str, persona_text: str,
                  predictions: list[tuple[str, int]], all_names: list[str],
-                 task_runner: TaskRunner, log_path: Path | None = None, *, game: GameSettings,
-                 readable_path: Path | None = None,
+                 task_runner: TaskRunner, log_path: Path, *, game: GameSettings,
+                 readable_path: Path,
                  enable_predictions: bool = True, enable_personas: bool = True):
         super().__init__(name)
         self.game = game
@@ -59,7 +59,6 @@ class AIPlayer(Player):
         self.review_messages = list(self.messages)
         self.memory = ""
         self.task_runner = task_runner
-        self.log_path = log_path
         self.log = AgentLog(name, log_path, readable_path=readable_path)
         self.log.system_prompt(system_prompt)
         self._pending_day1_bid: tuple[int, int | None] | None = None
@@ -110,7 +109,7 @@ class AIPlayer(Player):
         return output["bid"], output["super_bid"]
 
     def give_speech(self, user_text: str, phase: str, context: str = "") -> str:
-        """只返回公开字段，私有策略仅保留在自身规范消息及日志。"""
+        """只返回公开发言，私有策略只留在自己的对话历史和日志里。"""
         return self._task("speech", user_text, phase, context)["speech"]
 
     def plan_strategy(self, user_text: str, phase: str, context: str = "") -> None:

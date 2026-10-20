@@ -94,7 +94,13 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
              my_last_super_bid=None, my_last_super_hit=False,
              all_coins=None,
              past_match_logs=None, game=TEST_GAME, *, match_score=0, total_score=0):
-    """全字段 Observation 工厂。past_match_logs 默认空（即当前为第 1 局）。"""
+    """全字段 Observation 工厂。past_match_logs 默认空（即当前为第 1 局）。
+
+    和引擎一样总给全员排名；有昨日结果时默认给全员余额。
+    """
+    names = [my_name, *(name for name in NAMES if name != my_name)]
+    if all_coins is None and today_history:
+        all_coins = {name: coins for name in names}
     return Observation(
         my_name=my_name,
         my_coins=coins,
@@ -105,7 +111,8 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
         day=day,
         today_pool=pool,
         today_history=today_history or [],
-        standings=[],
+        standings=make_standings({name: [total_auction_score if name == my_name else 0] for name in names},
+                                 scores_history={name: [total_score if name == my_name else 0] for name in names}),
         past_match_logs=past_match_logs or [],
         game=game,
         my_last_bid=my_last_bid,
@@ -221,11 +228,10 @@ def text_reply(data):
             f"{json.dumps(decision, ensure_ascii=False)}\n</decision>")
 
 
-def make_player(task_runner, tmp_path=None, game=TEST_GAME):
-    log_path = (tmp_path / "ai_Alpha.jsonl") if tmp_path else None
+def make_player(task_runner, tmp_path, game=TEST_GAME):
     return AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
-                    task_runner, game=game, log_path=log_path,
-                    readable_path=log_path.with_suffix(".md") if log_path else None)
+                    task_runner, game=game, log_path=tmp_path / "ai_Alpha.jsonl",
+                    readable_path=tmp_path / "ai_Alpha.md")
 
 
 def task_entries(path):

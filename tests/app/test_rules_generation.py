@@ -70,7 +70,7 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     )
     generated = document_path.read_bytes()
     body = rules.render_rules(
-        configuration.load_game_settings(game_path), rules._identity_names(), include_note=False,
+        configuration.load_game_settings(game_path), ["隔离甲", "隔离乙", "隔离丙"], include_note=False,
     )
     assert document_path.read_text(encoding="utf-8") == rules.GENERATED_NOTE + body
     assert "<!--" not in body
@@ -111,7 +111,7 @@ def test_all_starts_sync_rules_before_logs_or_models(entry, args, module, bounda
     document.write_text("旧规则", encoding="utf-8")
     names = ["配置甲", "配置乙"]
     monkeypatch.setattr(rules, "RULES_PATH", document)
-    monkeypatch.setattr(rules, "_identity_names", lambda: names)
+    monkeypatch.setattr(rules, "load_players", lambda **kwargs: [{"name": name} for name in names])
     monkeypatch.setattr(module, "load_game_settings", lambda: TEST_GAME)
 
     class StartStopped(Exception):

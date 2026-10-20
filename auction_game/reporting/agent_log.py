@@ -14,9 +14,7 @@ from auction_game.ai.agent_tasks import render_task_result
 
 
 def _inputs(entry: dict) -> list[str]:
-    return [part["content"] if isinstance(part["content"], str)
-            else json.dumps(part["content"], ensure_ascii=False)
-            for message in entry["messages"] for part in message["parts"]
+    return [part["content"] for message in entry["messages"] for part in message["parts"]
             if part["part_kind"] in ("system-prompt", "user-prompt")]
 
 
@@ -31,8 +29,7 @@ def _phase_title(entry: dict) -> str:
             return f"第{index}局累计私有记忆"
         return f"第{index}局局末发言" if task == "speech" else f"第{int(index) + 1}局策略规划（含首日出价）"
     return {"opening_speech": "开局发言", "opening_plan": "第1局策略规划（含首日出价）",
-            "final_speech": "最终感言", "final_summary": "观众总结（仅供观众）"}.get(
-                phase, entry.get("context") or "模型任务")
+            "final_speech": "最终感言", "final_summary": "观众总结（仅供观众）"}[phase]
 
 
 def _error_reason(entry: dict) -> str:
@@ -49,8 +46,8 @@ def _error_reason(entry: dict) -> str:
         return f"{reason}（HTTP {code}）"
     if "Timeout" in kind or "Timeout" in message:
         return "请求超时"
-    if kind == "IncompleteStream" or "IncompleteStream" in message:
-        return "响应截断或缺少成功结束标记"
+    if kind == "IncompleteStream":
+        return html.escape(f"响应未正常结束（{message}）")
     if "Connection" in kind or "Network" in kind:
         return "网络连接失败"
     return html.escape(f"{kind}：{' '.join(message.split())[:160]}")
@@ -64,14 +61,14 @@ def _correction_reason(entry: dict) -> str:
     return html.escape(reason[:100] + ("…" if len(reason) > 100 else ""))
 
 
-def render_markdown_entry(entry: dict, title: str | None = None,
+def render_markdown_entry(entry: dict, title: str,
                           first_title: str | None = None, previous_title: str | None = None) -> str:
     """正文只展示输入和最终结果；原始回复及完整错误保存在 JSON 记录中。
 
     标题只含中文和数字，链接锚点在各 Markdown 阅读器里一致。
     """
     success = entry["status"] == "success"
-    lines = [f"## {title or _phase_title(entry)}"]
+    lines = [f"## {title}"]
     if entry.get("reruns", 0):
         lines.append("补跑后成功。" if success else "补跑仍失败。")
     if first_title:
@@ -97,7 +94,7 @@ def render_markdown_entry(entry: dict, title: str | None = None,
 class AgentLog:
     """同步写 JSONL 后写 Markdown；写入异常向上传递。"""
 
-    def __init__(self, name: str, path: Path | None, *, readable_path=None):
+    def __init__(self, name: str, path: Path, *, readable_path: Path):
         self.name = name
         self.path = path
         self.readable_path = readable_path
@@ -123,8 +120,6 @@ class AgentLog:
                      "error": {"type": type(error).__name__, "message": str(error)}})
 
     def _write(self, entry: dict) -> None:
-        if self.path is None:
-            return
         self._task_number += 1
         entry = {"task_id": f"task-{self._task_number:04d}", **entry}
         # 只关联相同输入的连续失败；成功后结束关联。
@@ -146,13 +141,9 @@ class AgentLog:
             self._failed_tasks.pop(key, None)
 
     def _append(self, record: dict, markdown: str) -> None:
-        if self.path is None:
-            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
-        if self.readable_path is None:
-            return
         self.readable_path.parent.mkdir(parents=True, exist_ok=True)
         is_new = not self.readable_path.exists()
         with self.readable_path.open("a", encoding="utf-8") as file:

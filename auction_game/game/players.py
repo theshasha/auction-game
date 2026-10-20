@@ -23,7 +23,7 @@ class Player(ABC):
 
 
 class RandomBot(Player):
-    """正常出价在 0 到 min(出价上限, 余额) 间均匀随机；余额够付超级成本时，
+    """正常出价在 0 到 min(出价上限, 余额) 间均匀随机；正常出价加超级成本不超过余额时，
     按 super_chance 随机提交一笔超级出价，抽到与正常出价同值就放弃。"""
 
     def __init__(

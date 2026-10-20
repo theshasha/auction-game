@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
 from auction_game.game.engine import calculate_day_scores
 from auction_game.game.game_rules import GameSettings
@@ -90,10 +89,8 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) ->
     )
 
 
-def _my_last_day_line(obs: Observation) -> Optional[str]:
+def _my_last_day_line(obs: Observation) -> str:
     """只解释本人金币结算；报价与得分由公开明细提供。"""
-    if obs.my_last_bid is None:
-        return None
     yesterday = obs.today_history[-1]
     is_void = yesterday["winner"] == "流局"
     won = yesterday["winner"] == obs.my_name
@@ -118,18 +115,15 @@ def _my_last_day_line(obs: Observation) -> Optional[str]:
 
 
 def _yesterday_bids_table(obs: Observation, super_hit_by_player: dict[str, bool]) -> str:
-    """昨日报价与当前余额按玩家对齐；未提供全场余额时省略金币列。"""
-    headers = ["玩家", "正常出价", "超级出价", "命中情况"]
-    if obs.all_coins is not None:
-        headers.append("当前金币")
+    """昨日报价与当前余额按玩家对齐。"""
+    headers = ["玩家", "正常出价", "超级出价", "命中情况", "当前金币"]
     lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
     for detail in obs.today_history[-1]["bids_detail"]:
         name = detail["player"]
         super_bid = detail["super_bid"]
         hit = "—" if super_bid is None else ("命中" if super_hit_by_player.get(name, False) else "落空")
-        cells = [name, str(detail["bid"]), "—" if super_bid is None else str(super_bid), hit]
-        if obs.all_coins is not None:
-            cells.append(str(obs.all_coins[name]))
+        cells = [name, str(detail["bid"]), "—" if super_bid is None else str(super_bid), hit,
+                 str(obs.all_coins[name])]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -149,11 +143,7 @@ def bid_request(obs: Observation) -> str:
     )
     if obs.day == obs.game.max_days:
         status_line += "\n\n本局最后一天，结束后金币清零。"
-    status_line += "\n\n" + (
-        _total_scores_line(obs.standings)
-        if obs.standings
-        else f"你的累计总分：{obs.my_total_score} 分。"
-    )
+    status_line += "\n\n" + _total_scores_line(obs.standings)
     status_line += _remaining_scores_info(obs.game, match_index, obs.day, obs.today_pool)
     if not obs.today_history:
         return f"当前是第 {match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{BID_HINT}"
@@ -175,18 +165,13 @@ def bid_request(obs: Observation) -> str:
         if hit
     )
     hit_announcement = f"昨日命中得分：{hit_scores}。" if hit_scores else "昨日无人命中。"
-    table_title = "昨日出价明细："
-    if obs.all_coins is not None:
-        table_title = "昨日出价明细与当前金币（已含今日工资）："
     lines = [
         f"当前是第 {match_index} 局第 {obs.day} 天。", "",
-        announcement, "", hit_announcement, "", table_title, "",
+        announcement, "", hit_announcement, "", "昨日出价明细与当前金币（已含今日工资）：", "",
         _yesterday_bids_table(obs, super_hit_by_player), "",
+        _my_last_day_line(obs), "",
+        status_line,
     ]
-    my_last_line = _my_last_day_line(obs)
-    if my_last_line is not None:
-        lines.extend([my_last_line, ""])
-    lines.append(status_line)
     return "\n".join(lines) + "\n\n" + BID_HINT
 
 
@@ -196,8 +181,6 @@ def render_match_log(log: MatchLog) -> str:
         "本局得分：" + "、".join(f"{name} {score} 分" for name, score in log.scores.items()),
         "本局拍卖分：" + "、".join(f"{name} {score} 分" for name, score in log.auction_scores.items()),
     ]
-    if not log.days:
-        return "\n".join(["  （本局未进行任何拍卖）", "", *summary])
     player_names = [record.player for record in log.days[0].bids if not record.is_super]
     header = "| 天 | 奖池 | " + " | ".join(player_names) + " | 结果 | 撞车价位 | 当日得分 |"
     separator = "|" + " --- |" * (len(player_names) + 5)

@@ -1,4 +1,4 @@
-"""由离线能力快照得出每个模型的输出预算和推理设置；来源缺少最大输出时用 DEFAULT_MAX_TOKENS。"""
+"""由离线能力快照得出每个模型的输出预算和推理设置；取不到来源的最大输出时用 DEFAULT_MAX_TOKENS。"""
 
 from __future__ import annotations
 

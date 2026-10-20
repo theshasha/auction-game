@@ -18,11 +18,11 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     prompt = '\n输入 <details> & </pre> "引号"\n```json\n{"x": 1}\n```\n' + "长行" * 500 + '\n最后一行\n'
     player = make_player(fake_task_runner([{"strategy": strategy, "speech": speech}]), tmp_path)
     assert player.give_speech(prompt, "opening_speech") == speech
-    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "## 开局发言" in markdown
     assert "### 输入原文\n\n" + prompt + "\n\n" + output_requirement("speech") in markdown
     assert markdown.count(strategy) == markdown.count(speech) == 1
-    entry = task_entries(player.log_path)[-1]
+    entry = task_entries(player.log.path)[-1]
     assert entry["result"] == {"strategy": strategy, "speech": speech}
     response = [part for msg in entry["messages"] if msg["kind"] == "response" for part in msg["parts"]]
     assert len(response) == 1 and response[0]["part_kind"] == "text"
@@ -34,9 +34,9 @@ def test_system_prompt_is_logged_once_before_tasks(tmp_path):
     player = make_player(fake_task_runner([bid_reply(1)]), tmp_path)
     player.decide_bid(make_ai_obs())
     system = player.messages[0].parts[0].content
-    first = json.loads(player.log_path.read_text(encoding="utf-8").splitlines()[0])
+    first = json.loads(player.log.path.read_text(encoding="utf-8").splitlines()[0])
     assert first == {"task": "system", "content": system}
-    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert markdown.startswith(f"# Alpha · 私人对话（含私有策略）\n\n## 系统提示\n\n{system}\n\n---")
     assert markdown.count("【你的身份】") == 1
 
@@ -45,9 +45,9 @@ def test_system_prompt_is_logged_once_before_tasks(tmp_path):
 def test_plan_has_one_human_submission_and_cached_day_one_writes_nothing(tmp_path, super_bid, label):
     player = make_player(fake_task_runner([bid_reply(1, super_bid, strategy="策略原文")]), tmp_path)
     player.plan_strategy("规划输入", "opening_plan")
-    before = player.log_path.with_suffix(".md").read_bytes(), player.log_path.read_bytes()
+    before = player.log.readable_path.read_bytes(), player.log.path.read_bytes()
     assert player.decide_bid(make_ai_obs()) == (1, super_bid)
-    assert (player.log_path.with_suffix(".md").read_bytes(), player.log_path.read_bytes()) == before
+    assert (player.log.readable_path.read_bytes(), player.log.path.read_bytes()) == before
     markdown = before[0].decode()
     assert "## 第1局策略规划含首日出价" in markdown
     assert markdown.count("策略原文") == 1
@@ -58,7 +58,7 @@ def test_plan_has_one_human_submission_and_cached_day_one_writes_nothing(tmp_pat
 def test_failures_and_recovery_append_links_to_first_input(tmp_path):
     h = Harness("chat", [401, 401, reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    md_path = player.log_path.with_suffix(".md")
+    md_path = player.log.readable_path
     prefixes = []
     for _ in range(2):
         with pytest.raises(CallFailedError):
@@ -72,7 +72,7 @@ def test_failures_and_recovery_append_links_to_first_input(tmp_path):
     assert markdown.count("鉴权失败（HTTP 401）") == 2
     assert markdown.count("首次输入](#第1局第2天每日出价)") == 2
     assert "上次记录](#第1局第2天每日出价补跑1)" in markdown
-    entries = task_entries(player.log_path)
+    entries = task_entries(player.log.path)
     assert [entry["status"] for entry in entries] == ["failed", "failed", "success"]
     assert [entry["reruns"] for entry in entries] == [0, 1, 2]
     assert [entry["first_task"] for entry in entries] == [None, "task-0001", "task-0001"]
@@ -86,11 +86,11 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
                                bid_reply(2, strategy="最终策略原文")])
     player = make_player(runner, tmp_path)
     player.decide_bid(make_ai_obs(day=2))
-    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "首次无效策略" not in markdown
     assert markdown.count("最终策略原文") == 1
     assert "纠错 1 次，已通过（bid 必须是不加引号的整数" in markdown
-    audit = player.log_path.read_text(encoding="utf-8")
+    audit = player.log.path.read_text(encoding="utf-8")
     assert "首次无效策略" in audit and "最终策略原文" in audit and "retry-prompt" in audit
 
 
@@ -111,7 +111,7 @@ def test_correction_reason_is_truncated_first_line(content, reason, success):
     if not success:
         entry["error"] = {"type": "OutputFailedError", "message": "budget exhausted"}
     before = deepcopy(entry)
-    markdown = render_markdown_entry(entry)
+    markdown = render_markdown_entry(entry, "第1局第2天每日出价")
     assert f"纠错 1 次，{'已通过' if success else '仍失败'}（{reason}）。" in markdown
     assert "策略正文" not in markdown
     assert entry == before
@@ -121,10 +121,10 @@ def test_text_format_correction_uses_actual_sdk_retry_prompt(tmp_path):
     invalid = "<strategy>\n首次私有策略\n</strategy>"
     player = make_player(fake_task_runner([invalid, bid_reply(2, strategy="最终私有策略")]), tmp_path)
     assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
-    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "纠错 1 次，已通过" in markdown
     assert "首次私有策略" not in markdown and "最终私有策略" in markdown
-    entry = task_entries(player.log_path)[-1]
+    entry = task_entries(player.log.path)[-1]
     retry = next(part for message in entry["messages"] for part in message["parts"]
                  if part["part_kind"] == "retry-prompt")
     assert "<decision>" in retry["content"]
@@ -133,14 +133,14 @@ def test_text_format_correction_uses_actual_sdk_retry_prompt(tmp_path):
 
 @pytest.mark.parametrize("phase,title", [
     ("match_2_speech", "第2局局末发言"),
-    ("match_2_plan", "第3局策略规划（含首日出价）"),
-    ("final_speech", "最终感言"), ("final_summary", "观众总结（仅供观众）"),
-    ("bid", "第3局第2天 · 每日出价"),
+    ("match_2_plan", "第3局策略规划含首日出价"),
+    ("final_speech", "最终感言"), ("final_summary", "观众总结仅供观众"),
+    ("bid", "第3局第2天每日出价"),
 ])
-def test_phase_titles(phase, title):
-    entry = {"task_id": "task-0001", "phase": phase, "context": "第3局第2天", "task": "bid",
-             "status": "success", "messages": [], "request_errors": [], "result": "原文"}
-    assert f"## {title}" in render_markdown_entry(entry)
+def test_phase_titles(phase, title, tmp_path):
+    log = AgentLog("Alpha", tmp_path / "player.jsonl", readable_path=tmp_path / "player.md")
+    log.success({"phase": phase, "task": "bid", "context": "第3局第2天"}, ExecutionResult("原文", [], []))
+    assert f"\n## {title}\n" in log.readable_path.read_text(encoding="utf-8")
 
 
 def test_unknown_failure_is_short_and_audit_stays_complete(tmp_path):
@@ -169,4 +169,4 @@ def test_input_markdown_preserves_indentation():
     content = '  原文\n\n\t& "x"'
     entry = {"phase": "bid", "status": "success", "messages": [
         {"parts": [{"part_kind": "user-prompt", "content": content}]}]}
-    assert "### 输入原文\n\n" + content in render_markdown_entry(entry)
+    assert "### 输入原文\n\n" + content in render_markdown_entry(entry, "第1局第1天每日出价")

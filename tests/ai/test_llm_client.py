@@ -24,9 +24,9 @@ def test_status_retry_classification(status, expected):
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("status,retryable", [(401, False), (503, True)])
-def test_sdk_status_retry_and_client_close(protocol, status, retryable):
+def test_sdk_status_retry_and_client_close(protocol, status, retryable, tmp_path):
     h = Harness(protocol, [status, reply()])
-    player = make_player(TaskRunner(h.factory))
+    player = make_player(TaskRunner(h.factory), tmp_path)
     if retryable:
         assert player.decide_bid(make_ai_obs()) == (2, None)
     else:
@@ -49,7 +49,7 @@ def test_failed_flow_keeps_history_and_audits_no_partial_reply(protocol, fault, 
         player.decide_bid(make_ai_obs())
     assert player.messages == before and player._pending_day1_bid is None
     assert len(h.requests) == (2 if fault in ("connect", "stream") else 1)
-    entry = task_entries(player.log_path)[-1]
+    entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert not any(isinstance(p, TextPart) for m in audit for p in m.parts)
     assert entry["request_errors"] and h.closes == 1
@@ -76,11 +76,11 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     assert len(h.requests) == 4 and h.closes == 1
     assert h.requests[0][1] == h.requests[1][1] and h.requests[2][1] == h.requests[3][1]
     assert h.requests[0][1] != h.requests[2][1]
-    entry = task_entries(player.log_path)[-1]
+    entry = task_entries(player.log.path)[-1]
     if succeeds:
         assert sum(p["part_kind"] == "text" for m in entry["messages"] for p in m["parts"]) == 2
     assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(1, 1), (2, 1)]
-    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert f"纠错 1 次，{'已通过' if succeeds else '仍失败'}" in markdown
     assert all(s.closed for s in h.streams)
 
@@ -96,7 +96,7 @@ def test_success_then_failure_in_new_loop_keeps_previous_state_and_closes(protoc
     assert (player.messages, player._pending_day1_bid) == before
     assert h.closes == 2 and h.loops[0] is h.loops[1] and h.loops[0] is not h.loops[2]
     assert all(loop.is_closed() for loop in h.loops)
-    entries = task_entries(player.log_path)
+    entries = task_entries(player.log.path)
     assert [[(e["request"], e["attempt"]) for e in entry["request_errors"]] for entry in entries] == [
         [(1, 1)], [(1, 1)]]
 
@@ -123,12 +123,12 @@ def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol,
     player = make_player(TaskRunner(h.factory), tmp_path)
     with pytest.raises(CallFailedError):
         player.decide_bid(make_ai_obs())
-    entry = task_entries(player.log_path)[-1]
+    entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
         text_reply(dict(GOOD, bid="2"))]
     assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(2, 1), (2, 2)]
-    markdown = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "纠错 1 次，仍失败" in markdown
     assert len(h.requests) == 3 and len(player.messages) == 1 and h.closes == 1
 
@@ -182,10 +182,10 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
     assert [p.content for p in parts if isinstance(p, TextPart)] == outputs
     encoded = ModelMessagesTypeAdapter.dump_json(before)
     assert ModelMessagesTypeAdapter.dump_json(ModelMessagesTypeAdapter.validate_json(encoded)) == encoded
-    entries = task_entries(player.log_path)
+    entries = task_entries(player.log.path)
     assert [e["task"] for e in entries] == ["plan", "bid", "speech", "plan", "summary"]
     assert entries[-1]["result"] == long_summary
-    assert long_summary in player.log_path.with_suffix(".md").read_text(encoding="utf-8")
+    assert long_summary in player.log.readable_path.read_text(encoding="utf-8")
     assert all(s.closed for s in h.streams)
 
 
