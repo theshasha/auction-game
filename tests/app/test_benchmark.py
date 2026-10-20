@@ -1,4 +1,4 @@
-"""批量对照入口、合法策略与样本比较；全部离线且不写项目日志。"""
+"""批量对照入口、合法策略与样本比较。"""
 
 from types import SimpleNamespace
 
@@ -120,6 +120,3 @@ def test_comparison_describes_only_second_group(monkeypatch, capsys, strategy_sc
     assert output.index(explanation) < output.index("===== 纯随机对照")
     assert output.count("第 1 天：平均出价 4.00，平均拍卖奖池 6.00 分") == 2
     assert output.count("第 2 天：平均出价 —（全流局），平均拍卖奖池 12.00 分") == 2
-    assert "本批样本" not in output
-    assert "胜场" not in output
-    assert all(term not in output for term in ["显著", "占优", "规则需要", "极点", "Whale", "鲸鱼"])

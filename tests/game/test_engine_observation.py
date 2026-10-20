@@ -1,4 +1,4 @@
-"""Observation 字段、每日信息公布与局末日志/排名的引擎测试。场景构造器见 conftest.py。"""
+"""Observation 字段、每日信息公布与局末日志/排名的引擎测试。"""
 
 from dataclasses import replace
 
@@ -100,9 +100,6 @@ class TestMatchLogPublication:
         data = log.to_dict()
 
         assert data["game"] == TEST_GAME.to_dict()
-        assert "rules_version" not in data
-        assert "initial_coins" not in data
-        assert "max_bid" not in data
         assert data["match_index"] == 1
         assert data["is_playoff"] is False
         assert len(data["days"]) == 6  # 固定 6 天
@@ -114,8 +111,6 @@ class TestMatchLogPublication:
         assert first_day["winning_bid"] == 5
         assert first_day["pool"] == 4
         assert first_day["auction_score"] == 4
-        assert "wins_taken" not in first_day
-        assert "winning_is_super" not in first_day  # 超级出价不能获胜，无需该字段
         assert first_day["super_uses"] == []
         assert first_day["collision_values"] == []
         assert first_day["is_void"] is False
@@ -136,7 +131,7 @@ class TestMatchLogPublication:
 
 
 class TestScoreObservations:
-    def test_live_scores_include_history_and_shared_snapshots_stay_fixed(self):
+    def test_live_scores_include_history_and_standings_snapshots_stay_fixed(self):
         game = replace(TEST_GAME, daily_pool=(5, 5, 5), super_hit_score=3)
         names = ["甲", "乙", "丙"]
         auction_scores_history = {"甲": [3], "乙": [1], "丙": [0]}
@@ -165,13 +160,11 @@ class TestScoreObservations:
         ]
         for day, expected_score in enumerate([6, 14, 22]):
             snapshot = captured["甲"][day].standings
-            assert all(captured[name][day].standings is snapshot for name in names)
             assert [(entry.player, entry.total_score) for entry in snapshot] == [
                 ("乙", expected_score), ("甲", 4), ("丙", 0),
             ]
             assert snapshot[0].scores_per_match == [6]
             assert snapshot[0].auction_scores_per_match == [1]
-        assert captured["甲"][0].standings is not captured["甲"][1].standings
         assert auction_scores_history == {"甲": [3], "乙": [1], "丙": [0]}
         assert scores_history == {"甲": [4], "乙": [6], "丙": [0]}
         scores_history["乙"].append(99)

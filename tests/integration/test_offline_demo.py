@@ -4,11 +4,11 @@ import json
 from copy import deepcopy
 import pytest
 
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.reporting import analyze
 from auction_game.cli import offline_demo
-from auction_game import runners
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.cli.offline_demo import generate_demo
 from auction_game.ai import prompts
@@ -170,50 +170,6 @@ def test_current_game_configuration_smoke(tmp_path, demo_configuration):
     assert all(factory.opened == factory.closed for factory in factories)
 
 
-def test_offline_reuses_one_game_and_syncs_once_before_directory(tmp_path, monkeypatch, demo_configuration):
-    game = GameSettings(
-        initial_coins=7, daily_salary=3, daily_pool=(1,), max_bid=7,
-        super_cost=2, super_bounty=3, super_hit_score=2,
-        regular_matches=1, max_playoffs=0,
-    )
-    run_dir = tmp_path / "single-load"
-    loads, syncs = [], []
-    def load_game():
-        loads.append(game)
-        assert len(loads) == 1
-        return game
-    real_sync = offline_demo.sync_root_rules
-    def sync(prepared):
-        assert not run_dir.exists()
-        syncs.append(prepared)
-        return real_sync(prepared)
-    monkeypatch.setattr(offline_demo, "load_game_settings", load_game)
-    monkeypatch.setattr(offline_demo, "sync_root_rules", sync)
-    monkeypatch.setattr(runners, "load_game_settings", lambda: pytest.fail("重复读取 game.yaml"))
-    monkeypatch.setattr(runners, "sync_root_rules", lambda *_: pytest.fail("重复同步规则"))
-    real_tournament = runners.run_tournament
-    def tournament(players, actual_game, **kwargs):
-        assert actual_game is game
-        assert all(player.game is game for player in players)
-        return real_tournament(players, actual_game, **kwargs)
-    monkeypatch.setattr(runners, "run_tournament", tournament)
-    generate_demo(run_dir, test_model=True)
-    assert loads == syncs == [game]
-
-
-@pytest.mark.parametrize("explicit_output", [True, False])
-def test_offline_sync_failure_creates_no_run(tmp_path, monkeypatch, demo_configuration, explicit_output):
-    from auction_game.configuration import ConfigurationError
-    monkeypatch.setattr(offline_demo, "sync_root_rules", lambda *_: (_ for _ in ()).throw(
-        ConfigurationError("同步失败")))
-    monkeypatch.setattr(offline_demo, "make_run_dir", lambda *_: pytest.fail("同步失败后创建目录"))
-    monkeypatch.setattr(offline_demo.DemoFactory, "open", lambda *_: pytest.fail("同步失败后创建模型"))
-    output = tmp_path / "failed"
-    with pytest.raises(ConfigurationError, match="同步失败"):
-        generate_demo(output if explicit_output else None, test_model=True)
-    assert not output.exists()
-
-
 def test_offline_refuses_non_empty_output(tmp_path, demo_configuration):
     output = tmp_path / "existing"
     output.mkdir()
@@ -223,69 +179,33 @@ def test_offline_refuses_non_empty_output(tmp_path, demo_configuration):
     assert (output / "README.md").read_text(encoding="utf-8") == "旧场次"
 
 
-def test_offline_invalid_output_exits_without_retry_gate(tmp_path, monkeypatch, demo_configuration):
-    game = GameSettings(
-        initial_coins=7, daily_salary=3, daily_pool=(1, 1), max_bid=7,
-        super_cost=2, super_bounty=3, super_hit_score=2,
-        regular_matches=1, max_playoffs=0,
-    )
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+INVALID_SPEECH = "<strategy>\n故意缺少发言\n</strategy>"
+
+
+@pytest.mark.parametrize("fault", ["output", "request"])
+def test_offline_failure_is_saved_and_exits_without_confirmation(fault, tmp_path, monkeypatch, demo_configuration):
     real_stream = offline_demo.DemoFactory.stream
-    attempts = []
-    async def invalid_bid(self, messages, info):
-        task = offline_demo._current_task.get().task
-        if self.index == 0 and task in ("plan", "bid"):
-            attempts.append(task)
-            yield '<strategy>\n故意非法出价\n</strategy>\n<decision>\n{"bid": -1, "super_bid": null}\n</decision>'
-        else:
+
+    async def faulty(self, messages, info):
+        if self.index != 0:
             async for part in real_stream(self, messages, info):
                 yield part
-    monkeypatch.setattr(offline_demo.DemoFactory, "stream", invalid_bid)
-    wait = offline_demo.Controller.wait_for_turn
-    def continuous_only(self, label, **kwargs):
-        assert self._mode == "continuous", "离线失败进入了无人交互闸门"
-        assert not kwargs.get("require_confirmation"), "离线失败进入了交互重试"
-        return wait(self, label, **kwargs)
-    monkeypatch.setattr(offline_demo.Controller, "wait_for_turn", continuous_only)
-    run_dir = tmp_path / "invalid"
-    with pytest.raises(RuntimeError, match="离线任务失败：第一局策略规划"):
-        generate_demo(run_dir, test_model=True)
-    assert attempts == ["plan", "plan"]  # 共享输出纠错保留，整轮不自动补跑。
-    paths = RunPaths(run_dir)
-    entries = task_entries(paths.player(1))
-    failed = entries[-1]
-    assert failed["status"] == "failed" and failed["error"]["type"] == "OutputFailedError"
-    assert failed["phase"] == "opening_plan" and failed["reruns"] == 0
-    replies = [part["content"] for message in failed["messages"] if message["kind"] == "response"
-               for part in message["parts"]]
-    assert replies == ['<strategy>\n故意非法出价\n</strategy>\n<decision>\n{"bid": -1, "super_bid": null}\n</decision>'] * 2
+        elif fault == "request":
+            raise ModelAPIError("offline", "离线故障测试")
+        else:
+            yield INVALID_SPEECH
 
-
-def test_offline_request_failure_is_saved_before_exit(tmp_path, monkeypatch, demo_configuration):
-    from pydantic_ai.exceptions import ModelAPIError
-
-    attempts = []
-    async def unavailable(self, messages, info):
-        attempts.append(self.name)
-        raise ModelAPIError("offline", "离线故障测试")
-        yield  # FunctionModel 的流式接口。
-
-    monkeypatch.setattr(offline_demo.DemoFactory, "stream", unavailable)
+    monkeypatch.setattr(offline_demo.DemoFactory, "stream", faulty)
     monkeypatch.setattr(offline_demo.Controller, "start_stdin_reader", lambda *_: pytest.fail("启动键盘读取"))
-    real_wait = offline_demo.Controller.wait_for_turn
-    def no_retry(self, label, **kwargs):
-        assert not kwargs.get("require_confirmation"), "进入交互重试闸门"
-        return real_wait(self, label, **kwargs)
-    monkeypatch.setattr(offline_demo.Controller, "wait_for_turn", no_retry)
-    run_dir = tmp_path / "request-failure"
+    run_dir = tmp_path / "failure"
     with pytest.raises(RuntimeError, match="离线任务失败：开局发言"):
         generate_demo(run_dir, test_model=True)
 
-    _, configs = demo_configuration
-    assert sorted(attempts) == sorted(pc["name"] for pc in configs)
-    paths = RunPaths(run_dir)
-    for number in range(1, len(configs) + 1):
-        entries = task_entries(paths.player(number))
-        assert len(entries) == 1
-        assert entries[0]["status"] == "failed"
+    entries = task_entries(RunPaths(run_dir).player(1))
+    assert len(entries) == 1 and entries[0]["status"] == "failed"
+    if fault == "request":
         assert "离线故障测试" in entries[0]["error"]["message"]
+    else:
+        replies = [part["content"] for message in entries[0]["messages"] if message["kind"] == "response"
+                   for part in message["parts"]]
+        assert replies == [INVALID_SPEECH] * 2

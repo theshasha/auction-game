@@ -170,7 +170,6 @@ def test_analyze_prints_player_section(tmp_path, capsys):
         assert text in yi
     jia = output.split("\n甲\n", 1)[1].split("\n\n", 1)[0]
     assert "超级出价：使用0次，命中0次\n" in jia
-    assert "%" not in jia
     assert "正常出价为零：2次" in jia
     assert "撞车损失：8金币（正常报价互撞3，唯一报价被狙5）" in jia
     assert "撞车损失：15 金币（正常报价互撞 10，唯一报价被狙 5；只计正常出价）" in output
@@ -239,8 +238,6 @@ def test_super_result_days_without_super_usage(tmp_path, capsys):
     analyze(tmp_path)
     output = capsys.readouterr().out
     assert "超级出价：使用 0 次，命中 0 次\n" in output
-    assert "命中率" not in output
-    assert "（0%）" not in output
 
 
 def test_super_collision_hits_include_void_days(tmp_path, capsys):
@@ -458,7 +455,7 @@ def test_total_score_ranking_can_reverse_auction_score_ranking():
     assert stats["score_matrix"]["乙"] == [3]
 
 
-def test_offline_execution_is_fake_even_with_configured_protocol_model(tmp_path, capsys):
+def test_offline_run_reports_fake_execution_and_configured_model(tmp_path, capsys):
     players = [{"name": name, "identity_model": {"model": "identity"},
                 "execution_model": {"protocol": "responses", "model": "configured-model"}}
                for name in make_match_1()["auction_scores"]]

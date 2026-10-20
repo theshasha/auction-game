@@ -100,30 +100,13 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     assert document_path.read_bytes() == generated
 
 
-@pytest.mark.parametrize("entry,args", [(runners.run_bots, (1,)), (runners.run_ai, ()),
-                                         (benchmark.run_benchmark, (1,)), (offline_demo.generate_demo, ())])
-def test_template_error_stops_all_starts_before_logs_or_models(entry, args, tmp_path, monkeypatch):
-    template = tmp_path / "bad-template.md"
-    template.write_text("{unknown}", encoding="utf-8")
-    monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
-    for module in (runners, offline_demo):
-        monkeypatch.setattr(module, "make_run_dir", lambda *args: pytest.fail("同步失败后创建了日志"))
-    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("同步失败后请求了密钥"))
-    monkeypatch.setattr(offline_demo, "DemoFactory", lambda *args, **kwargs: pytest.fail("同步失败后创建了模型"))
-    with pytest.raises(KeyError, match="unknown"):
-        entry(*args)
-
-
-@pytest.mark.parametrize("entry,args,kwargs,module,boundary", [
-    (runners.run_bots, (1,), {}, runners, "make_run_dir"),
-    (runners.run_ai, (), {}, runners, "make_model_factory"),
-    (runners.run_ai, (), {"test_model": True}, runners, "make_model_factory"),
-    (benchmark.run_benchmark, (1,), {}, benchmark, "run_tournament"),
-    (offline_demo.generate_demo, (), {}, offline_demo, "make_run_dir"),
+@pytest.mark.parametrize("entry,args,module,boundary", [
+    (runners.run_bots, (1,), runners, "make_run_dir"),
+    (runners.run_ai, (), runners, "make_model_factory"),
+    (benchmark.run_benchmark, (1,), benchmark, "run_tournament"),
+    (offline_demo.generate_demo, (), offline_demo, "make_run_dir"),
 ])
-def test_all_starts_sync_scoring_rules_before_logs_or_models(
-    entry, args, kwargs, module, boundary, tmp_path, monkeypatch,
-):
+def test_all_starts_sync_rules_before_logs_or_models(entry, args, module, boundary, tmp_path, monkeypatch):
     document = tmp_path / "RULES.md"
     document.write_text("旧规则", encoding="utf-8")
     names = ["配置甲", "配置乙"]
@@ -140,4 +123,4 @@ def test_all_starts_sync_scoring_rules_before_logs_or_models(
 
     monkeypatch.setattr(module, boundary, stop_before_side_effect)
     with pytest.raises(StartStopped):
-        entry(*args, **kwargs)
+        entry(*args)

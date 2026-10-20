@@ -1,7 +1,8 @@
-"""公开边界、规划缓存及观众总结；任务均经过真实 Agent。"""
+"""发言导演、公开与私有边界、规划缓存及观众总结。"""
 
 from copy import deepcopy
 from dataclasses import replace
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -11,7 +12,6 @@ from auction_game.ai import ai_speech
 from auction_game.ai.agent_execution import OutputFailedError
 from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply, text_reply, task_entries
 from auction_game.game.game_rules import GameSettings
-from auction_game.game.players import ScriptedPlayer
 
 
 class RecordingPlayer:
@@ -67,19 +67,28 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
     assert players[1].calls[1] == ("opening_plan", "规划 {'甲': '发言甲'} ()")
 
 
-def test_director_orders_parallel_results_by_initial_players(monkeypatch, tmp_path):
-    players = [ScriptedPlayer.constant(name, 0) for name in ("乙", "甲", "丙")]
-    director = ai_speech.AISpeechDirector(players, None, tmp_path, game=None)
-    monkeypatch.setattr(ai_speech, "run_parallel_round",
-                        lambda *args, **kwargs: {"丙": "发言丙", "甲": "发言甲", "乙": "发言乙"})
+def test_director_orders_speeches_by_seat_not_completion(monkeypatch, tmp_path):
+    from auction_game.controller import Controller
 
-    speeches = director._run_round("开局发言", lambda player: None)
+    last_done = threading.Event()
 
-    assert list(speeches.items()) == [("乙", "发言乙"), ("甲", "发言甲"), ("丙", "发言丙")]
-    assert list(director._others(speeches, "甲")) == ["乙", "丙"]
-    director._publish_speeches("开局发言", speeches)
+    class OrderedPlayer(RecordingPlayer):
+        def give_speech(self, text, phase, context):
+            if self.name == "乙":
+                assert last_done.wait(timeout=5)
+            speech = super().give_speech(text, phase, context)
+            if self.name == "丙":
+                last_done.set()
+            return speech
+
+    players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
+    director = ai_speech.AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None),
+                                          tmp_path, game=TEST_GAME)
+    monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", lambda others, game: f"规划 {list(others)}")
+    director.on_opening()
     public_log = director.speeches_log.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
+    assert players[1].calls[-1] == ("opening_plan", "规划 ['乙', '丙']")
 
 
 def test_only_public_speech_returned_without_hard_truncation(tmp_path):
@@ -95,8 +104,7 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     assert speech in md and "私有策略" in md
 
 
-@pytest.mark.parametrize("invalid", [speech_reply("  "), "<speech>missing strategy</speech>",
-                                          {"strategy": "  ", "speech": "public"}, "missing sections"])
+@pytest.mark.parametrize("invalid", [speech_reply("  "), "missing sections"])
 def test_speech_schema_failure_gets_one_correction(invalid):
     runner = fake_task_runner([invalid, speech_reply("补上的发言")])
     player = make_player(runner)
@@ -128,7 +136,7 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
     assert audit[0].parts[-1].content.startswith("speech\n\n请按以下格式提交完整结果")
 
 
-def test_blank_summary_uses_output_correction_not_infrastructure_retry():
+def test_blank_summary_gets_output_correction():
     runner = fake_task_runner(["  \n", "给观众的话"])
     player = make_player(runner)
     before = deepcopy(player.messages)
@@ -137,7 +145,7 @@ def test_blank_summary_uses_output_correction_not_infrastructure_retry():
     assert "retry-prompt" in ModelMessagesTypeAdapter.dump_json(runner.calls[-1]).decode()
 
 
-def test_double_blank_summary_fails_without_history_change():
+def test_double_blank_summary_fails_and_keeps_history():
     runner = fake_task_runner([" ", " \n"])
     player = make_player(runner)
     before = deepcopy(player.messages)

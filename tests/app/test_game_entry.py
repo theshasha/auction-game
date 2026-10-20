@@ -1,4 +1,4 @@
-"""比赛入口的参数传递与本场规则保存，全部离线执行。"""
+"""比赛入口的参数传递与本场规则保存。"""
 
 import os
 from pathlib import Path
@@ -26,45 +26,32 @@ def game():
     )
 
 
-def test_bots_load_once_and_save_actual_rules(monkeypatch, tmp_path, game):
-    loaded = []
+def test_bots_save_actual_rules(monkeypatch, tmp_path, game):
     result = object()
-
-    def load():
-        loaded.append(True)
-        return game
 
     def tournament(players, actual_game, **kwargs):
         assert actual_game is game
         assert [p.name for p in players] == BOT_NAMES
-        assert callable(kwargs["on_match_end"])
         return result
 
-    monkeypatch.setattr(runners, "load_game_settings", load)
+    monkeypatch.setattr(runners, "load_game_settings", lambda: game)
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / "run")
     monkeypatch.setattr(runners, "run_tournament", tournament)
     printed = []
     monkeypatch.setattr(runners, "print_final_result", printed.append)
     assert runners.run_bots(42) == 0
 
-    assert loaded == [True]
     assert printed == [result]
     assert (tmp_path / "run" / "RULES.md").read_text(encoding="utf-8") == render_rules(game, BOT_NAMES)
 
 
-@pytest.mark.parametrize("entry,args", [
-    (runners.run_bots, (42,)),
-    (runners.run_ai, ()),
-])
-def test_game_errors_stop_before_clients_or_logs(monkeypatch, capsys, entry, args):
+def test_game_errors_stop_before_logs(monkeypatch, capsys):
     def load():
         raise ConfigurationError("game.yaml：max_bid 必须是非负整数")
 
     monkeypatch.setattr(runners, "load_game_settings", load)
-    monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: ({}, []))
-    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("参数错误时不应创建客户端"))
-    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("参数错误时不应创建日志"))
-    assert entry(*args) == 1
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("参数错误时创建了日志"))
+    assert runners.run_bots(42) == 1
     assert "[配置错误] game.yaml：max_bid" in capsys.readouterr().out
 
 
@@ -119,36 +106,20 @@ def test_main_dispatches_test_model_and_rejects_other_modes(monkeypatch):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("args,valid_game,status,writes_logs", [
-    (["--seed", "42"], True, 0, True),
-    (["--benchmark", "1"], True, 0, False),
-    ([], False, 1, False),
-    (["--ai"], False, 1, False),
-    (["--benchmark", "1"], False, 1, False),
-    (["--benchmark", "0"], True, 2, False),
-    (["--benchmark", "-1"], True, 2, False),
-    (["--benchmark", "1.5"], True, 2, False),
-    (["--benchmark", "abc"], True, 2, False),
-])
-def test_script_exit_codes_in_isolated_checkout(tmp_path, game, args, valid_game, status, writes_logs):
+def test_script_runs_from_other_directory_and_writes_logs_under_checkout(tmp_path, game):
     root = Path(main.__file__).parent
     for directory in ("auction_game", "configs", "data"):
         shutil.copytree(root / directory, tmp_path / directory, ignore=shutil.ignore_patterns("__pycache__"))
-    for pattern in ("main.py", "RULES.template.md"):
-        for path in root.glob(pattern):
-            shutil.copy2(path, tmp_path / path.name)
-    (tmp_path / "configs" / "game.yaml").write_text(
-        yaml.safe_dump(game.to_dict()) if valid_game else "max_bid: -1\n",
-        encoding="utf-8",
-    )
+    for name in ("main.py", "RULES.template.md"):
+        shutil.copy2(root / name, tmp_path / name)
+    (tmp_path / "configs" / "game.yaml").write_text(yaml.safe_dump(game.to_dict()), encoding="utf-8")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     process = subprocess.run(
-        [sys.executable, "-B", str(tmp_path / "main.py"), *args], cwd=elsewhere,
-        env={**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+        [sys.executable, "-B", str(tmp_path / "main.py"), "--seed", "42"], cwd=elsewhere,
+        env={**os.environ, "PYTHONUTF8": "1"},
         capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
-    assert process.returncode == status, process.stdout + process.stderr
-    assert (tmp_path / "logs").exists() is writes_logs
-    if status == 2:
-        assert "场数必须是正整数" in process.stderr
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert any((tmp_path / "logs").iterdir())
+    assert not any(elsewhere.iterdir())

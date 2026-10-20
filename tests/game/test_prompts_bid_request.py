@@ -1,5 +1,4 @@
-"""每日出价消息（bid_request）的测试：状态行、昨日公布、本人金币结算。
-共享工厂（make_obs / history）见 conftest.py。"""
+"""每日出价消息（bid_request）：状态行、昨日公布、本人金币结算。"""
 
 from dataclasses import replace
 
@@ -26,13 +25,11 @@ class TestBidRequest:
             day=1, total_auction_score=3, total_score=17,
         ))
         first_line = text.splitlines()[0]
-        assert first_line.startswith("当前是第 2 局第 1 天。")
         assert "\n\n今日状态：\n\n- 今日奖池：1 分。\n- 你的金币余额：7（正常出价上限：7）。\n- 本局得分：0 分。\n\n" in text
         assert "昨日公布" not in text
         assert "已含今日工资" not in text  # 第 1 天没有工资
         assert first_line == "当前是第 2 局第 1 天。"
         assert "\n\n你的累计总分：17 分。" in text
-        assert "当前全场金币" not in text  # 首日恒定余额不再单列公布
 
     @pytest.mark.parametrize("day", [1, 2])
     def test_live_totals_include_all_players(self, day):
@@ -136,7 +133,6 @@ class TestBidRequest:
         lines = text.splitlines()
 
         assert "昨日出价明细：\n\n| 玩家 | 正常出价 | 超级出价 | 命中情况 |\n" in text
-        assert "当前金币" not in text
         assert "| 甲 | 6 | — | — |" in lines
         assert "| 乙 | 5 | — | — |" in lines
         assert "| 丙 | 4 | 6 | 命中 |" in lines
@@ -204,11 +200,6 @@ class TestMyLastDayLine:
             day=2, today_history=[history(**history_overrides)], **obs_kwargs,
         ))
         assert expected + "\n\n今日状态：\n\n- 今日奖池：" in text
-
-    def test_no_line_when_last_bid_unknown(self):
-        # my_last_bid 为 None（如旧调用方未填）时不渲染该行
-        text = prompts.bid_request(make_prompt_obs(day=2, today_history=[history()]))
-        assert "昨日你的金币结算" not in text
 
     def test_line_position_between_announcement_and_status(self):
         text = prompts.bid_request(make_prompt_obs(

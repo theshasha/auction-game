@@ -1,13 +1,8 @@
-"""Offline production Agent / SDK wire contracts.
-
-No dotenv, provider discovery or real HTTP: every SDK gets a fake key and MockTransport.
-Successful-stream checking and SDK construction use the production model factory.
-"""
+"""三种协议的 SSE 夹具和 MockTransport：用生产模型工厂构造真实 SDK，只替换 HTTP 层。"""
 
 import asyncio
 from copy import deepcopy
 import json
-
 
 import httpx2 as http
 
@@ -147,7 +142,7 @@ class Harness:
         broken = options.pop("broken", False)
         chunks = options.pop("chunks", None) or sse(self.protocol, data, **options)
         if broken and self.protocol == "chat":
-            # [DONE] is a successful SDK terminator; interrupt before it, not after it.
+            # SDK 把 [DONE] 当作正常结束，要在它之前中断。
             chunks = chunks[:-1]
         wire = Wire(chunks, broken)
         self.streams.append(wire)
@@ -171,8 +166,7 @@ def reply(data=None, **options):
 
 
 async def run(agent, prompt="today", history=(), coins=7):
-    # event_stream_handler makes Agent.run stream every model node, including correction.
-    # Unlike run_stream(), it drives the whole graph and output retry machinery.
+    # 传 event_stream_handler 后 Agent.run 对每次请求（含纠错）都走流式，并完整执行输出重试。
     async def drain(ctx, events):
         async for _ in events:
             pass

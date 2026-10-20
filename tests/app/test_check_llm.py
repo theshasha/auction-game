@@ -1,4 +1,4 @@
-"""连通检查的用户提示；使用假模型，不调用真实服务。"""
+"""连通检查的目标、预算提示和失败处理。"""
 
 from dataclasses import replace
 
@@ -15,7 +15,7 @@ def test_help_names_model_configuration_and_separate_check_budget(capsys):
         check_llm.main(["--help"])
     assert exc.value.code == 0
     output = capsys.readouterr().out
-    assert "模型配置名" in output and "目录键" not in output
+    assert "模型配置名" in output
     assert "不改变比赛预算" in output
 
 

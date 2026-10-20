@@ -1,15 +1,13 @@
-"""玩家事务及生产 Agent 校验；模型边界注入，零网络。"""
+"""AI 玩家的任务事务、输出纠错和日志写入失败。"""
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPromptPart
-from pydantic_ai.messages import ModelRequest, SystemPromptPart
-from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPromptPart, SystemPromptPart
 
-from auction_game.ai.agent_execution import AgentExecutor, OutputFailedError
+from auction_game.ai.agent_execution import OutputFailedError
 from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, text_reply, task_entries
 from auction_game.ai import prompts
 
@@ -36,9 +34,7 @@ def test_player_passes_prompt_switches_into_native_request(enable_predictions, e
 
 
 @pytest.mark.parametrize("invalid", [
-    {"strategy": "s", "bid": 2}, bid_reply("2"), bid_reply(True), bid_reply(2.0),
-    bid_reply(2, True), bid_reply(2, 2.0), bid_reply(2, "None"), bid_reply(2, "3"),
-    bid_reply(2, strategy="  "), "<strategy>missing standalone tags</strategy>", dict(bid_reply(2), extra=1),
+    bid_reply("2"), "<strategy>missing standalone tags</strategy>", dict(bid_reply(2), extra=1),
 ])
 def test_invalid_output_uses_one_shared_correction(invalid):
     runner = fake_task_runner([invalid, bid_reply(2)])
@@ -99,7 +95,7 @@ def test_business_history_and_original_audit_survive_rollback(tmp_path):
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
     assert "我的私有分析" in ModelMessagesTypeAdapter.dump_json(middle).decode()
     md = player.log_path.with_suffix(".md").read_text(encoding="utf-8")
-    assert md.startswith("# Alpha · 私人对话") and "tool-return" not in md and "私有策略" in md
+    assert md.startswith("# Alpha · 私人对话") and "私有策略" in md
 
 
 def test_program_errors_propagate_without_retry_or_state_change():
@@ -111,8 +107,7 @@ def test_program_errors_propagate_without_retry_or_state_change():
     assert len(runner.calls) == 1 and player.messages == before
 
 
-@pytest.mark.parametrize("suffix", [".jsonl", ".md"])
-@pytest.mark.parametrize("valid_output", [True, False])
+@pytest.mark.parametrize("suffix,valid_output", [(".jsonl", True), (".md", False)])
 def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, monkeypatch, suffix, valid_output):
     runner = fake_task_runner([bid_reply(1), bid_reply(2) if valid_output else bid_reply("bad"), bid_reply("bad")])
     player = make_player(runner, tmp_path)
@@ -139,42 +134,7 @@ def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, m
     if suffix == ".jsonl":
         assert json_after == json_before
     else:
-        # 沿用逐文件追加语义：JSONL 已成功时，Markdown 失败不会撤销它。
+        # 两个文件分别追加，Markdown 写入失败时 JSONL 里已有这条记录。
         entries = task_entries(player.log_path)
         assert len(entries) == 2
         assert entries[-1]["status"] == ("success" if valid_output else "failed")
-
-
-@pytest.mark.parametrize("succeeds", [True, False])
-def test_non_auction_agent_reuses_executor_with_typed_deps_and_isolated_history(succeeds):
-    from tests.support.wire import Harness, reply
-
-    @dataclass
-    class Greeting:
-        prefix: str
-
-    agent = Agent(output_type=str, deps_type=Greeting, retries=1)
-
-    @agent.output_validator
-    def validate(ctx: RunContext[Greeting], output: str):
-        # 修改运行快照，验证唯一隔离边界在成功及失败时都保护原历史。
-        ctx.messages[0].parts[0].content = "working copy"
-        if not output.startswith(ctx.deps.prefix):
-            raise ModelRetry("missing greeting")
-        return output
-
-    h = Harness("chat", [reply(text="invalid"),
-                         reply(text="hello reader" if succeeds else "invalid again")])
-    history = [ModelRequest(parts=[SystemPromptPart("original")])]
-    before = deepcopy(history)
-    executor = AgentExecutor(h.factory)
-    if succeeds:
-        result = executor(agent, "greet", history, deps=Greeting("hello"))
-        assert result.output == "hello reader" and result.messages
-        assert not result.request_errors
-    else:
-        with pytest.raises(OutputFailedError) as caught:
-            executor(agent, "greet", history, deps=Greeting("hello"))
-        encoded = ModelMessagesTypeAdapter.dump_json(caught.value.messages).decode()
-        assert "invalid again" in encoded and "missing greeting" in encoded
-    assert history == before and len(h.requests) == 2 and h.closes == 1

@@ -1,4 +1,4 @@
-"""局日志与排名的 markdown 表格渲染测试；共享工厂见 tests/support/factories.py。"""
+"""局日志与排名的 markdown 表格渲染。"""
 
 from dataclasses import replace
 
@@ -102,19 +102,11 @@ class TestRenderMatchLog:
         assert "流局（奖池作废） | 1、2 | 甲 2、丁 2 |" in text
         assert "本局得分：甲 2 分、乙 0 分、丙 0 分、丁 2 分" in text
 
-    def test_summary_uses_settled_scores(self, monkeypatch):
+    def test_summary_uses_settled_scores(self):
         log = make_log(auction_scores=dict(zip(NAMES, [1, 0, 0, 0, 0, 0])),
                        scores=dict(zip(NAMES, [4, 0, 0, 0, 0, 0])))
-        calls = []
-
-        def day_scores(names, **kwargs):
-            calls.append((names, kwargs))
-            return dict.fromkeys(names, 0)
-
-        monkeypatch.setattr(prompts, "calculate_day_scores", day_scores)
         text = prompts.render_match_log(log)
-        assert calls == [(NAMES, {"winner": "甲", "auction_score": 1, "super_uses": [], "game": TEST_GAME})]
-        assert text.splitlines()[4].endswith("| — |")
+        assert text.splitlines()[4].endswith("| 甲 1 |")
         assert "本局得分：甲 4 分" in text
 
 
@@ -142,10 +134,10 @@ class TestRenderStandings:
         assert lines[3] == "| 2 | 甲 | 8 | 8 | 2 |"
 
     def test_match_columns_follow_score_history(self):
-        standings = make_standings({"甲": [2]}, scores_history={"甲": [4, 6]}, total_scores={"甲": 13})
+        standings = make_standings({"甲": [2]}, scores_history={"甲": [4, 6]})
         text = prompts.render_standings(standings)
         assert "| 第2局 |" in text
-        assert "| 1 | 甲 | 13 | 4 | 6 | 2 |" in text
+        assert "| 1 | 甲 | 10 | 4 | 6 | 2 |" in text
 
     def test_no_match_columns_when_history_empty(self):
         standings = make_standings({"甲": [], "乙": []})

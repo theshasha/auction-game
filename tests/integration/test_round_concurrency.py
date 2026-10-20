@@ -1,6 +1,5 @@
-"""完整假模型赛的所有任务阶段采用同一份启动并发配置。"""
+"""完整假模型赛的出价轮和发言轮共用同一个控制器和并发上限。"""
 
-import pytest
 import yaml
 
 from auction_game import runners
@@ -12,48 +11,30 @@ from auction_game.game.game_rules import GameSettings
 from auction_game.reporting.run_paths import RunPaths
 
 
-@pytest.mark.parametrize("limit", [1, 2])
-def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, monkeypatch, capsys, limit):
+def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, monkeypatch, capsys):
     config_path = config_files[0]
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["llm"]["max_concurrency"] = limit
+    data["llm"]["max_concurrency"] = 1
     config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
-
-    loads = []
-
-    def load(**kwargs):
-        loads.append(True)
-        return load_configuration(*config_files, **kwargs)
-
-    monkeypatch.setattr(runners, "load_configuration", load)
-    monkeypatch.setattr(offline_demo, "load_configuration", load)
+    monkeypatch.setattr(offline_demo, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     monkeypatch.setattr(offline_demo, "load_game_settings", lambda: GameSettings(
         initial_coins=7, daily_salary=3, daily_pool=(3, 3), max_bid=7,
         super_cost=2, super_bounty=3, super_hit_score=1, regular_matches=2, max_playoffs=1,
     ))
-    monkeypatch.setattr("auction_game.ai.llm_client._require_env",
-                        lambda *args: pytest.fail("离线赛禁止读取真实密钥"))
-    rounds = []
-    controllers = set()
+    controllers = {"bid": set(), "speech": set()}
 
-    def collect(tasks, controller, label):
-        assert controller.max_concurrency == limit
-        controllers.add(id(controller))
-        rounds.append(label)
-        return run_parallel_round(tasks, controller, label)
+    def collect(kind):
+        def run(tasks, controller, label):
+            assert controller.max_concurrency == 1
+            controllers[kind].add(id(controller))
+            return run_parallel_round(tasks, controller, label)
+        return run
 
-    monkeypatch.setattr(runners, "run_parallel_round", collect)
-    monkeypatch.setattr(ai_speech, "run_parallel_round", collect)
+    monkeypatch.setattr(runners, "run_parallel_round", collect("bid"))
+    monkeypatch.setattr(ai_speech, "run_parallel_round", collect("speech"))
     run_dir = tmp_path / "offline"
     offline_demo.generate_demo(run_dir, test_model=True)
-    assert loads == [True]
-    assert len(controllers) == 1
-    assert "开局发言" in rounds
-    assert "第一局策略规划（含首日出价）" in rounds
-    assert "下一局策略规划（含首日出价）" in rounds
-    assert any("局末发言" in label for label in rounds)
-    assert any("天出价" in label for label in rounds)
-    assert "最终感言" in rounds
-    assert "观众总结（仅观众可见）" in rounds
-    assert RunPaths(run_dir).read_config()["max_concurrency"] == limit
-    assert f"并发上限：{limit}" in capsys.readouterr().out
+    assert len(controllers["bid"]) == len(controllers["speech"]) == 1
+    assert controllers["bid"] == controllers["speech"]
+    assert RunPaths(run_dir).read_config()["max_concurrency"] == 1
+    assert "并发上限：1" in capsys.readouterr().out

@@ -1,4 +1,4 @@
-"""配置读取、报错和 AI 比赛启动提示；不调用真实服务，不写项目日志。"""
+"""配置读取、报错和 AI 比赛启动提示。"""
 
 import json
 
@@ -153,7 +153,7 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
     assert load_configuration(*config_files)[1] == regular
 
 
-def test_missing_key_stops_before_logs_without_reading_dotenv(config_files, monkeypatch, capsys):
+def test_missing_key_stops_before_logs(config_files, monkeypatch, capsys):
     from auction_game.ai import llm_client
     monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     monkeypatch.setattr(llm_client, "load_dotenv", lambda path: None)

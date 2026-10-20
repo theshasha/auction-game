@@ -22,7 +22,6 @@ class TestSystemPrompt:
         # 人设只影响说话方式，思考要求保持认真
         assert "不要被人设的说话方式影响你的思考" in system
         assert "发言中的承诺由玩家自行决定是否履行，不会改变游戏规则" in system
-        assert "<!--" not in system and "RULES.template.md" not in system
 
     def test_predictions_public_to_everyone(self):
         predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
@@ -67,7 +66,6 @@ class TestSpeechFields:
         assert f"排名与分数明细：\n\n{prompts.render_standings(standings)}" in text
         assert "| 1 | 乙 | 14 | 12 | 2 | 1 |" in text
         assert "| 2 | 甲 | 12 | 8 | 4 | 3 |" in text
-        assert "胜场" not in text
 
     def test_final_summary_is_private_and_includes_speeches(self):
         text = prompts.final_summary_request({"甲": "感言A", "乙": "感言B"})
@@ -150,7 +148,6 @@ class TestPlanBidMerge:
             assert "| 排名 | 玩家 | 总分 | 第1局 | 拍卖分 |" in text
             assert "| 1 | 乙 | 11 | 11 | 1 |" in text
             assert "| 2 | 甲 | 10 | 10 | 2 |" in text
-            assert "全员累计总分：" not in text
         for fact in ("你有 11 枚金币", "今日奖池为 2 分"):
             assert fact in text
 

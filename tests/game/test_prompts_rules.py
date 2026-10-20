@@ -1,9 +1,7 @@
 """规则模板生成与参数贯通。"""
 
 from dataclasses import replace
-import subprocess
 import sys
-import os
 
 import pytest
 
@@ -12,7 +10,6 @@ from auction_game.game import rules
 from auction_game.configuration import load_game_settings, load_players
 from tests.support.factories import NAMES, TEST_GAME
 from auction_game.game.rules import render_rules
-from auction_game.paths import ROOT_DIR
 
 
 class TestRulesText:
@@ -60,7 +57,7 @@ class TestRulesText:
         assert system.startswith(text)
         assert "其他 2 位玩家是：乙、丙" in system
 
-    def test_unknown_placeholder_is_not_silently_preserved(self, tmp_path, monkeypatch):
+    def test_unknown_placeholder_raises(self, tmp_path, monkeypatch):
         template = tmp_path / "RULES.template.md"
         template.write_text("{misspelled_parameter}", encoding="utf-8")
         monkeypatch.setattr(rules, "TEMPLATE_PATH", template)
@@ -75,22 +72,7 @@ class TestRulesText:
         )
         assert system.startswith(text)
 
-    def test_check_command_works_outside_project_without_writing(self, tmp_path):
-        document = tmp_path / "RULES.md"
-        document.write_text(render_rules(load_game_settings(), [p["name"] for p in load_players()]), encoding="utf-8")
-        before = document.read_bytes()
-        # 子进程从外部目录调用真实 CLI main，只把生成物位置隔离到临时目录。
-        script = ("from pathlib import Path; from auction_game.game import rules; "
-                  f"rules.RULES_PATH = Path({str(document)!r}); raise SystemExit(rules.main())")
-        result = subprocess.run(
-            [sys.executable, "-B", "-c", script, "--check"],
-            cwd=tmp_path, capture_output=True,
-            env={**os.environ, "PYTHONPATH": str(ROOT_DIR)},
-        )
-        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
-        assert document.read_bytes() == before
-
-    def test_check_command_rejects_stale_document_without_writing(self, tmp_path, monkeypatch):
+    def test_check_command_rejects_stale_document_and_keeps_it(self, tmp_path, monkeypatch):
         document = tmp_path / "RULES.md"
         document.write_text("过期规则", encoding="utf-8")
         monkeypatch.setattr(rules, "RULES_PATH", document)

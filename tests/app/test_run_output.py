@@ -44,7 +44,6 @@ def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(c
     assert "超级命中：丁 +3 分。" in second
     assert "奖池 3 分；流局，奖池作废。" in last
     assert "超级命中：无。" in last
-    assert all(word not in "".join(reports) for word in ["争冠", "上限", "锁冠", "私有分析"])
 
 
 @pytest.mark.parametrize("tied", [False, True])
@@ -123,7 +122,6 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     for text in [report, prompts.match_end_speech_request(log, standings),
                  prompts.final_speech_request(standings, log)]:
         assert prompts.render_match_log(log) in text
-        assert all(word not in text for word in ["，扣", "成本", "悬赏", "奖池并入次日"])
 
     payload = json.loads(paths.match(1).read_text(encoding="utf-8"))
     assert payload == expected

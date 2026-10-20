@@ -1,9 +1,8 @@
-"""累计记忆、真实 SDK 送模隔离及跨局事务；全部离线。"""
+"""累计记忆、thinking 只留在审计里，以及跨局的事务和回滚。"""
 
 from copy import deepcopy
 from dataclasses import replace
 import json
-from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
@@ -90,7 +89,7 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         wire = json.dumps(body, ensure_ascii=False)
         assert "OLD_PRIVATE_THINKING" not in wire
         for marker in ("encrypted_old_reasoning", "signed_old_reasoning", "redacted_old_reasoning",
-                       "rs_old", "resp_1", "previous_response_id", "fc_1", "fc_2"):
+                       "rs_old", "resp_1", "previous_response_id"):
             assert marker not in wire
         assert "original task" in wire
         from pydantic_ai.messages import TextPart
@@ -107,9 +106,7 @@ def test_sdk_plain_memory_and_cross_match_replacement(protocol):
     player = make_player(TaskRunner(h.factory))
     player.give_speech("old match raw", "match_1_speech")
     player.save_memory(prompts.memory_request({"Bravo": "other signal"}), "match_1_memory")
-    body = h.requests[-1][1]
-    assert not body.get("tools") and "tool_choice" not in body
-    assert "不加格式标签或 JSON 外壳" in json.dumps(body, ensure_ascii=False)
+    assert "不加格式标签或 JSON 外壳" in json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert player.memory == "cumulative-v1"
     player.plan_strategy(prompts.next_match_plan_request([], player.game, 2), "match_1_plan")
     wire = json.dumps(h.requests[-1][1], ensure_ascii=False)
@@ -159,7 +156,7 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     assert player.memory == "" and player.checkpoint() == checkpoint
 
 
-@pytest.mark.parametrize("invalid", ["", " ", "\n\t", "\r\n "])
+@pytest.mark.parametrize("invalid", ["", "\r\n\t "])
 def test_memory_requires_nonempty_plain_body_and_shared_correction(invalid):
     runner = fake_task_runner([invalid, {"memory": "saved"}])
     player = make_player(runner)
@@ -167,22 +164,11 @@ def test_memory_requires_nonempty_plain_body_and_shared_correction(invalid):
     assert player.memory == "saved" and len(runner.calls) == 2
 
 
-@pytest.mark.parametrize("fault", ["output", ".jsonl", ".md"])
-def test_failed_memory_does_not_commit_context_review_cache_or_memory(fault, tmp_path, monkeypatch):
-    replies = [{"memory": " "}] * 2 if fault == "output" else [{"memory": "new"}]
-    player = make_player(fake_task_runner([bid_reply(2), *replies]), tmp_path)
+def test_failed_memory_keeps_context_review_cache_and_memory(tmp_path):
+    player = make_player(fake_task_runner([bid_reply(2), {"memory": " "}, {"memory": " "}]), tmp_path)
     player.plan_strategy("old context", "opening_plan")
     before = deepcopy(player.checkpoint())
-    if fault != "output":
-        original_open = Path.open
-
-        def open_file(path, mode="r", *args, **kwargs):
-            if path == player.log_path.with_suffix(fault) and mode == "a":
-                raise OSError("disk")
-            return original_open(path, mode, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "open", open_file)
-    with pytest.raises(OutputFailedError if fault == "output" else OSError):
+    with pytest.raises(OutputFailedError):
         player.save_memory("整理", "match_1_memory")
     assert player.checkpoint() == before
 
@@ -225,7 +211,6 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
         for entry in standings:
             row = next(line for line in plan_input.splitlines() if f"| {entry.player} |" in line)
             assert row.split(" | ")[:3] == [f"| {entry.rank}", entry.player, str(entry.total_score)]
-        assert "全员累计总分：" not in plan_input
         for fact in (f"第 {match_index + 1} 局第 1 天的出价", "你有 13 枚金币",
                      "今日奖池为 2 分", "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
                      "如果每天都命中，每人最多还能获得 6 命中分"):

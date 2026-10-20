@@ -1,1 +1,1 @@
-"""普通测试辅助；pytest 夹具在 conftest.py。"""
+"""测试辅助；pytest 夹具在 tests/conftest.py。"""

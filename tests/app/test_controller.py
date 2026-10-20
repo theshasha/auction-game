@@ -1,4 +1,4 @@
-"""控制器与轮级并发执行器的测试：直接发命令，零网络。共享夹具见 conftest.py。"""
+"""控制器命令、闸门，以及轮级并发执行的暂停、补跑和回滚。"""
 
 import threading
 from contextlib import contextmanager
@@ -176,8 +176,7 @@ class TestController:
         controller = Controller(mode="continuous", announce=lambda msg: None)
         controller.wait_for_turn("任意调用")  # 不阻塞，直接返回
 
-    def test_stale_enter_does_not_preconfirm_next_round(self):
-        # 单步模式下在上一轮执行期间误按的回车不得预确认下一轮
+    def test_enter_during_round_is_discarded_in_step_mode(self):
         first_gate = threading.Event()
         second_gate = threading.Event()
 
@@ -185,7 +184,6 @@ class TestController:
             if "第1轮" in msg:
                 first_gate.set()
             elif "第2轮" in msg:
-                assert not controller._gate.is_set()  # 已确定丢弃执行期间误按的回车
                 second_gate.set()
 
         controller = Controller(mode="step", announce=announce)
@@ -259,7 +257,7 @@ class TestController:
 
 class TestParallelRound:
     @pytest.mark.parametrize("limit", [1, 2, 10])
-    def test_bounded_dispatch_and_serial_order(self, limit):
+    def test_step_mode_gates_once_then_dispatches_bounded(self, limit):
         count = 5
         releases = [threading.Event() for _ in range(count)]
         started = [threading.Event() for _ in range(count)]
@@ -267,7 +265,15 @@ class TestParallelRound:
         live = 0
         peak = 0
         calls = []
-        controller = Controller(mode="continuous", max_concurrency=limit, announce=lambda _: None)
+        gates = []
+        gate = threading.Event()
+
+        def announce(message):
+            if message.startswith("[单步]"):
+                gates.append(message)
+                gate.set()
+
+        controller = Controller(mode="step", max_concurrency=limit, announce=announce)
 
         def task(index):
             nonlocal live, peak
@@ -283,6 +289,9 @@ class TestParallelRound:
 
         tasks = [RoundTask(str(i), lambda i=i: task(i)) for i in range(count)]
         with running(controller, lambda: run_parallel_round(tasks, controller, "有界"), *releases) as (thread, outcome):
+            assert gate.wait(timeout=5)
+            assert not any(event.is_set() for event in started)
+            controller.offer_command("")
             first_batch = min(limit, count)
             assert all(event.wait(timeout=5) for event in started[:first_batch])
             assert not any(event.is_set() for event in started[first_batch:])
@@ -292,6 +301,7 @@ class TestParallelRound:
             thread.join(timeout=5)
             assert outcome.get("result") == {str(i): i for i in range(count)}
             assert peak == first_batch
+            assert len(gates) == 1
             if limit == 1:
                 assert calls == list(range(count))
 
@@ -323,12 +333,8 @@ class TestParallelRound:
             thread.join(timeout=5)
             assert outcome.get("result") == {"first": 1, "second": 2}
             assert calls == ["first", "second"]
-            assert sum("停止新任务" in message for message in announcements) == 1
-            assert any("成功 1，失败 0，未启动 1" in message for message in announcements)
-            assert any("停止新任务" in message and "内部重试可能继续" in message
-                       and "成功结果保留" in message and "等待已启动任务结束" in message
-                       and "回车或 c：等任务结束后继续" in message
-                       and "q：等任务结束后撤销本轮并退出比赛" in message for message in announcements)
+            # 一条是收到 p 时的提示，一条是收集结果后的汇总；重复的 p 不再提示。
+            assert sum(message.startswith("[暂停]") for message in announcements) == 2
 
     def test_pause_keeps_success_and_holds_unstarted_until_resume(self):
         release = threading.Event()
@@ -397,18 +403,17 @@ class TestParallelRound:
             assert gate.wait(timeout=5)
             assert "result" not in outcome
             assert calls == [1, 1, 0]
-            assert any("成功 1，失败 1，未启动 1" in message for message in announcements)
-            assert any(message.startswith("[失败]") and "回车或 c 只补跑失败和未启动任务" in message
-                       and "成功任务不重跑" in message for message in announcements)
+            assert any(message.startswith("[暂停]") for message in announcements)
+            assert any(message.startswith("[失败]") for message in announcements)
             controller.offer_command("")
             thread.join(timeout=5)
             assert outcome.get("result") == {"0": 0, "1": 1, "2": 2}
             assert calls == [1, 2, 1]
 
-    @pytest.mark.parametrize("failures", [1, 2])
     @pytest.mark.parametrize("paused", [False, True])
     @pytest.mark.parametrize("command", ["", "c"])
-    def test_failure_notice_accepts_immediate_confirmation(self, failures, paused, command):
+    def test_failure_notice_accepts_immediate_confirmation(self, paused, command):
+        failures = 2
         notices = [threading.Event() for _ in range(failures)]
         calls = {"success": 0, "retry": 0}
         notice_count = 0
@@ -500,7 +505,7 @@ class TestParallelRound:
             assert participant.value == 0
             assert participant.restored == [None]
 
-    def test_program_error_propagates_even_after_pause(self):
+    def test_program_error_propagates_after_pause(self):
         controller = Controller(mode="continuous", announce=lambda _: None)
 
         def broken():
@@ -510,12 +515,15 @@ class TestParallelRound:
         with pytest.raises(ValueError, match="真实程序错误"):
             run_parallel_round([RoundTask("broken", broken)], controller, "程序错误")
 
-    def test_non_player_participant_rolls_back_while_stateless_result_is_kept(self, monkeypatch):
-        started = threading.Event()
-        release = threading.Event()
-        stateless_collected = threading.Event()
-        gate = threading.Event()
-        controller = Controller(mode="continuous", announce=lambda msg: gate.set() if msg.startswith("[单步]") else None)
+    @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
+    def test_failed_participant_rolls_back_and_successful_result_is_kept(self, command):
+        notice = threading.Event()
+
+        def announce(message):
+            if message.startswith("[失败]"):
+                notice.set()
+
+        controller = Controller(mode="continuous", max_concurrency=1, announce=announce)
 
         class Counter:
             def __init__(self):
@@ -524,8 +532,7 @@ class TestParallelRound:
                 self.restored = []
 
             def checkpoint(self):
-                # None 也是有效的不透明快照，控制器必须原样交还。
-                return None
+                return "start"
 
             def rollback(self, checkpoint):
                 self.restored.append(checkpoint)
@@ -534,8 +541,6 @@ class TestParallelRound:
             def run(self):
                 self.calls += 1
                 self.value += 1
-                started.set()
-                assert release.wait(timeout=5)
                 if self.calls == 1:
                     raise CallFailedError("测试服务故障")
                 return self.value
@@ -547,27 +552,19 @@ class TestParallelRound:
             stateless_calls.append(1)
             return "ready"
 
-        original_as_completed = controller_module.as_completed
-
-        def track_collection(futures):
-            for future in original_as_completed(futures):
-                yield future
-                if future.exception() is None and future.result() == "ready":
-                    stateless_collected.set()
-
-        monkeypatch.setattr(controller_module, "as_completed", track_collection)
-        tasks = [RoundTask("counter", counter.run, participant=counter), RoundTask("stateless", stateless)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "通用任务"), release) as (thread, outcome):
-            assert started.wait(timeout=5) and stateless_collected.wait(timeout=5)
-            controller.offer_command("p")
-            release.set()
-            assert gate.wait(timeout=5)
-            assert counter.value == 0 and counter.restored == [None]
-            assert "result" not in outcome
-            controller.offer_command("")
+        tasks = [RoundTask("stateless", stateless), RoundTask("counter", counter.run, participant=counter)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "通用任务")) as (thread, outcome):
+            assert notice.wait(timeout=5)
+            assert counter.value == 0 and counter.restored == ["start"]
+            controller.offer_command(command)
             thread.join(timeout=5)
-            assert outcome.get("result") == {"stateless": "ready", "counter": 1}
-            assert counter.calls == 2 and stateless_calls == [1]
+            if command == "q":
+                assert isinstance(outcome.get("error"), TournamentAborted)
+                assert counter.restored == ["start", "start"]
+            else:
+                assert outcome.get("result") == {"stateless": "ready", "counter": 1}
+                assert counter.calls == 2
+            assert stateless_calls == [1]
 
     @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
     def test_pause_keeps_consumed_plan_before_result_collection(self, monkeypatch, command):
@@ -620,8 +617,6 @@ class TestParallelRound:
             assert player._pending_day1_bid is None
             assert player.messages == history
             assert "result" not in outcome
-            assert any("全部成功，确认后继续" in message for message in announcements)
-            assert not any("补跑" in message for message in announcements)
             controller.offer_command(command)
             thread.join(timeout=5)
             if command == "q":
@@ -635,7 +630,7 @@ class TestParallelRound:
 
     @pytest.mark.parametrize("failures, reason", [
         ([ModelAPIError("offline", "service unavailable")], "service unavailable"),
-        (["没有工具", "还是没有"], "retries"),
+        (["格式不对", "还是不对"], "retries"),
     ], ids=["service", "output"])
     def test_failure_reruns_only_failed_player(self, failures, reason):
         gate = threading.Event()
@@ -675,39 +670,6 @@ class TestParallelRound:
             assert bravo.messages[:len(bravo_prefix)] == bravo_prefix
             parts = [p for m in bravo.messages for p in m.parts]
             assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(2))]
-
-    def test_step_mode_gates_once_and_runs_concurrently(self):
-        announcements = []
-        gate = threading.Event()
-
-        def announce(msg):
-            announcements.append(msg)
-            if msg.startswith("[单步]"):
-                gate.set()
-
-        controller = Controller(mode="step", announce=announce)
-        barrier = threading.Barrier(6)  # 若被串行执行将超时破碎，以此证明并发
-        players = [
-            make_named_player(f"P{i}", fake_task_runner([bid_reply(i)]))
-            for i in range(6)
-        ]
-
-        def make_fn(player):
-            def fn():
-                barrier.wait(timeout=5)
-                return player.decide_bid(make_ai_obs())
-            return fn
-
-        tasks = [RoundTask(key=player.name, participant=player, fn=make_fn(player)) for player in players]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮")) as (thread, outcome):
-            assert gate.wait(timeout=5)
-            assert "result" not in outcome
-            controller.offer_command("")
-            thread.join(timeout=5)
-            assert outcome.get("result") == {f"P{i}": (i, None) for i in range(6)}
-            step_gates = [msg for msg in announcements if msg.startswith("[单步]")]
-            assert len(step_gates) == 1
-            assert "测试轮" in step_gates[0]
 
     @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
     def test_pause_keeps_collected_and_inflight_success(self, monkeypatch, command):

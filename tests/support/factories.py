@@ -1,14 +1,4 @@
-"""普通测试工厂；pytest 夹具在 tests/conftest.py。
-
-分三节：
-1. 通用数据对象工厂：NAMES / make_day / make_log / make_standings / history / make_obs
-   （DayResult 用 super_uses + collision_values，public_view 含 bids_detail；
-   Observation 含 my_last_sniped / my_last_super_hit / all_coins）。
-2. 引擎场景构造器：run_one_match / constant_strategies / constant_by_name /
-   bids_by_day / super_by_day / run_scenario——消灭「按天查表策略」在各用例里
-   逐字重写的样板。策略只依赖 obs.day 与 obs.my_name，可全员共用同一个函数。
-3. AI 玩家测试夹具：模型边界注入，任务均经过生产 Agent 校验。
-"""
+"""测试工厂：数据对象、引擎场景和 AI 玩家；pytest 夹具在 tests/conftest.py。"""
 
 from copy import deepcopy
 from contextlib import asynccontextmanager
@@ -37,9 +27,7 @@ CHANNELS = {
 }
 
 
-
-
-# ---------- 1. 通用数据对象工厂 ----------
+# ---------- 数据对象 ----------
 
 def make_day(day, bids, pool, winner, winning_bid, collision_values, auction_score=0,
              is_void=False, super_bids=None):
@@ -80,20 +68,11 @@ def make_log(match_index=1, is_playoff=False, days=None, auction_scores=None, ga
     )
 
 
-def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None, total_scores=None):
-    """通过生产路径排名；默认总分只含拍卖分，调用方可显式加入命中分。
-
-    显式 scores_history 为已完成局分数；total_scores 与该历史的差额作为
-    当前局分数传给引擎，确保排序和名次也使用指定总分。
-    """
+def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None):
+    """通过生产路径排名；不给 scores_history 时总分只含拍卖分。"""
     if scores_history is None:
         scores_history = {name: list(scores) for name, scores in auction_scores_history.items()}
-    current_scores = None if total_scores is None else {
-        name: total_scores[name] - sum(scores_history[name]) for name in auction_scores_history
-    }
-    return compute_standings(
-        auction_scores_history, scores_history=scores_history, current_match_scores=current_scores,
-    )
+    return compute_standings(auction_scores_history, scores_history=scores_history)
 
 
 def history(**overrides):
@@ -139,7 +118,7 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
     )
 
 
-# ---------- 2. 引擎场景构造器 ----------
+# ---------- 引擎场景：策略只依赖 obs.day 和 obs.my_name，全员可共用 ----------
 
 def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=None,
                   game=TEST_GAME):
@@ -194,14 +173,14 @@ def run_scenario(table, default=0, super_strategies=None, capture=None, game=TES
     )
 
 
-# ---------- 3. AI 玩家测试夹具 ----------
+# ---------- AI 玩家：只替换模型输出，解析、校验和纠错走生产 Agent ----------
 
 ALL_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
 TEST_PREDICTIONS = [(name, 10) for name in ALL_NAMES]
 
 
 def fake_task_runner(script):
-    """脚本只模拟模型输出；严格 schema、规则、纠错均使用生产路径。"""
+    """按脚本依次给出模型回复；dict 写成文本格式，异常直接抛出，可调用项按收到的消息生成回复。"""
     queue = list(script)
     calls = []
 
@@ -264,5 +243,5 @@ def speech_reply(speech):
 
 
 def make_ai_obs(day=1, coins=6, game=TEST_GAME):
-    """AI 玩家测试的极简 Observation（Alpha 视角；解析测试只关心出价合法性）。"""
+    """Alpha 视角的 Observation。"""
     return make_obs(my_name="Alpha", day=day, coins=coins, game=game)
