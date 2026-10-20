@@ -15,13 +15,13 @@
 
 在 `config.yaml` 的 `llm.channels` 里加渠道，再在 `models.yaml` 里用 `provider` 引用它。`protocol` 取 `chat`、`responses` 或 `anthropic`。OpenAI 协议的渠道地址保留 `/v1`；Anthropic 渠道的地址不带 `/v1`，SDK 会自己追加 `/v1/messages`。
 
-每次请求允许的最大输出取自能力快照 `data/model_capabilities.json` 里该模型的最大输出；快照里没有时用 64000，启动时会显示预算提醒。推理档位按以下顺序确定：
+每次请求允许的最大输出取自能力快照 `data/model_capabilities.json` 里该模型的最大输出；快照里没有时用 64000。推理档位按以下顺序确定：
 
 1. 模型条目里写了 `reasoning_effort: low | medium | high`（只用于 chat 和 responses），就用它。
 2. 否则 chat 和 responses 模型的来源列出了 `medium`，就用 `medium`。
 3. 其余情况用渠道默认档位。
 
-改了 `models_dev` 来源或要更新能力数据时，同步快照（免费，联网读取 models.dev）：
+改了 `models_dev` 来源或要更新能力数据时，从 models.dev 同步快照：
 
 ```bash
 python -m auction_game.cli.sync_models                              # 预览差异
@@ -37,7 +37,7 @@ python main.py --seed 42                # Bot 比赛，固定种子
 python main.py --benchmark 50           # Bot 对照，两组各 50 场，不写日志
 ```
 
-离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空和加赛。`--test-model` 改用测试模型的配置，`--output 目录` 指定输出位置（目录须不存在或为空）。
+离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空和加赛。`--test-model` 改用测试模型的配置，`--output 目录` 指定输出位置。
 
 benchmark 的第一组全是随机 Bot；第二组是一个策略玩家对五个随机 Bot，策略玩家每天出 `min(出价上限, 当前余额)`，不用超级出价。报告里策略玩家和随机对手的平均分都取自第二组。
 
@@ -50,7 +50,7 @@ python main.py --ai
 
 `--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容。
 
-启动时会生成根目录的 `RULES.md`；生成失败就不启动。改了 `RULES.template.md` 或 `game.yaml` 后也可以手动生成或检查：
+启动时会生成根目录的 `RULES.md`。改了 `RULES.template.md` 或 `game.yaml` 后也可以手动生成或检查：
 
 ```bash
 python -m auction_game.game.rules          # 更新 RULES.md
@@ -79,8 +79,6 @@ AI 比赛默认单步：回车执行下一轮任务（如一轮出价或发言�
 - `data/matches/`：完整结算数据。
 - `data/players/<编号>.jsonl`：任务记录，含模型原始回复、thinking 和完整错误。
 
-私人对话和 `data/players/` 里有玩家的私有策略、记忆和 thinking，分享前请检查。比赛进行中用只读方式查看日志，免得编辑器保存时覆盖程序正在追加的内容。
-
 ## 分析
 
 ```bash
@@ -92,7 +90,7 @@ python -m auction_game.reporting.analyze "logs/场次目录"   # 指定场次，
 
 ## 连通检查
 
-**会调用真实服务，可能收费。** 每个模型最多请求一次，不重试，不建场次，收到非空回复就算通过并显示回复内容。
+**会调用真实服务，可能收费。** 每个模型最多请求一次，不重试，收到非空回复就算通过并显示回复内容。
 
 ```bash
 python -m auction_game.cli.check_llm --test-model         # 只查测试模型
@@ -104,8 +102,6 @@ python -m auction_game.cli.check_llm                      # 查常规阵容用�
 
 ## 常用调整
 
-改配置后下次启动生效。
-
 - 提示开关：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测；`prompts.enable_personas` 关掉后，模型看不到人设。两项都关适合做公平对照，角色名仍带模型身份。
-- 并发：`llm.max_concurrency`，1 为串行。渠道负载高时调低。
+- 并发：`llm.max_concurrency`，1 为串行。
 - 超时：`llm.timeout_seconds`，单次请求的秒数。
