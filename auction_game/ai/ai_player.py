@@ -11,7 +11,7 @@ from pydantic_ai.messages import (
 )
 
 from auction_game.ai import prompts
-from auction_game.ai.agent_execution import CallFailedError
+from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
 from auction_game.reporting.agent_log import AgentLog
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.game.game_rules import GameSettings
@@ -82,6 +82,9 @@ class AIPlayer(Player):
         except CallFailedError as exc:
             self.log.failure(entry, exc)
             raise
+        except TaskCancelledError as exc:
+            self.log.cancelled(entry, exc)
+            raise
         if reset:
             memory_message = f"{MEMORY_HEADER}\n{result.output['memory']}"
             entry["history_reset"] = memory_message
@@ -105,7 +108,7 @@ class AIPlayer(Player):
             self._pending_day1_bid = None
             return submission
         output = self._task("bid", prompts.bid_request(obs), "bid",
-                            f"第{len(obs.past_match_logs) + 1}局第{obs.day}天", coins=obs.my_coins)
+                            f"第 {len(obs.past_match_logs) + 1} 局第 {obs.day} 天", coins=obs.my_coins)
         return output["bid"], output["super_bid"]
 
     def give_speech(self, user_text: str, phase: str, context: str = "") -> str:

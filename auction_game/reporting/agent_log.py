@@ -9,7 +9,7 @@ import re
 
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
+from auction_game.ai.agent_execution import CallFailedError, ExecutionResult, TaskCancelledError
 from auction_game.ai.agent_tasks import render_task_result
 
 
@@ -67,12 +67,12 @@ def render_markdown_entry(entry: dict, title: str,
 
     标题只含中文和数字，链接锚点在各 Markdown 阅读器里一致。
     """
-    success = entry["status"] == "success"
+    status = entry["status"]
     lines = [f"## {title}"]
     if entry.get("reruns", 0):
-        lines.append("补跑后成功。" if success else "补跑仍失败。")
+        lines.append({"success": "补跑后成功。", "failed": "补跑仍失败。", "cancelled": "补跑时被取消。"}[status])
     if first_title:
-        lines.append(f"输入沿用[首次输入](#{first_title})；接续[上次记录](#{previous_title})。")
+        lines.append(f"输入与[首次输入](#{first_title})相同；上次失败见[{previous_title}](#{previous_title})。")
     else:
         inputs = _inputs(entry)
         if inputs:
@@ -80,10 +80,12 @@ def render_markdown_entry(entry: dict, title: str,
     corrections = sum(part["part_kind"] == "retry-prompt"
                       for message in entry["messages"] for part in message["parts"])
     if corrections:
-        lines.append(f"纠错 {corrections} 次，{'已通过' if success else '仍失败'}"
-                     f"（{_correction_reason(entry)}）。")
-    if not success:
+        outcome = {"success": "已通过", "failed": "仍失败", "cancelled": "未完成"}[status]
+        lines.append(f"纠错 {corrections} 次，{outcome}（{_correction_reason(entry)}）。")
+    if status == "failed":
         lines.append(f"> 失败原因：{_error_reason(entry)}。")
+    elif status == "cancelled":
+        lines.append("> 已取消：用户按 q 退出比赛，请求被中断。")
     if "result" in entry:
         lines.extend(render_task_result(entry["result"]))
     if "history_note" in entry:
@@ -118,6 +120,11 @@ class AgentLog:
                      "messages": ModelMessagesTypeAdapter.dump_python(error.messages, mode="json"),
                      "request_errors": error.request_errors,
                      "error": {"type": type(error).__name__, "message": str(error)}})
+
+    def cancelled(self, entry: dict, error: TaskCancelledError) -> None:
+        self._write({**entry, "status": "cancelled",
+                     "messages": ModelMessagesTypeAdapter.dump_python(error.messages, mode="json"),
+                     "request_errors": error.request_errors})
 
     def _write(self, entry: dict) -> None:
         self._task_number += 1

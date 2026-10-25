@@ -86,8 +86,9 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     entries = task_entries(paths.player(1))
     assert len(entries) == expected_calls
     assert [entry["phase"] for entry in entries[:3]] == ["opening_speech", "opening_plan", "bid"]
-    assert entries[2]["context"] == "第1局第2天"
-    assert not any(entry["context"].endswith("第1天") for entry in entries if entry["task"] == "bid")
+    assert [entry["context"] for entry in entries[:3]] == ["开局发言", "第 1 局策略规划（含首日出价）", "第 1 局第 2 天"]
+    assert not any(entry["context"].endswith("第 1 天") for entry in entries if entry["task"] == "bid")
+    assert {entry["context"] for entry in entries if entry["phase"] == "match_1_plan"} == {"第 2 局策略规划（含首日出价）"}
     assert not any(entry["phase"] == f"match_{len(matches)}_memory" for entry in entries)
     assert entries[-2]["phase"] == "final_speech" and entries[-1]["phase"] == "final_summary"
     for entry in entries:

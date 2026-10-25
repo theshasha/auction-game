@@ -209,7 +209,7 @@ def fake_task_runner(script):
         model.request_errors = []
         yield model
 
-    runner = TaskRunner(SimpleNamespace(open=open_model, settings={}))
+    runner = TaskRunner(SimpleNamespace(open=open_model, settings={}, signals=None))
     runner.calls = calls
     return runner
 

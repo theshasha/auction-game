@@ -45,7 +45,7 @@ class AISpeechDirector:
         speeches = self._run_round(label, lambda p: p.give_speech(
             prompts.opening_speech_request(), "opening_speech", label))
         self._publish_speeches(label, speeches)
-        plan_label = "第一局策略规划（含首日出价）"
+        plan_label = "第 1 局策略规划（含首日出价）"
         self._run_round(plan_label, lambda p: p.plan_strategy(
             prompts.opening_plan_request(self._others(speeches, p.name), self.game), "opening_plan", plan_label))
 
@@ -58,7 +58,7 @@ class AISpeechDirector:
         memory_label = f"第 {index} 局累计私有记忆"
         self._run_round(memory_label, lambda p: p.save_memory(
             prompts.memory_request(self._others(speeches, p.name)), f"match_{index}_memory", memory_label))
-        plan_label = "下一局策略规划（含首日出价）"
+        plan_label = f"第 {index + 1} 局策略规划（含首日出价）"
         self._run_round(plan_label, lambda p: p.plan_strategy(
             prompts.next_match_plan_request(standings, self.game, index + 1), f"match_{index}_plan", plan_label))
 

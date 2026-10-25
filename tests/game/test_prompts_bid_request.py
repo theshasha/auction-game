@@ -99,14 +99,14 @@ class TestBidRequest:
         assert "昨日公布：乙 以 5 金币的正常出价获胜，拍卖得分 1 分。\n\n昨日无人命中。" in text
         assert "昨日出价明细与当前金币（已含今日工资）：\n\n" in text
         assert (
-            "| 玩家 | 正常出价 | 超级出价 | 命中情况 | 当前金币 |\n"
-            "| --- | --- | --- | --- | --- |\n"
-            "| 甲 | 6 | — | — | 10 |\n"
-            "| 乙 | 5 | — | — | 8 |\n"
-            "| 丙 | 4 | — | — | 9 |\n"
-            "| 丁 | 3 | — | — | 7 |\n"
-            "| 戊 | 2 | — | — | 6 |\n"
-            "| 己 | 1 | — | — | 0 |\n\n"
+            "| 玩家 | 正常出价 | 正常出价结果 | 超级出价 | 命中情况 | 当前金币 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| 甲 | 6 | 退款 | — | — | 10 |\n"
+            "| 乙 | 5 | 获胜 | — | — | 8 |\n"
+            "| 丙 | 4 | 退款 | — | — | 9 |\n"
+            "| 丁 | 3 | 退款 | — | — | 7 |\n"
+            "| 戊 | 2 | 退款 | — | — | 6 |\n"
+            "| 己 | 1 | 退款 | — | — | 0 |\n\n"
         ) in text
         assert "- 今日奖池：1 分。\n- 你的金币余额：10（已含今日工资，正常出价上限：7）。\n- 本局得分：7 分。" in text
         assert "全员累计总分：甲 23 分、" in text
@@ -114,7 +114,7 @@ class TestBidRequest:
         assert text.index("昨日公布") < text.index("你的金币余额")
 
     def test_bids_detail_announcement_with_super_values_and_hits(self):
-        # 昨日出价明细（全透明）：全场正常出价数值 + 各人超级出价数值与命中标注
+        # 昨日出价明细（全透明）：全场正常出价数值与结果 + 各人超级出价数值与命中标注
         text = prompts.bid_request(make_prompt_obs(
             day=2,
             today_history=[history(
@@ -124,20 +124,21 @@ class TestBidRequest:
                     {"player": "丙", "bid": 4, "super_bid": 6},
                     {"player": "丁", "bid": 3, "super_bid": 5},
                     {"player": "戊", "bid": 2, "super_bid": None},
-                    {"player": "己", "bid": 0, "super_bid": None},
+                    {"player": "己", "bid": 2, "super_bid": None},
                 ],
                 super_uses=[{"player": "丙", "value": 6, "hit": True},
                             {"player": "丁", "value": 5, "hit": False}],
+                collision_values=[2, 6],
             )],
         ))
         lines = text.splitlines()
 
-        assert "| 甲 | 6 | — | — | 7 |" in lines
-        assert "| 乙 | 5 | — | — | 7 |" in lines
-        assert "| 丙 | 4 | 6 | 命中 | 7 |" in lines
-        assert "| 丁 | 3 | 5 | 落空 | 7 |" in lines
-        assert "| 戊 | 2 | — | — | 7 |" in lines
-        assert "| 己 | 0 | — | — | 7 |" in lines
+        assert "| 甲 | 6 | 撞车 | — | — | 7 |" in lines  # 被狙中也算撞车
+        assert "| 乙 | 5 | 获胜 | — | — | 7 |" in lines
+        assert "| 丙 | 4 | 退款 | 6 | 命中 | 7 |" in lines
+        assert "| 丁 | 3 | 退款 | 5 | 落空 | 7 |" in lines
+        assert "| 戊 | 2 | 撞车 | — | — | 7 |" in lines
+        assert "| 己 | 2 | 撞车 | — | — | 7 |" in lines
         assert "昨日命中得分：丙 2 分。" in lines
 
     def test_void_day_announcement_has_no_winner_wording(self):
@@ -237,18 +238,21 @@ class TestEngineScorePrompts:
     """真实结算后的次日观察，验证提示与引擎分数一致。"""
 
     @pytest.mark.parametrize(
-        "bids, super_bids, winner, scores, personal_result",
+        "bids, super_bids, winner, scores, outcomes, personal_result",
         [
             ([4, 6, 2, 1, 0, 0], {"甲": 6}, "甲", [7, 0, 0, 0, 0, 0],
+             ["获胜", "撞车", "退款", "退款", "撞车", "撞车"],
              "正常出价获胜，扣除 4 金币"),
             ([4, 4, 2, 2, 0, 0], {"戊": 4, "己": 4}, None, [0, 0, 0, 0, 5, 5],
+             ["撞车"] * 6,
              "所有正常出价都撞车，昨天流局，你的正常出价扣除 0 金币"),
             ([4, 3, 2, 1, 0, 0], {"甲": 2, "乙": 4}, "乙", [5, 7, 0, 0, 0, 0],
+             ["撞车", "获胜", "撞车", "退款", "撞车", "撞车"],
              "正常出价被超级出价命中，扣除 4 金币"),
         ],
         ids=["winner-also-hits", "void-multiple-hits-on-natural-collision", "sniped-also-hits"],
     )
-    def test_yesterday_points_match_engine(self, bids, super_bids, winner, scores, personal_result):
+    def test_yesterday_points_match_engine(self, bids, super_bids, winner, scores, outcomes, personal_result):
         game = replace(TEST_GAME, daily_pool=(2, 3), super_hit_score=5)
         captured = {}
         log = run_scenario(
@@ -271,13 +275,14 @@ class TestEngineScorePrompts:
             total_line = next(line for line in text.splitlines() if line.startswith("全员累计总分："))
             for player, score in expected_scores.items():
                 assert f"{player} {score} 分" in total_line
-            for player, bid in zip(NAMES, bids):
+            for player, bid, outcome in zip(NAMES, bids, outcomes):
                 row = next(line for line in text.splitlines() if line.startswith(f"| {player} |"))
                 cells = [cell.strip() for cell in row.strip("|").split("|")]
-                assert cells[1] == str(bid)
+                assert cells[1:3] == [str(bid), outcome]
                 assert cells[-1] == str(obs.all_coins[player])
             if name in super_bids:
-                assert f"| {name} | {bids[NAMES.index(name)]} | {super_bids[name]} | 命中 |" in text
+                index = NAMES.index(name)
+                assert f"| {name} | {bids[index]} | {outcomes[index]} | {super_bids[name]} | 命中 |" in text
                 assert "- 超级出价花费 2 金币。\n- 获得 3 金币悬赏。" in text
         observer = "戊" if winner is None else "甲"
         assert personal_result in prompts.bid_request(captured[observer][1])

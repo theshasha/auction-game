@@ -59,7 +59,7 @@ def test_non_integer_super_bid_gets_correction(value):
     assert "super_bid" in json.dumps(h.requests[1][1]["messages"][-1], ensure_ascii=False)
 
 
-def test_hallucinated_tool_call_fails_without_retry():
+def test_hallucinated_tool_call_is_resent_as_incomplete_stream():
     def chunk(delta, finish=None):
         event = {"id": "chat_1", "object": "chat.completion.chunk", "created": 1, "model": MODEL,
                  "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
@@ -67,8 +67,8 @@ def test_hallucinated_tool_call_fails_without_retry():
 
     call = {"index": 0, "id": "call_1", "type": "function",
             "function": {"name": "bid", "arguments": json.dumps(GOOD)}}
-    h = Harness("chat", [[chunk({"role": "assistant", "tool_calls": [call]}),
-                          chunk({}, "tool_calls"), b"data: [DONE]\n\n"]])
+    tool_call = [chunk({"role": "assistant", "tool_calls": [call]}), chunk({}, "tool_calls"), b"data: [DONE]\n\n"]
+    h = Harness("chat", [list(tool_call) for _ in range(4)])
     with pytest.raises(CallFailedError, match="IncompleteStream"):
         TaskRunner(h.factory)("bid", "today", [], game=TEST_GAME, coins=6)
-    assert len(h.requests) == h.closes == 1
+    assert len(h.requests) == 4 and h.closes == 1

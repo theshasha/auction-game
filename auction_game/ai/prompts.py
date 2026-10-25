@@ -115,14 +115,21 @@ def _my_last_day_line(obs: Observation) -> str:
 
 
 def _yesterday_bids_table(obs: Observation, super_hit_by_player: dict[str, bool]) -> str:
-    """昨日报价与当前余额按玩家对齐。"""
-    headers = ["玩家", "正常出价", "超级出价", "命中情况", "当前金币"]
+    """昨日报价与当前余额按玩家对齐；正常出价结果与局末出价日志的判定一致。"""
+    yesterday = obs.today_history[-1]
+    headers = ["玩家", "正常出价", "正常出价结果", "超级出价", "命中情况", "当前金币"]
     lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
-    for detail in obs.today_history[-1]["bids_detail"]:
+    for detail in yesterday["bids_detail"]:
         name = detail["player"]
+        if name == yesterday["winner"]:
+            outcome = "获胜"
+        elif detail["bid"] in yesterday["collision_values"]:
+            outcome = "撞车"
+        else:
+            outcome = "退款"
         super_bid = detail["super_bid"]
         hit = "—" if super_bid is None else ("命中" if super_hit_by_player.get(name, False) else "落空")
-        cells = [name, str(detail["bid"]), "—" if super_bid is None else str(super_bid), hit,
+        cells = [name, str(detail["bid"]), outcome, "—" if super_bid is None else str(super_bid), hit,
                  str(obs.all_coins[name])]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)

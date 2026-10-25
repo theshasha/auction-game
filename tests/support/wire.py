@@ -124,7 +124,7 @@ class Harness:
         self.factory = ModelFactory(self.protocol, MODEL,
                                     "https://offline.invalid/anthropic" if self.protocol == "anthropic"
                                     else "https://offline.invalid/v1", "fake-key", 3.0, 123,
-                                    Transport(self.handle))
+                                    Transport(self.handle), retry_delay=0)
 
     async def handle(self, request):
         assert request.url.host == "offline.invalid"
@@ -133,6 +133,8 @@ class Harness:
         item = self.script.pop(0)
         if item == "connect":
             raise http.ConnectError("offline", request=request)
+        if item == "hang":  # 模拟进行中的请求，只能被取消
+            await asyncio.Event().wait()
         if isinstance(item, int):
             return http.Response(item, json={"error": {"type": "invalid_request_error", "message": "bad config"}})
         if isinstance(item, list):  # 原始 SSE 块

@@ -1,54 +1,46 @@
 """生产 TaskRunner 的 HTTP 异常分类、流隔离与客户端生命周期。"""
 
+import asyncio
 from dataclasses import replace
 from copy import deepcopy
 import json
+import threading
+import time
 
 import pytest
-from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart
+from pydantic_ai.models.function import FunctionModel
 
-from auction_game.ai.agent_execution import CallFailedError, OutputFailedError
+from auction_game.ai import llm_client
+from auction_game.ai.agent_execution import CallFailedError, OutputFailedError, TaskCancelledError
 from auction_game.ai.agent_tasks import TaskRunner
+from auction_game.ai.llm_client import BufferedRequest, RunSignals, wait_before_retry
 from tests.support.factories import CHANNELS, TEST_GAME, make_player, make_ai_obs, text_reply, task_entries
-from auction_game.ai.llm_client import retryable_request_error
-from tests.support.wire import Harness, PROTOCOLS, reply, GOOD
-
-
-@pytest.mark.parametrize("status,expected", [
-    (400, False), (408, True), (429, True), (500, True), (600, False),
-])
-def test_status_retry_classification(status, expected):
-    assert retryable_request_error(ModelHTTPError(status, "alias")) is expected
+from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, GOOD
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("status,retryable", [(401, False), (503, True)])
-def test_sdk_status_retry_and_client_close(protocol, status, retryable, tmp_path):
-    h = Harness(protocol, [status, reply()])
+@pytest.mark.parametrize("status", [400, 401, 422, 429, 503])
+def test_any_status_is_resent_three_times_and_client_closes(protocol, status, tmp_path):
+    h = Harness(protocol, [status, status, status, reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    if retryable:
-        assert player.decide_bid(make_ai_obs()) == (2, None)
-    else:
-        with pytest.raises(CallFailedError):
-            player.decide_bid(make_ai_obs())
-        assert len(player.messages) == 1
-    assert len(h.requests) == (2 if retryable else 1)
+    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert len(h.requests) == 4
     assert h.closes == 1 and all(s.closed for s in h.streams)
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-@pytest.mark.parametrize("fault", ["connect", "stream", "limit", "missing"])
+@pytest.mark.parametrize("fault", ["connect", "stream", "limit", "missing", 401])
 def test_failed_flow_keeps_history_and_audits_no_partial_reply(protocol, fault, tmp_path):
-    item = (fault if fault == "connect" else reply(broken=True, ending="missing") if fault == "stream"
+    item = (fault if fault in ("connect", 401) else reply(broken=True, ending="missing") if fault == "stream"
             else reply(ending=fault))
-    h = Harness(protocol, [item, deepcopy(item)])
+    h = Harness(protocol, [deepcopy(item) for _ in range(4)])
     player = make_player(TaskRunner(h.factory), tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(CallFailedError):
         player.decide_bid(make_ai_obs())
     assert player.messages == before and player._pending_day1_bid is None
-    assert len(h.requests) == (2 if fault in ("connect", "stream") else 1)
+    assert len(h.requests) == 4
     entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert not any(isinstance(p, TextPart) for m in audit for p in m.parts)
@@ -87,7 +79,7 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_success_then_failure_in_new_loop_keeps_previous_state_and_closes(protocol, tmp_path):
-    h = Harness(protocol, ["connect", reply(), 400])
+    h = Harness(protocol, ["connect", reply(), 400, 400, 400, 400])
     player = make_player(TaskRunner(h.factory), tmp_path)
     player.plan_strategy("plan", "opening_plan")
     before = deepcopy(player.messages), player._pending_day1_bid
@@ -98,7 +90,7 @@ def test_success_then_failure_in_new_loop_keeps_previous_state_and_closes(protoc
     assert all(loop.is_closed() for loop in h.loops)
     entries = task_entries(player.log.path)
     assert [[(e["request"], e["attempt"]) for e in entry["request_errors"]] for entry in entries] == [
-        [(1, 1)], [(1, 1)]]
+        [(1, 1)], [(1, 1), (1, 2), (1, 3), (1, 4)]]
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
@@ -118,8 +110,7 @@ def test_empty_complete_response_uses_one_output_correction(protocol, task):
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol, tmp_path):
-    h = Harness(protocol, [reply(dict(GOOD, bid="2")), reply(broken=True, ending="missing"),
-                           reply(broken=True, ending="missing")])
+    h = Harness(protocol, [reply(dict(GOOD, bid="2"))] + [reply(broken=True, ending="missing")] * 4)
     player = make_player(TaskRunner(h.factory), tmp_path)
     with pytest.raises(CallFailedError):
         player.decide_bid(make_ai_obs())
@@ -127,15 +118,92 @@ def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol,
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
         text_reply(dict(GOOD, bid="2"))]
-    assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(2, 1), (2, 2)]
+    assert [(e["request"], e["attempt"]) for e in entry["request_errors"]] == [(2, 1), (2, 2), (2, 3), (2, 4)]
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "纠错 1 次，仍失败" in markdown
-    assert len(h.requests) == 3 and len(player.messages) == 1 and h.closes == 1
+    assert len(h.requests) == 5 and len(player.messages) == 1 and h.closes == 1
 
 
-def test_non_transport_model_api_error_is_not_retryable():
-    from pydantic_ai.exceptions import ModelAPIError
-    assert not retryable_request_error(ModelAPIError("alias", "provider configuration failure"))
+def test_each_resend_waits_retry_delay(monkeypatch, tmp_path):
+    delays = []
+
+    async def record(delay, signals):
+        delays.append(delay)
+        return True
+
+    monkeypatch.setattr(llm_client, "wait_before_retry", record)
+    h = Harness("chat", ["connect", 503, reply()])
+    player = make_player(TaskRunner(replace(h.factory, retry_delay=10)), tmp_path)
+    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert delays == [10, 10] and len(h.requests) == 3
+
+
+def test_program_error_is_not_resent():
+    calls = []
+
+    async def stream(messages, info):
+        calls.append(messages)
+        raise TypeError("bug in adapter")
+        yield ""
+
+    model = BufferedRequest(FunctionModel(stream_function=stream), attempts=4, retry_delay=0, signals=None)
+    with pytest.raises(TypeError):
+        asyncio.run(run(make_agent(model)))
+    assert len(calls) == 1
+
+
+def test_paused_failure_is_not_resent(tmp_path):
+    signals = RunSignals()
+    signals.paused.set()
+    h = Harness("chat", ["connect", reply()])
+    player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
+    with pytest.raises(CallFailedError):
+        player.decide_bid(make_ai_obs())
+    assert len(h.requests) == 1
+
+
+def test_correction_is_still_sent_while_paused(tmp_path):
+    signals = RunSignals()
+    signals.paused.set()
+    h = Harness("chat", [reply(dict(GOOD, bid="2")), reply()])
+    player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
+    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert len(h.requests) == 2
+
+
+def test_pause_ends_retry_wait_early():
+    signals = RunSignals()
+    threading.Timer(0.05, signals.paused.set).start()
+    started = time.monotonic()
+    assert asyncio.run(wait_before_retry(10, signals)) is False
+    assert time.monotonic() - started < 2
+    signals.paused.clear()
+    assert asyncio.run(wait_before_retry(0, signals)) is True
+
+
+@pytest.mark.parametrize("script,texts", [
+    (["hang"], []),
+    ([reply(dict(GOOD, bid="2")), "hang"], [text_reply(dict(GOOD, bid="2"))]),
+    (["connect", reply()], []),
+], ids=["in-flight", "during-correction", "during-retry-wait"])
+def test_cancel_interrupts_task_and_logs_cancelled(script, texts, tmp_path):
+    signals = RunSignals()
+    h = Harness("chat", script)
+    player = make_player(TaskRunner(replace(h.factory, retry_delay=10, signals=signals)), tmp_path)
+    before = deepcopy(player.messages)
+    threading.Timer(0.05, signals.cancelled.set).start()
+    started = time.monotonic()
+    with pytest.raises(TaskCancelledError):
+        player.decide_bid(make_ai_obs())
+    assert time.monotonic() - started < 2
+    assert player.messages == before and h.closes == 1
+    entry = task_entries(player.log.path)[-1]
+    assert entry["status"] == "cancelled" and "error" not in entry and "result" not in entry
+    audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
+    assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == texts
+    assert len(entry["request_errors"]) == (1 if script[0] == "connect" else 0)
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
+    assert markdown.rstrip().endswith("> 已取消：用户按 q 退出比赛，请求被中断。\n\n---")
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

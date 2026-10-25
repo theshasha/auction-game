@@ -100,6 +100,7 @@ class DemoFactory:
     opened: int = 0
     closed: int = 0
     calls: int = 0
+    signals: None = None  # 离线控制器不交互，没有暂停和取消
 
     async def stream(self, messages, info):
         self.calls += 1

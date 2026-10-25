@@ -1,10 +1,12 @@
-"""三协议模型工厂：完整流检查及每请求至多一次基础设施重试。"""
+"""三协议模型工厂：完整流检查，请求失败后等待并重发。"""
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import os
+import threading
 
 from dotenv import load_dotenv
 import httpx2 as http
@@ -12,7 +14,7 @@ from anthropic import AsyncAnthropic
 import anthropic
 from openai import AsyncOpenAI
 import openai
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models import CompletedStreamedResponse
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
@@ -26,27 +28,43 @@ class IncompleteStream(RuntimeError):
     """输出截断或缺少成功结束标记。"""
 
 
-def retryable_request_error(exc: Exception) -> bool:
-    """超时、限流、5xx 和网络错误可以重试。"""
-    if isinstance(exc, ModelHTTPError):
-        return exc.status_code in (408, 429) or 500 <= exc.status_code <= 599
-    if isinstance(exc, ModelAPIError) and exc.__cause__ is not None:
-        return retryable_request_error(exc.__cause__)
-    return isinstance(exc, (openai.APIConnectionError, anthropic.APIConnectionError,
-                            http.NetworkError, http.TimeoutException, http.RemoteProtocolError))
+# 请求失败的异常：HTTP 错误、SDK 调用错误、网络错误、截断或未正常结束的流。其余异常是程序错误。
+REQUEST_ERRORS = (ModelAPIError, IncompleteStream, openai.APIError, anthropic.APIError, http.TransportError)
+POLL_SECONDS = 0.1
+
+
+@dataclass(frozen=True)
+class RunSignals:
+    """控制器在线程间传给任务的信号：暂停后不再重发，取消时中断进行中的请求。"""
+
+    paused: threading.Event = field(default_factory=threading.Event)
+    cancelled: threading.Event = field(default_factory=threading.Event)
+
+
+async def wait_before_retry(delay: float, signals: RunSignals | None) -> bool:
+    """等待 delay 秒；期间暂停则提前返回 False。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + delay
+    while (remaining := deadline - loop.time()) > 0:
+        if signals is not None and signals.paused.is_set():
+            return False
+        await asyncio.sleep(min(POLL_SECONDS, remaining))
+    return signals is None or not signals.paused.is_set()
 
 
 class BufferedRequest(WrapperModel):
-    """完整消费流并确认正常结束后才交付；每个请求至多重发一次。
+    """完整消费流并确认正常结束后才交付；请求失败后等待 retry_delay 秒重发，暂停后不再重发。
 
     Anthropic 公开响应只提供 stop_reason，原始 message_stop 缺失时无法单独识别。
     """
 
-    def __init__(self, wrapped, *, attempts=2):
+    def __init__(self, wrapped, *, attempts: int, retry_delay: float, signals: RunSignals | None):
         super().__init__(wrapped)
         self.request_errors: list[dict] = []
         self.attempts = attempts
-        self._request_number = 0  # 每个任务新建包装器；网络重发共用同一请求序号
+        self.retry_delay = retry_delay
+        self.signals = signals
+        self._request_number = 0  # 每个任务新建包装器；重发共用同一请求序号
 
     @asynccontextmanager
     async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
@@ -63,11 +81,10 @@ class BufferedRequest(WrapperModel):
                 if response.finish_reason != "stop":
                     raise IncompleteStream(f"finish_reason={response.finish_reason!r}")
                 break
-            except Exception as exc:
-                retryable = retryable_request_error(exc)
-                self.request_errors.append({"request": request_number, "attempt": attempt, "type": type(exc).__name__,
-                                            "message": str(exc), "retryable": retryable})
-                if attempt == self.attempts or not retryable:
+            except REQUEST_ERRORS as exc:
+                self.request_errors.append({"request": request_number, "attempt": attempt,
+                                            "type": type(exc).__name__, "message": str(exc)})
+                if attempt == self.attempts or not await wait_before_retry(self.retry_delay, self.signals):
                     raise
         # yield 在重试范围外：Agent 要求纠错时发新请求，不重发已完成的请求。
         yield CompletedStreamedResponse(response, model_request_parameters=model_request_parameters)
@@ -87,8 +104,10 @@ class ModelFactory:
     timeout: float
     max_tokens: int
     transport: http.AsyncBaseTransport | None = None
-    request_attempts: int = 2  # 连通检查只请求一次；比赛每个请求最多尝试两次。
+    request_attempts: int = 4  # 比赛每个请求首次加重发 3 次；连通检查只请求一次。
     model_settings: dict = field(default_factory=dict)
+    retry_delay: float = 10
+    signals: RunSignals | None = None  # 比赛由控制器提供；连通检查和离线赛不需要
 
     @property
     def settings(self) -> dict:
@@ -114,7 +133,8 @@ class ModelFactory:
                 else:
                     model = OpenAIResponsesModel(self.model, provider=provider)
             # SDK 使用注入的 HTTP 客户端，由外层 async with 统一关闭，构造失败时也会关闭。
-            yield BufferedRequest(model, attempts=self.request_attempts)
+            yield BufferedRequest(model, attempts=self.request_attempts, retry_delay=self.retry_delay,
+                                  signals=self.signals)
 
 
 class MissingApiKeyError(RuntimeError):
@@ -133,8 +153,8 @@ def _require_env(name: str, provider: str) -> str:
 
 def make_model_factory(*, provider: str, channel: dict, model: str, protocol: str,
                        timeout: float, max_tokens: int, model_settings: dict,
-                       request_attempts: int = 2) -> ModelFactory:
+                       request_attempts: int = 4, signals: RunSignals | None = None) -> ModelFactory:
     """启动时读取密钥，缺密钥在创建日志前报错。"""
     return ModelFactory(protocol, model, channel["base_url"],
                         _require_env(channel["api_key_env"], provider), timeout, max_tokens,
-                        request_attempts=request_attempts, model_settings=model_settings)
+                        request_attempts=request_attempts, model_settings=model_settings, signals=signals)

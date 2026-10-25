@@ -1,6 +1,7 @@
 """控制器命令、闸门，以及轮级并发执行的暂停、补跑和回滚。"""
 
 import threading
+import time
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
@@ -18,10 +19,12 @@ from tests.support.factories import (
     fake_task_runner,
     text_reply,
     make_ai_obs,
+    task_entries,
 )
 from auction_game.controller import Controller, RoundTask, TournamentAborted, run_parallel_round
 from auction_game import controller as controller_module
-from auction_game.ai.agent_execution import CallFailedError
+from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
+from auction_game.ai.agent_tasks import TaskRunner
 
 
 @contextmanager
@@ -481,8 +484,7 @@ class TestParallelRound:
             assert isinstance(outcome.get("error"), TournamentAborted)
             assert calls == [1]
 
-    def test_quit_drains_inflight_rolls_back_and_does_not_dispatch_more(self):
-        release = threading.Event()
+    def test_quit_cancels_inflight_rolls_back_and_does_not_dispatch_more(self):
         started = threading.Event()
         controller = Controller(mode="continuous", max_concurrency=1, announce=lambda _: None)
 
@@ -498,23 +500,57 @@ class TestParallelRound:
                 self.value = 0
 
             def run(self):
-                started.set()
-                assert release.wait(timeout=5)
                 self.value = 1
-                return 1
+                started.set()
+                # 模拟执行器：只有取消信号能结束进行中的请求。
+                assert controller.signals.cancelled.wait(timeout=5)
+                raise TaskCancelledError()
 
         participant = Participant()
         tasks = [RoundTask("first", participant.run, participant),
                  RoundTask("unstarted", lambda: pytest.fail("q 后不得派发"))]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "中止"), release) as (thread, outcome):
+        with running(controller, lambda: run_parallel_round(tasks, controller, "中止")) as (thread, outcome):
             assert started.wait(timeout=5)
             controller.offer_command("q")
-            assert thread.is_alive()
-            release.set()
             thread.join(timeout=5)
             assert isinstance(outcome.get("error"), TournamentAborted)
             assert participant.value == 0
-            assert participant.restored == [None]
+            assert participant.restored == [None, None]  # 取消时一次，中止整轮时一次
+
+    def test_pause_signal_follows_pause_and_resume(self):
+        controller = Controller(mode="continuous", announce=lambda _: None)
+        controller.offer_command("p")
+        assert controller.signals.paused.is_set() and not controller.signals.cancelled.is_set()
+        controller.offer_command("")
+        controller.wait_for_turn("恢复")
+        assert not controller.signals.paused.is_set()
+
+    @pytest.mark.parametrize("pause_first", [False, True], ids=["q", "p-then-q"])
+    def test_quit_interrupts_real_request_and_logs_cancelled(self, pause_first, tmp_path):
+        from tests.support.wire import Harness
+
+        controller = Controller(mode="continuous", announce=lambda _: None)
+        h = Harness("chat", ["hang"])
+        runner = TaskRunner(replace(h.factory, signals=controller.signals))
+        player = make_named_player("Alpha", runner, tmp_path)
+        before = player.checkpoint()
+        tasks = [RoundTask("Alpha", lambda: player.decide_bid(make_ai_obs(day=2)), player)]
+        with running(controller, lambda: run_parallel_round(tasks, controller, "出价")) as (thread, outcome):
+            deadline = time.monotonic() + 5
+            while not h.requests and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert h.requests
+            if pause_first:
+                controller.offer_command("p")
+                thread.join(timeout=0.3)
+                assert thread.is_alive()  # 暂停不打断进行中的请求
+            controller.offer_command("q")
+            thread.join(timeout=2)
+            assert not thread.is_alive()
+            assert isinstance(outcome.get("error"), TournamentAborted)
+        assert player.checkpoint() == before
+        assert [entry["status"] for entry in task_entries(player.log.path)] == ["cancelled"]
+        assert "> 已取消：用户按 q 退出比赛，请求被中断。" in player.log.readable_path.read_text(encoding="utf-8")
 
     def test_program_error_propagates_after_pause(self):
         controller = Controller(mode="continuous", announce=lambda _: None)

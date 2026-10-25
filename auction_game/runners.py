@@ -39,7 +39,7 @@ def run_bots(seed) -> int:
     return 0
 
 
-def make_task_runners(config, player_configs, model_factory, runner=TaskRunner) -> dict:
+def make_task_runners(config, player_configs, model_factory, runner=TaskRunner, signals=None) -> dict:
     """为每名玩家创建任务入口；缺密钥在这里报错，早于创建场次目录。"""
     llm = config["llm"]
     return {pc["name"]: runner(model_factory(
@@ -50,6 +50,7 @@ def make_task_runners(config, player_configs, model_factory, runner=TaskRunner) 
         protocol=pc["protocol"],
         max_tokens=pc["max_tokens"],
         model_settings=pc["model_settings"],
+        signals=signals,
     )) for pc in player_configs}
 
 
@@ -59,7 +60,9 @@ def run_ai(test_model: bool = False) -> int:
         config, player_configs = load_configuration(test_model=test_model)
         game = load_game_settings()
         sync_root_rules(game)
-        task_runners = make_task_runners(config, player_configs, make_model_factory)
+        controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
+        task_runners = make_task_runners(config, player_configs, make_model_factory,
+                                         signals=controller.signals)
     except (ConfigurationError, MissingApiKeyError) as exc:
         print(f"[配置错误] {exc}")
         return 1
@@ -80,7 +83,6 @@ def run_ai(test_model: bool = False) -> int:
     if warned:
         print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
               "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
-    controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
     return play_ai(config, player_configs, game, task_runners, controller,
                    run_dir=run_dir, run_type=run_type, test_model=test_model, start_reader=True)
 
@@ -132,7 +134,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
 
     def bid_collector(observations):
         sample_obs = observations[0][1]  # 同一轮内所有玩家的局/天相同
-        label = f"第{len(sample_obs.past_match_logs) + 1}局第{sample_obs.day}天出价"
+        label = f"第 {len(sample_obs.past_match_logs) + 1} 局第 {sample_obs.day} 天出价"
         tasks = [
             RoundTask(
                 key=player.name,

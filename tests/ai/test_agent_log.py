@@ -56,7 +56,7 @@ def test_plan_has_one_human_submission_and_cached_day_one_writes_nothing(tmp_pat
 
 
 def test_failures_and_recovery_append_links_to_first_input(tmp_path):
-    h = Harness("chat", [401, 401, reply()])
+    h = Harness("chat", [401] * 8 + [reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
     md_path = player.log.readable_path
     prefixes = []
@@ -70,8 +70,9 @@ def test_failures_and_recovery_append_links_to_first_input(tmp_path):
     assert markdown.count("### 输入原文") == 1
     assert markdown.count("补跑仍失败。") == markdown.count("补跑后成功。") == 1
     assert markdown.count("鉴权失败（HTTP 401）") == 2
-    assert markdown.count("首次输入](#第1局第2天每日出价)") == 2
-    assert "上次记录](#第1局第2天每日出价补跑1)" in markdown
+    assert markdown.count("输入与[首次输入](#第1局第2天每日出价)相同") == 2
+    assert "上次失败见[第1局第2天每日出价](#第1局第2天每日出价)。" in markdown
+    assert "上次失败见[第1局第2天每日出价补跑1](#第1局第2天每日出价补跑1)。" in markdown
     entries = task_entries(player.log.path)
     assert [entry["status"] for entry in entries] == ["failed", "failed", "success"]
     assert [entry["reruns"] for entry in entries] == [0, 1, 2]
@@ -94,25 +95,26 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
     assert "首次无效策略" in audit and "最终策略原文" in audit and "retry-prompt" in audit
 
 
-@pytest.mark.parametrize("content,reason,success", [
-    ("正常出价 8 超过当前余额 4", "正常出价 8 超过当前余额 4", True),
+@pytest.mark.parametrize("content,reason,status,outcome", [
+    ("正常出价 8 超过当前余额 4", "正常出价 8 超过当前余额 4", "success", "已通过"),
     ("decision 必须是 JSON 对象\n请重新提交完整结果。\n<strategy>\n策略正文\n</strategy>",
-     "decision 必须是 JSON 对象", False),
-    ("长错误" * 100, "长错误" * 33 + "长…", True),
+     "decision 必须是 JSON 对象", "failed", "仍失败"),
+    ("长错误" * 100, "长错误" * 33 + "长…", "success", "已通过"),
+    ("正常出价 8 超过当前余额 4", "正常出价 8 超过当前余额 4", "cancelled", "未完成"),
 ])
-def test_correction_reason_is_truncated_first_line(content, reason, success):
+def test_correction_reason_is_truncated_first_line(content, reason, status, outcome):
     from copy import deepcopy
 
-    entry = {"task_id": "task-0001", "phase": "bid", "context": "第1局第2天", "task": "bid",
-             "status": "success" if success else "failed", "request_errors": [],
+    entry = {"task_id": "task-0001", "phase": "bid", "context": "第 1 局第 2 天", "task": "bid",
+             "status": status, "request_errors": [],
              "messages": [{"kind": "response", "parts": []},
                           {"kind": "request", "parts": [{"part_kind": "retry-prompt", "content": content}]},
                           {"kind": "response", "parts": []}]}
-    if not success:
+    if status == "failed":
         entry["error"] = {"type": "OutputFailedError", "message": "budget exhausted"}
     before = deepcopy(entry)
     markdown = render_markdown_entry(entry, "第1局第2天每日出价")
-    assert f"纠错 1 次，{'已通过' if success else '仍失败'}（{reason}）。" in markdown
+    assert f"纠错 1 次，{outcome}（{reason}）。" in markdown
     assert "策略正文" not in markdown
     assert entry == before
 
@@ -139,14 +141,14 @@ def test_text_format_correction_uses_actual_sdk_retry_prompt(tmp_path):
 ])
 def test_phase_titles(phase, title, tmp_path):
     log = AgentLog("Alpha", tmp_path / "player.jsonl", readable_path=tmp_path / "player.md")
-    log.success({"phase": phase, "task": "bid", "context": "第3局第2天"}, ExecutionResult("原文", [], []))
+    log.success({"phase": phase, "task": "bid", "context": "第 3 局第 2 天"}, ExecutionResult("原文", [], []))
     assert f"\n## {title}\n" in log.readable_path.read_text(encoding="utf-8")
 
 
 def test_unknown_failure_is_short_and_audit_stays_complete(tmp_path):
     log = AgentLog("Alpha", tmp_path / "data" / "player.jsonl", readable_path=tmp_path / "players" / "player.md")
     message = "未识别故障\n" + "长错误" * 200
-    log.failure({"phase": "bid", "task": "bid", "context": "第1局第2天"}, CallFailedError(message))
+    log.failure({"phase": "bid", "task": "bid", "context": "第 1 局第 2 天"}, CallFailedError(message))
     markdown = log.readable_path.read_text(encoding="utf-8")
     assert "未识别故障" in markdown and message not in markdown
     assert json.loads(log.path.read_text(encoding="utf-8"))["error"]["message"] == message

@@ -1,7 +1,8 @@
 """轮级运行控制：限制同时运行的任务数，暂停时等已启动任务结束，成功结果只提交一次。
 
-控制器不取消 HTTP，暂停期间任务内部的网络重试和输出纠错仍会继续。
-服务或输出失败时恢复该任务的检查点，程序错误直接抛出。q 等已启动任务结束后，把整轮恢复到开始时的状态并中止比赛。
+暂停后任务不再重发失败的请求，进行中的请求和输出纠错照常完成。
+服务或输出失败时恢复该任务的检查点，程序错误直接抛出。q 通过取消信号马上中断已启动的任务，
+把整轮恢复到开始时的状态并中止比赛。
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from auction_game.ai.agent_execution import CallFailedError
+from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
+from auction_game.ai.llm_client import RunSignals
 
 
 class TournamentAborted(Exception):
@@ -40,6 +42,14 @@ class Controller:
         self._lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
         self._announce = announce
+        self.signals = RunSignals()  # 交给模型工厂，任务据此停止重发或中断请求
+
+    def _set_paused(self, paused: bool) -> None:
+        self._pause_requested = paused
+        if paused:
+            self.signals.paused.set()
+        else:
+            self.signals.paused.clear()
 
     def offer_command(self, command: str) -> None:
         message = None
@@ -48,12 +58,12 @@ class Controller:
                 # 已暂停时重复 p 不清除恢复意图。
                 if self._pause_requested:
                     return
-                self._pause_requested = True
+                self._set_paused(True)
                 self._resume_requested = False
                 self._mode = "step"
                 self._gate.set()
-                message = ("[暂停] 停止新任务，等待已启动任务结束。成功结果保留，内部重试可能继续。"
-                           "回车或 c：等任务结束后继续；q：等任务结束后撤销本轮并退出比赛。")
+                message = ("[暂停] 停止新任务和失败请求的重发，等进行中的请求结束。成功结果保留。"
+                           "回车或 c：等请求结束后继续；q：马上取消已启动的任务，撤销本轮并退出比赛。")
             elif command in ("", "c"):
                 if self._pause_requested:
                     self._resume_requested = True
@@ -68,8 +78,9 @@ class Controller:
                 if self._quit_requested:
                     return
                 self._quit_requested = True
+                self.signals.cancelled.set()
                 self._gate.set()
-                message = "[退出] 等已启动任务结束后撤销本轮并退出比赛。"
+                message = "[退出] 正在取消已启动的任务，撤销本轮并退出比赛。"
             else:
                 # 用 repr 显示终端混入的控制字符，便于判断按键是否被破坏。
                 message = f"[控制] 无法识别：{command!r}"
@@ -96,7 +107,8 @@ class Controller:
                 self._resume_requested = False
             wait = True
             if self._pause_requested and self._resume_requested:
-                self._pause_requested = self._resume_requested = False
+                self._set_paused(False)
+                self._resume_requested = False
                 self._gate.clear()
                 wait = False
             elif self._mode == "continuous" and not self._pause_requested:
@@ -116,7 +128,8 @@ class Controller:
                     raise TournamentAborted
                 if self._pause_requested and not self._resume_requested:
                     continue
-                self._pause_requested = self._resume_requested = False
+                self._set_paused(False)
+                self._resume_requested = False
                 return
 
 
@@ -179,6 +192,8 @@ def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: st
                         except CallFailedError as exc:
                             failed[task.key] = str(exc)
                             rollback(task)
+                        except TaskCancelledError:
+                            rollback(task)  # 只在 q 之后发生，下面随即中止比赛
 
             pending = [task for task in pending if task.key not in results]
             with controller._lock:
