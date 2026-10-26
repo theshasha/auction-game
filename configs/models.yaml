@@ -26,7 +26,7 @@ models:
       model: gpt-6-luna
   deepseek_flash:
     name: deepseek妹妹
-    model: deepseek-v4.1-flash
+    model: deepseek-flash
     provider: hub
     protocol: chat
     models_dev:
@@ -73,7 +73,7 @@ models:
       provider: deepseek
       model: deepseek-v4-pro
   grok:
-    name: GROK
+    name: GROK小姐
     model: grok-4.7
     provider: hub
     protocol: responses
