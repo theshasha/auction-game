@@ -16,7 +16,7 @@ from auction_game.ai.agent_execution import CallFailedError, OutputFailedError, 
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.ai.llm_client import BufferedRequest, RunSignals, wait_before_retry
 from tests.support.factories import CHANNELS, TEST_GAME, make_player, make_ai_obs, text_reply, task_entries
-from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, GOOD
+from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, sse, GOOD
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
@@ -46,6 +46,18 @@ def test_failed_flow_keeps_history_and_audits_no_partial_reply(protocol, fault, 
     assert not any(isinstance(p, TextPart) for m in audit for p in m.parts)
     assert entry["request_errors"] and h.closes == 1
     assert all(s.closed for s in h.streams)
+
+
+def test_anthropic_delta_without_usage_is_resent(tmp_path):
+    empty = [chunk for chunk in sse("anthropic", text="") if b"content_block" not in chunk]
+    empty = [chunk.replace(b', "usage": {"output_tokens": 3}', b"") for chunk in empty]
+    h = Harness("anthropic", [empty, reply()])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert len(h.requests) == 2 and h.requests[0][1] == h.requests[1][1]
+    errors = task_entries(player.log.path)[-1]["request_errors"]
+    assert [(e["request"], e["attempt"], e["type"]) for e in errors] == [(1, 1, "IncompleteStream")]
+    assert h.closes == 1 and all(s.closed for s in h.streams)
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
@@ -267,7 +279,9 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     factory = llm_client.make_model_factory(provider="channel-name-is-not-protocol", channel=channel,
                                            model="custom-model-alias", protocol=protocol,
                                            timeout=17, max_tokens=321,
-                                           model_settings={"openai_reasoning_effort": "high"} if protocol != "anthropic" else {})
+                                           model_settings={"anthropic_thinking": {"type": "adaptive"},
+                                                           "anthropic_effort": "high"} if protocol == "anthropic"
+                                           else {"openai_reasoning_effort": "high"})
     assert factory.base_url == channel["base_url"]
     factory = replace(factory, base_url=h.factory.base_url, transport=h.factory.transport)
     assert TaskRunner(factory)("summary", "ping", [], game=TEST_GAME).output == "configured reply"
@@ -279,7 +293,7 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     elif protocol == "chat":
         assert body["reasoning_effort"] == "high"
     else:
-        assert "thinking" not in body and "reasoning_effort" not in body
+        assert body["thinking"] == {"type": "adaptive"} and body["output_config"]["effort"] == "high"
     assert request.extensions["timeout"]["read"] == 17 and h.closes == 1
 
 

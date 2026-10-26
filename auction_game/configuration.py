@@ -128,10 +128,8 @@ def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=T
                 raise ConfigurationError(f"{path}：{field}.{prop} 必须是非空字符串")
         if model.get("protocol") not in PROTOCOLS:
             raise ConfigurationError(f"{path}：{field}.protocol 必须是 chat / responses / anthropic")
-        if "reasoning_effort" in model:
-            if (model["protocol"] not in ("chat", "responses")
-                    or model["reasoning_effort"] not in ("low", "medium", "high")):
-                raise ConfigurationError(f"{path}：{field}.reasoning_effort 仅支持 chat/responses 的 low / medium / high")
+        if "reasoning_effort" in model and model["reasoning_effort"] not in ("low", "medium", "high"):
+            raise ConfigurationError(f"{path}：{field}.reasoning_effort 仅支持 low / medium / high")
         source = model.get("models_dev")
         if (not isinstance(source, dict) or any(not isinstance(source.get(prop), str)
                 or not source[prop].strip() for prop in ("provider", "model"))):

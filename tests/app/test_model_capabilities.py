@@ -37,7 +37,7 @@ def test_explicit_reasoning_override_only_changes_selected_model(config_files, e
     assert normal == unchanged
 
 
-@pytest.mark.parametrize("protocol,effort", [("anthropic", "low"), ("responses", "auto")])
+@pytest.mark.parametrize("protocol,effort", [("anthropic", "auto"), ("responses", "auto")])
 def test_invalid_reasoning_override_rejected(config_files, protocol, effort):
     path = config_files[2]
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -127,8 +127,10 @@ def test_medium_uses_protocol_setting_without_manual_binding(config_files, proto
     catalog["substitute"]["protocol"] = protocol
     snapshot = build_snapshot(catalog, public_data(), "synthetic")
     effective = effective_capabilities("substitute", catalog["substitute"], snapshot)
-    assert effective["model_settings"] == ({} if protocol == "anthropic" else {"openai_reasoning_effort": "medium"})
-    assert effective["capabilities"]["reasoning_status"] == ("default" if protocol == "anthropic" else "medium")
+    assert effective["model_settings"] == ({"anthropic_thinking": {"type": "adaptive"}, "anthropic_effort": "medium"}
+                                           if protocol == "anthropic"
+                                           else {"openai_reasoning_effort": "medium"})
+    assert effective["capabilities"]["reasoning_status"] == "medium"
 
 
 @pytest.mark.parametrize("options", [[{"type": "toggle"}], [{"type": "budget_tokens", "min": 1, "max": 10000}],

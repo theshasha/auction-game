@@ -35,11 +35,14 @@ def effective_capabilities(key: str, model: dict, snapshot: dict) -> dict:
     settings = {}
     if "reasoning_effort" in model:
         status, detail = model["reasoning_effort"], "models.yaml 指定"
-    elif has_medium and model["protocol"] in ("chat", "responses"):
+    elif has_medium:
         status, detail = "medium", "来源列出 medium"
     else:
         status, detail = "default", "沿用渠道默认"
-    if status != "default":
+    if status != "default" and model["protocol"] == "anthropic":
+        # hub 的 claude-opus-5-5 收到 effort 时要求同时显式声明 adaptive thinking。
+        settings.update(anthropic_thinking={"type": "adaptive"}, anthropic_effort=status)
+    elif status != "default":
         settings["openai_reasoning_effort"] = status
     return {
         "max_tokens": output or DEFAULT_MAX_TOKENS,

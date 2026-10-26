@@ -14,3 +14,7 @@ llm:
     hub:
       base_url: https://hub.oaifree.com/v1
       api_key_env: HUB_API_KEY
+    # 同一个 hub 的 Anthropic 接口；Anthropic SDK 自己追加 /v1/messages。
+    hub_anthropic:
+      base_url: https://hub.oaifree.com
+      api_key_env: HUB_API_KEY

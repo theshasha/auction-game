@@ -11,6 +11,7 @@ import threading
 from dotenv import load_dotenv
 import httpx2 as http
 from anthropic import AsyncAnthropic
+from anthropic.types.beta import BetaRawMessageDeltaEvent
 import anthropic
 from openai import AsyncOpenAI
 import openai
@@ -50,6 +51,33 @@ async def wait_before_retry(delay: float, signals: RunSignals | None) -> bool:
             return False
         await asyncio.sleep(min(POLL_SECONDS, remaining))
     return signals is None or not signals.paused.is_set()
+
+
+class RequireDeltaUsage:
+    """逐个转交 Anthropic 流事件；message_delta 缺 usage 时按请求失败处理。
+
+    hub 偶尔返回没有内容、message_delta 也缺 usage 的流，SDK 解析时会抛 AttributeError。
+    用普通迭代器而不是异步生成器，放弃流时不留下待回收的生成器。
+    """
+
+    def __init__(self, stream):
+        self._iterator = aiter(stream)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        event = await anext(self._iterator)
+        if isinstance(event, BetaRawMessageDeltaEvent) and event.usage is None:
+            raise IncompleteStream("message_delta 缺少 usage")
+        return event
+
+
+class CheckedAnthropicModel(AnthropicModel):
+    async def _process_streamed_response(self, response, model_request_parameters, model_settings):
+        streamed = await super()._process_streamed_response(response, model_request_parameters, model_settings)
+        streamed._response = RequireDeltaUsage(response)
+        return streamed
 
 
 class BufferedRequest(WrapperModel):
@@ -119,7 +147,7 @@ class ModelFactory:
             if self.protocol == "anthropic":
                 sdk = AsyncAnthropic(base_url=self.base_url, api_key=self.api_key,
                                      http_client=client, max_retries=0)
-                model = AnthropicModel(self.model, provider=AnthropicProvider(anthropic_client=sdk))
+                model = CheckedAnthropicModel(self.model, provider=AnthropicProvider(anthropic_client=sdk))
             else:
                 sdk = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key,
                                   http_client=client, max_retries=0)

@@ -17,8 +17,8 @@
 
 每次请求允许的最大输出取自能力快照 `data/model_capabilities.json` 里该模型的最大输出；快照里没有时用 64000。推理档位按以下顺序确定：
 
-1. 模型条目里写了 `reasoning_effort: low | medium | high`（只用于 chat 和 responses），就用它。
-2. 否则 chat 和 responses 模型的来源列出了 `medium`，就用 `medium`。
+1. 模型条目里写了 `reasoning_effort: low | medium | high`，就用它。
+2. 否则模型的来源列出了 `medium`，就用 `medium`。
 3. 其余情况用渠道默认档位。
 
 新增模型、改了 `models_dev` 来源或要更新能力数据时，从 models.dev 同步快照：
