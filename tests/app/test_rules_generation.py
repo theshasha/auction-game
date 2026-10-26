@@ -1,6 +1,7 @@
 """在隔离目录验收规则命令的真实配置加载、生成与过期检查。"""
 
 import sys
+from dataclasses import replace
 
 import pytest
 import yaml
@@ -100,19 +101,23 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     assert document_path.read_bytes() == generated
 
 
-@pytest.mark.parametrize("entry,args,module,boundary", [
-    (runners.run_bots, (1,), runners, "make_run_dir"),
-    (runners.run_ai, (), runners, "make_model_factory"),
-    (benchmark.run_benchmark, (1,), benchmark, "run_tournament"),
-    (offline_demo.generate_demo, (), offline_demo, "make_run_dir"),
+@pytest.mark.parametrize("entry,kwargs,module,boundary", [
+    (runners.run_bots, {"seed": 1}, runners, "make_run_dir"),
+    (runners.run_ai, {}, runners, "make_model_factory"),
+    (runners.run_ai, {"test_model": True}, runners, "make_model_factory"),
+    (benchmark.run_benchmark, {"count": 1}, benchmark, "run_tournament"),
+    (offline_demo.generate_demo, {}, offline_demo, "make_run_dir"),
+    (offline_demo.generate_demo, {"test_model": True}, offline_demo, "make_run_dir"),
 ])
-def test_all_starts_sync_rules_before_logs_or_models(entry, args, module, boundary, tmp_path, monkeypatch):
+def test_all_starts_sync_rules_before_logs_or_models(entry, kwargs, module, boundary, tmp_path, monkeypatch):
+    """根规则始终按生产参数生成，测试模式的覆盖参数只用于本场。"""
     document = tmp_path / "RULES.md"
     document.write_text("旧规则", encoding="utf-8")
     names = ["配置甲", "配置乙"]
     monkeypatch.setattr(rules, "RULES_PATH", document)
     monkeypatch.setattr(rules, "load_players", lambda **kwargs: [{"name": name} for name in names])
-    monkeypatch.setattr(module, "load_game_settings", lambda: TEST_GAME)
+    monkeypatch.setattr(module, "load_game_settings", lambda test_model=False:
+                        replace(TEST_GAME, regular_matches=9) if test_model else TEST_GAME)
 
     class StartStopped(Exception):
         pass
@@ -123,4 +128,4 @@ def test_all_starts_sync_rules_before_logs_or_models(entry, args, module, bounda
 
     monkeypatch.setattr(module, boundary, stop_before_side_effect)
     with pytest.raises(StartStopped):
-        entry(*args)
+        entry(**kwargs)

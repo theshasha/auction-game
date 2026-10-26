@@ -97,10 +97,15 @@ def load_configuration(
     return config, players
 
 
-def load_game_settings(path: str | Path = GAME_PATH) -> GameSettings:
-    """读取比赛参数；报错带文件路径。"""
+def load_game_settings(path: str | Path = GAME_PATH, *, test_model: bool = False) -> GameSettings:
+    """读取比赛参数；test_model 时用 test_model_overrides 覆盖同名字段。报错带文件路径。"""
     path = ROOT_DIR / path
     data = _read_mapping(path)
+    overrides = data.pop("test_model_overrides", {})
+    if not isinstance(overrides, dict):
+        raise ConfigurationError(f"{path}：test_model_overrides 必须是键值配置")
+    if test_model:
+        data.update(overrides)
     try:
         return GameSettings.from_dict(data)
     except (ValueError, TypeError) as exc:

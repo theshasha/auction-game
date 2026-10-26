@@ -58,8 +58,8 @@ def run_ai(test_model: bool = False) -> int:
     """真实模型比赛；配置、规则或密钥有误时在创建场次目录前停止。"""
     try:
         config, player_configs = load_configuration(test_model=test_model)
-        game = load_game_settings()
-        sync_root_rules(game)
+        game = load_game_settings(test_model=test_model)
+        sync_root_rules(load_game_settings())
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
         task_runners = make_task_runners(config, player_configs, make_model_factory,
                                          signals=controller.signals)

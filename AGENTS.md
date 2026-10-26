@@ -13,7 +13,7 @@
 
 ## 配置和规则
 
-- `configs/game.yaml`：局数、金币、奖池、出价上限和超级出价参数。生产默认值只在这里维护。
+- `configs/game.yaml`：局数、金币、奖池、出价上限和超级出价参数，以及 `--test-model` 时的覆盖参数。生产默认值只在这里维护。
 - `configs/models.yaml`：模型目录、角色名、协议，以及模型在 models.dev 中的精确来源。
 - `configs/players.yaml`：阵容、人设和虚构预测胜率。玩家名单只在配置中维护，文档和测试使用实际配置或合成名单。
 - `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。密钥只放在根目录的 `.env` 中。

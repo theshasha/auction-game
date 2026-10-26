@@ -7,3 +7,7 @@ super_bounty: 3
 super_hit_score: 1
 regular_matches: 5
 max_playoffs: 5
+# --test-model 时覆盖上面的同名参数，真实测试赛和离线赛都生效。
+test_model_overrides:
+  daily_pool: [2, 3, 3]
+  regular_matches: 2

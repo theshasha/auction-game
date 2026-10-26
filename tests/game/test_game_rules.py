@@ -70,6 +70,28 @@ def test_unknown_and_missing_fields_name_the_field(settings_data, tmp_path, chan
     assert str(path) in str(exc.value)
 
 
+def test_test_model_overrides_apply_only_in_test_mode(settings_data, tmp_path):
+    path = tmp_path / "game.yaml"
+    path.write_text(yaml.safe_dump({**settings_data, "test_model_overrides": {
+        "daily_pool": [5], "regular_matches": 1}}), encoding="utf-8")
+    assert load_game_settings(path) == GameSettings.from_dict(settings_data)
+    assert load_game_settings(path, test_model=True) == GameSettings.from_dict(
+        {**settings_data, "daily_pool": [5], "regular_matches": 1})
+
+
+@pytest.mark.parametrize("overrides,field", [
+    ([1], "test_model_overrides"),
+    ({"regular_match": 1}, "regular_match"),
+    ({"regular_matches": 0}, "regular_matches"),
+], ids=["not-mapping", "unknown", "invalid"])
+def test_invalid_test_model_overrides_name_the_field(settings_data, tmp_path, overrides, field):
+    path = tmp_path / "game.yaml"
+    path.write_text(yaml.safe_dump({**settings_data, "test_model_overrides": overrides}), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match=field) as exc:
+        load_game_settings(path, test_model=True)
+    assert str(path) in str(exc.value)
+
+
 @pytest.mark.parametrize("bid,super_bid,coins,reason", [
     (True, None, 11, "bid 必须是不加引号的整数，收到 True"),
     (1.5, None, 11, "bid 必须是不加引号的整数，收到 1.5"),

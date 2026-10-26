@@ -37,7 +37,7 @@ python main.py --seed 42                # Bot 比赛，固定种子
 python main.py --benchmark 50           # Bot 对照，两组各 50 场，不写日志
 ```
 
-离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空和加赛。`--test-model` 改用测试模型的配置，`--output 目录` 指定输出位置。
+离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空和加赛。`--test-model` 改用测试模型的配置和测试赛参数，`--output 目录` 指定输出位置。
 
 benchmark 的第一组全是随机 Bot；第二组是一个策略玩家对五个随机 Bot，策略玩家每天出 `min(出价上限, 当前余额)`，不用超级出价。报告里策略玩家和随机对手的平均分都取自第二组。
 
@@ -48,9 +48,9 @@ python main.py --ai --test-model
 python main.py --ai
 ```
 
-`--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容。
+`--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。比赛参数改用 `game.yaml` 里 `test_model_overrides` 覆盖后的值，用来缩短局数和天数；离线赛的 `--test-model` 同样生效。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容。
 
-启动时会生成根目录的 `RULES.md`。改了 `RULES.template.md`、`game.yaml` 或阵容后也可以手动生成或检查：
+启动时会按 `game.yaml` 的生产参数生成根目录的 `RULES.md`，测试模式也一样；本场实际规则在场次目录的 `RULES.md`。改了 `RULES.template.md`、`game.yaml` 或阵容后也可以手动生成或检查：
 
 ```bash
 python -m auction_game.game.rules          # 更新 RULES.md

@@ -17,7 +17,7 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
     data["llm"]["max_concurrency"] = 1
     config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
     monkeypatch.setattr(offline_demo, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: GameSettings(
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: GameSettings(
         initial_coins=7, daily_salary=3, daily_pool=(3, 3), max_bid=7,
         super_cost=2, super_bounty=3, super_hit_score=1, regular_matches=2, max_playoffs=1,
     ))

@@ -39,7 +39,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     for name, pc in zip(names, configs):
         pc["name"] = pc["identity_model"]["name"] = name
     monkeypatch.setattr(offline_demo, "load_configuration", lambda **_: deepcopy((config, configs)))
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "20261016_120000_offline"
     output_dir, factories = generate_demo(run_dir, test_model=True)
     assert output_dir == run_dir
@@ -146,7 +146,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     ),
 ], ids=["poor", "zero-max-bid"])
 def test_offline_economic_edges_finish(game, tmp_path, monkeypatch, demo_configuration):
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda: game)
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "edge"
     _, factories = generate_demo(run_dir, test_model=True)
     matches = analyze.load_match_logs(run_dir)
@@ -156,8 +156,8 @@ def test_offline_economic_edges_finish(game, tmp_path, monkeypatch, demo_configu
 
 
 def test_current_game_configuration_smoke(tmp_path, demo_configuration):
-    """当前生产参数仅校验启动、快照与产物，不要求任何特定阶段。"""
-    game = load_game_settings()
+    """当前测试模式参数仅校验启动、快照与产物，不要求任何特定阶段。"""
+    game = load_game_settings(test_model=True)
     run_dir = tmp_path / "current"
     _, factories = generate_demo(run_dir, test_model=True)
     paths = RunPaths(run_dir)
