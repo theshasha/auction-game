@@ -14,7 +14,9 @@ from auction_game.ai import prompts
 
 @pytest.mark.parametrize("enable_predictions", [False, True])
 @pytest.mark.parametrize("enable_personas", [False, True])
-def test_player_passes_prompt_switches_into_native_request(enable_predictions, enable_personas, tmp_path):
+@pytest.mark.parametrize("writing_style", [None, "【写作要求】独特写作要求"])
+def test_player_passes_prompt_switches_into_native_request(enable_predictions, enable_personas,
+                                                           writing_style, tmp_path):
     from auction_game.ai.ai_player import AIPlayer
 
     runner = fake_task_runner([bid_reply(1)])
@@ -22,6 +24,7 @@ def test_player_passes_prompt_switches_into_native_request(enable_predictions, e
         "Alpha", "独特人设标题", "独特人设正文", [("Bravo", 73)], ["Alpha", "Bravo"],
         runner, game=TEST_GAME, log_path=tmp_path / "a.jsonl", readable_path=tmp_path / "a.md",
         enable_predictions=enable_predictions, enable_personas=enable_personas,
+        writing_style=writing_style,
     )
     assert player.decide_bid(make_ai_obs()) == (1, None)
     system = next(part.content for message in runner.calls[0] for part in message.parts
@@ -30,6 +33,7 @@ def test_player_passes_prompt_switches_into_native_request(enable_predictions, e
         assert (marker in system) is enable_predictions
     for marker in ("【你的人设】", "独特人设标题", "独特人设正文", "认真思考"):
         assert (marker in system) is enable_personas
+    assert ("独特写作要求" in system) is (writing_style is not None)
     assert "你叫 Alpha" in system and "Bravo" in system
     assert player.review_messages[0] == player.messages[0]
 

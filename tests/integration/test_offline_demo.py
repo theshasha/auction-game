@@ -33,7 +33,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         regular_matches=3, max_playoffs=5,
     )
     config, templates = demo_configuration
-    config["prompts"] = {"enable_predictions": True, "enable_personas": False}
+    config["prompts"] = {"enable_predictions": True, "enable_personas": False, "enable_writing_style": True}
     names = ["甲", "乙", "丙", "丁"]
     configs = [deepcopy(templates[index % len(templates)]) for index in range(len(names))]
     for name, pc in zip(names, configs):
@@ -124,7 +124,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     analyze.analyze(run_dir)
     output = capsys.readouterr().out
     assert "离线演示：全员使用假模型，不调用真实服务，不收费。" in output
-    assert "提示设置：赛前预测开启，人设关闭" in output
+    assert "提示设置：赛前预测开启，人设关闭，写作要求开启" in output
     assert f"本场日志目录：{run_dir}" in output
     assert "操作：" not in output and "切换到连续模式" not in output
     assert "测试模型：" not in output and "[预算提醒]" not in output

@@ -104,6 +104,6 @@ python -m auction_game.cli.check_llm                      # 查常规阵容用�
 
 ## 常用调整
 
-- 提示开关：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测；`prompts.enable_personas` 关掉后，模型看不到人设。两项都关适合做公平对照，角色名仍带模型身份。
+- 提示开关：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测；`prompts.enable_personas` 关掉后，模型看不到人设。两项都关适合做公平对照，角色名仍带模型身份。`prompts.enable_writing_style` 开启时，`configs/writing_style.md` 的全文接在每位玩家系统提示的最后，约束所有输出的文风；文件缺失时启动报配置错误。
 - 并发：`llm.max_concurrency`，1 为串行。
 - 超时：`llm.timeout_seconds`，单次请求的秒数。

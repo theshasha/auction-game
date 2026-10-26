@@ -22,7 +22,9 @@ def test_defaults_and_preserved_values(config_files):
     config, players = load_configuration(*config_files)
     assert config["llm"] == {"max_concurrency": 10, "timeout_seconds": 60, "channels": CHANNELS}
     assert config["test_model"] == "substitute"
-    assert config["prompts"] == {"enable_predictions": True, "enable_personas": True}
+    assert config["prompts"] == {"enable_predictions": True, "enable_personas": True,
+                                 "enable_writing_style": True}
+    assert config["writing_style"] == "【写作要求】\n合成写作要求。\n"
     assert [player["predicted_win_rate"] for player in players] == [23, 0]
     assert [p["protocol"] for p in players] == ["chat", "anthropic"]
 
@@ -30,7 +32,23 @@ def test_defaults_and_preserved_values(config_files):
 def test_missing_prompt_switch_defaults_to_true(config_files):
     rewrite(config_files[0], lambda data: data.update(prompts={"enable_predictions": False}))
     config, _ = load_configuration(*config_files)
-    assert config["prompts"] == {"enable_predictions": False, "enable_personas": True}
+    assert config["prompts"] == {"enable_predictions": False, "enable_personas": True,
+                                 "enable_writing_style": True}
+
+
+def test_disabled_writing_style_skips_file(config_files, tmp_path):
+    (tmp_path / "writing_style.md").unlink()
+    rewrite(config_files[0], lambda data: data.update(prompts={"enable_writing_style": False}))
+    config, _ = load_configuration(*config_files)
+    assert config["writing_style"] is None
+
+
+def test_missing_writing_style_file_is_configuration_error(config_files, tmp_path):
+    path = tmp_path / "writing_style.md"
+    path.unlink()
+    with pytest.raises(ConfigurationError, match="写作要求读取失败") as exc:
+        load_configuration(*config_files)
+    assert str(path) in str(exc.value)
 
 
 def test_default_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):

@@ -25,8 +25,9 @@ def build_system_prompt(
     all_names: list[str],
     game: GameSettings,
     *, enable_predictions: bool = True, enable_personas: bool = True,
+    writing_style: str | None = None,
 ) -> str:
-    """保留规则与身份，按独立开关加入人设和全员公开的赛前预测。
+    """保留规则与身份，按独立开关加入人设和全员公开的赛前预测，写作要求放在最后。
 
     人设只影响公开发言的口吻；分析出价和规划策略时仍需认真思考。
     predictions 是 players.yaml 中的虚构数字，不是模型的真实表现统计。
@@ -42,7 +43,9 @@ def build_system_prompt(
         prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
         text += f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
     if enable_personas:
-        text += "请在游戏过程中认真思考，不要被人设的说话方式影响你的思考。"
+        text += "请在游戏过程中认真思考，不要被人设的说话方式影响你的思考。\n"
+    if writing_style:
+        text += writing_style
     return text
 
 

@@ -17,6 +17,7 @@
 - `configs/models.yaml`：模型目录、角色名、协议，以及模型在 models.dev 中的精确来源。
 - `configs/players.yaml`：阵容、人设和虚构预测胜率。玩家名单只在配置中维护，文档和测试使用实际配置或合成名单。
 - `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。密钥只放在根目录的 `.env` 中。
+- `configs/writing_style.md`：全模型通用的写作要求，开关在 `config.yaml` 的 `prompts.enable_writing_style`。
 
 规则正文以 `RULES.template.md` 为准，改规则时同步改代码。比赛入口在创建日志和请求模型前生成根 `RULES.md`。改规则或经济参数前，先读 `docs/rule-discussion.md`。
 

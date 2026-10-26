@@ -47,6 +47,18 @@ class TestSystemPrompt:
         assert "你叫 甲" in text and "乙、丙、丁、戊、己" in text
         assert text.startswith(render_rules(TEST_GAME, NAMES, include_note=False))
 
+    @pytest.mark.parametrize("enable_personas", [False, True])
+    @pytest.mark.parametrize("writing_style", [None, "【写作要求】\n独特写作要求。\n"])
+    def test_writing_style_is_appended_last(self, enable_personas, writing_style):
+        text = prompts.build_system_prompt(
+            "甲", "人设", "正文", [("乙", 10)], NAMES, TEST_GAME,
+            enable_personas=enable_personas, writing_style=writing_style,
+        )
+        if writing_style is None:
+            assert "【写作要求】" not in text
+        else:
+            assert text.endswith("\n" + writing_style)
+
 
 class TestSpeechFields:
     """局末结果和观众总结。"""

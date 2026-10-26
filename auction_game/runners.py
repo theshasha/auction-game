@@ -116,6 +116,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
             predictions=predictions,
             enable_predictions=config["prompts"]["enable_predictions"],
             enable_personas=config["prompts"]["enable_personas"],
+            writing_style=config["writing_style"],
             all_names=all_names,
             task_runner=task_runners[pc["name"]],
             game=game,
@@ -127,7 +128,8 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
     print(f"并发上限：{controller.max_concurrency}")
     prompt_options = config["prompts"]
     print(f"提示设置：赛前预测{'开启' if prompt_options['enable_predictions'] else '关闭'}，"
-          f"人设{'开启' if prompt_options['enable_personas'] else '关闭'}")
+          f"人设{'开启' if prompt_options['enable_personas'] else '关闭'}，"
+          f"写作要求{'开启' if prompt_options['enable_writing_style'] else '关闭'}")
     if start_reader:
         controller.start_stdin_reader()
         print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=退出比赛")

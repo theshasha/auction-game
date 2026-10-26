@@ -49,12 +49,14 @@ class AIPlayer(Player):
                  predictions: list[tuple[str, int]], all_names: list[str],
                  task_runner: TaskRunner, log_path: Path, *, game: GameSettings,
                  readable_path: Path,
-                 enable_predictions: bool = True, enable_personas: bool = True):
+                 enable_predictions: bool = True, enable_personas: bool = True,
+                 writing_style: str | None = None):
         super().__init__(name)
         self.game = game
         system_prompt = prompts.build_system_prompt(
             name, persona_title, persona_text, predictions, all_names, game,
-            enable_predictions=enable_predictions, enable_personas=enable_personas)
+            enable_predictions=enable_predictions, enable_personas=enable_personas,
+            writing_style=writing_style)
         self.messages: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(system_prompt)])]
         self.review_messages = list(self.messages)
         self.memory = ""

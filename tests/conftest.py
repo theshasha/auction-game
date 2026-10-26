@@ -22,6 +22,9 @@ def config_files(tmp_path, monkeypatch):
     models_path = tmp_path / "models.yaml"
     monkeypatch.setattr("auction_game.configuration.CAPABILITIES_PATH", tmp_path / "model_capabilities.json")
     monkeypatch.setattr("auction_game.cli.sync_models.CAPABILITIES_PATH", tmp_path / "model_capabilities.json")
+    writing_style_path = tmp_path / "writing_style.md"
+    writing_style_path.write_text("【写作要求】\n合成写作要求。\n", encoding="utf-8")
+    monkeypatch.setattr("auction_game.configuration.WRITING_STYLE_PATH", writing_style_path)
     config_path.write_text(yaml.safe_dump({"test_model": "substitute", "llm": {"channels": CHANNELS}}), encoding="utf-8")
     models_path.write_text(yaml.safe_dump({"models": {
         "first": dict(name="甲", provider="hub", model="test-model-a", protocol="chat",

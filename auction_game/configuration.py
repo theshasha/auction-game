@@ -8,10 +8,11 @@ import yaml
 
 from auction_game.game.game_rules import GameSettings
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
-from auction_game.paths import ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, MODELS_PATH, GAME_PATH, CAPABILITIES_PATH
+from auction_game.paths import (ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, MODELS_PATH, GAME_PATH, CAPABILITIES_PATH,
+                                WRITING_STYLE_PATH)
 PROTOCOLS = ("chat", "responses", "anthropic")
 EXECUTION_FIELDS = ("model", "provider", "protocol", "max_tokens", "model_settings", "capabilities")
-PROMPT_FLAGS = ("enable_predictions", "enable_personas")
+PROMPT_FLAGS = ("enable_predictions", "enable_personas", "enable_writing_style")
 
 
 class ConfigurationError(ValueError):
@@ -48,6 +49,12 @@ def load_configuration(
     for field in PROMPT_FLAGS:
         if type(prompts.setdefault(field, True)) is not bool:
             raise ConfigurationError(f"{config_path}：prompts.{field} 必须是布尔值")
+    config["writing_style"] = None
+    if prompts["enable_writing_style"]:
+        try:
+            config["writing_style"] = WRITING_STYLE_PATH.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ConfigurationError(f"{WRITING_STYLE_PATH}：写作要求读取失败：{exc}") from exc
     llm = config.setdefault("llm", {})
     if not isinstance(llm, dict):
         raise ConfigurationError(f"{config_path}：llm 必须是键值配置")

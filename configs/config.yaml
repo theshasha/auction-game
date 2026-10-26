@@ -4,6 +4,8 @@ test_model: deepseek_flash
 prompts:
   enable_predictions: false
   enable_personas: false
+  # 开启后把 configs/writing_style.md 接在每位玩家系统提示的最后。
+  enable_writing_style: true
 llm:
   # 同时请求的任务数上限，1 为串行。
   max_concurrency: 10
