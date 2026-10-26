@@ -13,7 +13,7 @@ from auction_game.ai.agent_execution import OutputFailedError
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.ai.ai_speech import AISpeechDirector
 from auction_game.controller import Controller
-from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log,
+from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log, make_logs,
                                      make_player, make_standings, speech_reply, task_entries)
 from tests.support.wire import Harness, PROTOCOLS, reply
 
@@ -108,13 +108,13 @@ def test_sdk_plain_memory_and_cross_match_replacement(protocol, tmp_path):
     player.save_memory(prompts.memory_request({"Bravo": "other signal"}), "match_1_memory")
     assert "不加格式标签或 JSON 外壳" in json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert player.memory == "cumulative-v1"
-    player.plan_strategy(prompts.next_match_plan_request([], player.game, 2), "match_1_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(1), [], player.game), "match_1_plan")
     wire = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert "cumulative-v1" in wire and "最新累计成绩" in wire and "第 2 局" in wire
     assert "old match raw" not in wire and "old public signal" not in wire and "other signal" not in wire
     player.save_memory("second match signals", "match_2_memory")
     assert "cumulative-v1" in json.dumps(h.requests[-1][1])
-    player.plan_strategy(prompts.next_match_plan_request([], player.game, 3), "match_2_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(2), [], player.game), "match_2_plan")
     wire = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert "cumulative-v2" in wire and "cumulative-v1" not in wire
     assert "second match signals" not in wire and len(h.requests) == h.closes == 5
@@ -133,7 +133,7 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     assert player.memory == "第一版经验"
     assert "first match raw" not in encoded(player.messages)
     standings = make_standings({"Alpha": [3], "Bravo": [1]})
-    player.plan_strategy(prompts.next_match_plan_request(standings, player.game, 2), "match_1_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(1), standings, player.game), "match_1_plan")
     second_input = encoded(runner.calls[-1])
     assert "第一版经验" in second_input and "最新累计成绩" in second_input
     assert "own raw signal" not in second_input and "first match raw" not in second_input
@@ -141,7 +141,7 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     player.save_memory("all second match signals", "match_2_memory")
     assert "第一版经验" in encoded(runner.calls[-1]) and "second match raw" in encoded(runner.calls[-1])
     assert player.memory == long_memory and "第一版经验" not in encoded(player.messages)
-    player.plan_strategy(prompts.next_match_plan_request(standings, player.game, 3), "match_2_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(2), standings, player.game), "match_2_plan")
     third_input = encoded(runner.calls[-1])
     assert long_memory in third_input and "second match raw" not in third_input
     assert "第一版经验" not in third_input and len(runner.calls) == 6  # 超软目标只请求一次
@@ -200,7 +200,8 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
     # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。
     standings = make_standings({"Alpha": [2] * match_index, "Bravo": [1] * match_index},
                               scores_history={"Alpha": [2] * match_index, "Bravo": [3] * match_index})
-    director.on_match_end(make_log(match_index=match_index, is_playoff=playoff, game=game), standings)
+    logs = [*make_logs(match_index - 1, game=game), make_log(match_index=match_index, is_playoff=playoff, game=game)]
+    director.on_match_end(logs, standings)
     for p in players:
         text = encoded(p.task_runner.calls[-1])
         assert "private-" + p.name in text

@@ -112,29 +112,29 @@ class TestRenderStandings:
         text = prompts.render_standings(standings)
         lines = text.splitlines()
 
-        assert lines[0] == "| 排名 | 玩家 | 总分 | 第1局 | 第2局 | 拍卖分 |"
-        assert lines[2] == "| 1 | 甲 | 14 | 8 | 6 | 3 |"
-        assert lines[4] == "| 3 | 丙 | 2 | 2 | 0 | 0 |"
+        assert lines[0] == "| 排名 | 玩家 | 总分 | 第1局 | 第2局 | 拍卖分 | 命中分 |"
+        assert lines[2] == "| 1 | 甲 | 14 | 8 | 6 | 3 | 11 |"
+        assert lines[4] == "| 3 | 丙 | 2 | 2 | 0 | 0 | 2 |"
 
     def test_tied_players_share_rank_cell(self):
         standings = make_standings({"甲": [2], "乙": [1]}, scores_history={"甲": [8], "乙": [8]})
         text = prompts.render_standings(standings)
-        assert "| 1 | 甲 | 8 | 8 | 2 |" in text
-        assert "| 1 | 乙 | 8 | 8 | 1 |" in text
+        assert "| 1 | 甲 | 8 | 8 | 2 | 6 |" in text
+        assert "| 1 | 乙 | 8 | 8 | 1 | 7 |" in text
 
     def test_less_auction_score_can_lead_by_total_score(self):
         standings = make_standings({"甲": [2], "乙": [1]}, scores_history={"甲": [8], "乙": [9]})
         lines = prompts.render_standings(standings).splitlines()
-        assert lines[2] == "| 1 | 乙 | 9 | 9 | 1 |"
-        assert lines[3] == "| 2 | 甲 | 8 | 8 | 2 |"
+        assert lines[2] == "| 1 | 乙 | 9 | 9 | 1 | 8 |"
+        assert lines[3] == "| 2 | 甲 | 8 | 8 | 2 | 6 |"
 
     def test_match_columns_follow_score_history(self):
         standings = make_standings({"甲": [2]}, scores_history={"甲": [4, 6]})
         text = prompts.render_standings(standings)
         assert "| 第2局 |" in text
-        assert "| 1 | 甲 | 10 | 4 | 6 | 2 |" in text
+        assert "| 1 | 甲 | 10 | 4 | 6 | 2 | 8 |" in text
 
     def test_no_match_columns_when_history_empty(self):
         standings = make_standings({"甲": [], "乙": []})
         text = prompts.render_standings(standings)
-        assert text.splitlines()[0] == "| 排名 | 玩家 | 总分 | 拍卖分 |"
+        assert text.splitlines()[0] == "| 排名 | 玩家 | 总分 | 拍卖分 | 命中分 |"

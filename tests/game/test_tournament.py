@@ -152,8 +152,9 @@ class TestDirectorMatchEnd:
         def on_opening(self):
             pass
 
-        def on_match_end(self, log, standings):
-            self.match_end_calls.append(log)
+        def on_match_end(self, logs, standings):
+            assert [log.match_index for log in logs] == list(range(1, len(logs) + 1))
+            self.match_end_calls.append(logs[-1])
 
         def on_final(self, standings, log):
             self.final_calls.append((standings, log))

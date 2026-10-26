@@ -101,6 +101,17 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     assert document_path.read_bytes() == generated
 
 
+def test_max_bid_below_example_bids_is_configuration_error(tmp_path, monkeypatch):
+    document = tmp_path / "RULES.md"
+    monkeypatch.setattr(rules, "RULES_PATH", document)
+    monkeypatch.setattr(rules, "load_game_settings", lambda: replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID - 1))
+    monkeypatch.setattr(rules, "load_players", lambda **kwargs: [{"name": "配置甲"}, {"name": "配置乙"}])
+    monkeypatch.setattr(sys, "argv", ["rules.py"])
+    assert rules.main() == 1
+    assert not document.exists()
+    rules.render_rules(replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID), ["配置甲", "配置乙"])
+
+
 @pytest.mark.parametrize("entry,kwargs,module,boundary", [
     (runners.run_bots, {"seed": 1}, runners, "make_run_dir"),
     (runners.run_ai, {}, runners, "make_model_factory"),

@@ -47,10 +47,9 @@ class TestRulesText:
         assert "共 2 局正赛，每局 3 天" in text
         assert "第 1 天 2 分、第 2 天 1 分、第 3 天 3 分" in text
         assert "每局奖池合计 6 分" in text
-        assert "发放 11 枚金币" in text and "发放 4 枚金币" in text
+        assert "每人有 11 枚金币" in text and "每人再得 4 枚" in text
         assert "0~9 的整数" in text and "固定花费 3 金币" in text
-        assert "发放 5 金币悬赏，并获 6 分" in text
-        assert "剩余天数（含今天）× 6" in text
+        assert "获得 5 金币悬赏和 6 命中分" in text
         assert "最多加赛 4 局" in text
         assert "{" not in text and "}" not in text
         system = prompts.build_system_prompt("甲", "人设", "正文", [], names, game)

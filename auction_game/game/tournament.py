@@ -12,10 +12,10 @@ from auction_game.game.players import Player
 
 
 class SpeechDirector(Protocol):
-    """开局、局末和终局的发言编排；on_match_end 只在还有下一局时调用。"""
+    """开局、局末和终局的发言编排；on_match_end 只在还有下一局时调用，logs 是已结束的全部局。"""
 
     def on_opening(self) -> None: ...
-    def on_match_end(self, log: MatchLog, standings: list[StandingsEntry]) -> None: ...
+    def on_match_end(self, logs: list[MatchLog], standings: list[StandingsEntry]) -> None: ...
     def on_final(self, standings: list[StandingsEntry], log: MatchLog) -> None: ...
 
 
@@ -84,7 +84,7 @@ def run_tournament(
         )
         # 最后一局不做局末发言，它的出价日志随终局感言（on_final）发出。
         if director and has_next_match:
-            director.on_match_end(log, standings)
+            director.on_match_end(list(result.match_logs), standings)
 
     for _ in range(game.regular_matches):
         play_one_match(is_playoff=False)

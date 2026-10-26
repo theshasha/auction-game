@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from auction_game.ai import prompts
-from tests.support.factories import NAMES, TEST_GAME, make_log, make_standings
+from tests.support.factories import NAMES, TEST_GAME, make_log, make_logs, make_standings
 
 
 class TestSystemPrompt:
@@ -21,7 +21,7 @@ class TestSystemPrompt:
         assert "傲娇大小姐：自称本小姐。" in system
         # 人设只影响说话方式，思考要求保持认真
         assert "不要被人设的说话方式影响你的思考" in system
-        assert "发言中的承诺由玩家自行决定是否履行，不会改变游戏规则" in system
+        assert "发言中的承诺不强制履行" in system
 
     def test_predictions_public_to_everyone(self):
         predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
@@ -84,6 +84,7 @@ class TestSpeechFields:
         assert "【甲】感言A" in text
         assert "【乙】感言B" in text
         assert "只给观众看的总结发言" in text
+        assert "用第一人称" in text
 
 
 def test_memory_request_lists_other_speeches_and_key_requirements():
@@ -134,7 +135,15 @@ class TestPlanBidMerge:
     def test_single_day_plan_reminds_coins_reset(self):
         game = replace(TEST_GAME, daily_pool=(1,))
         assert "本局最后一天，结束后金币清零。" in prompts.opening_plan_request({}, game)
-        assert "本局最后一天，结束后金币清零。" in prompts.next_match_plan_request([], game, 2)
+        assert "本局最后一天，结束后金币清零。" in prompts.next_match_plan_request(make_logs(1, game), [], game)
+
+    def test_next_match_plan_restores_all_past_match_logs(self):
+        logs = [make_log(match_index=1), make_log(match_index=2, is_playoff=True)]
+        text = prompts.next_match_plan_request(logs, [], TEST_GAME)
+        assert f"第 1 局（正赛局）：\n\n{prompts.render_match_log(logs[0])}" in text
+        assert f"第 2 局（加赛局）：\n\n{prompts.render_match_log(logs[1])}" in text
+        assert text.index("出价日志") < text.index("最新累计成绩") < text.index("规划第 3 局")
+        assert "之前各局的出价日志会另行提供" in prompts.memory_request({})
 
     @pytest.mark.parametrize(
         "build, speech_kind, strategy, bid_task",
@@ -149,7 +158,7 @@ class TestPlanBidMerge:
                        super_cost=3, super_hit_score=2)
         opening = build is prompts.opening_plan_request
         standings = make_standings({"甲": [2], "乙": [1]}, scores_history={"甲": [10], "乙": [11]})
-        text = build({"甲": "发言A", "乙": "发言B"}, game) if opening else build(standings, game, 2)
+        text = build({"甲": "发言A", "乙": "发言B"}, game) if opening else build(make_logs(1, game), standings, game)
         assert speech_kind in text
         assert strategy in text and bid_task in text
         if opening:
@@ -168,7 +177,7 @@ class TestPlanBidMerge:
     def test_plans_only_show_remaining_scores_in_last_regular_match_and_playoffs(self, opening, match_index):
         game = replace(TEST_GAME, daily_pool=(2, 1, 3), super_hit_score=2, regular_matches=3)
         text = (prompts.opening_plan_request({}, game) if opening
-                else prompts.next_match_plan_request([], game, match_index))
+                else prompts.next_match_plan_request(make_logs(match_index - 1, game), [], game))
         show_remaining = match_index >= game.regular_matches
         assert ("本局还剩" in text) is show_remaining
         assert ("每人最多还能获得" in text) is show_remaining

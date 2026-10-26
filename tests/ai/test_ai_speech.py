@@ -49,22 +49,26 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
     director = ai_speech.AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None),
                                           tmp_path, game=game)
 
-    def plan_request(others, actual_game, *index):
+    def opening_plan_request(others, actual_game):
         assert actual_game is game
-        return f"规划 {others} {index}"
+        return f"规划 {others}"
+
+    def next_match_plan_request(logs, standings, actual_game):
+        assert actual_game is game
+        return f"规划 {[log.match_index for log in logs]}"
 
     monkeypatch.setattr(ai_speech.prompts, "opening_speech_request", lambda: "开局")
-    monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", plan_request)
-    monkeypatch.setattr(ai_speech.prompts, "next_match_plan_request", plan_request)
-    monkeypatch.setattr(ai_speech.prompts, "match_end_speech_request", lambda *args: "局末")
+    monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", opening_plan_request)
+    monkeypatch.setattr(ai_speech.prompts, "next_match_plan_request", next_match_plan_request)
+    monkeypatch.setattr(ai_speech.prompts, "match_end_speech_request", lambda log, standings: f"局末 {log.match_index}")
     monkeypatch.setattr(ai_speech.prompts, "memory_request", lambda others: f"记忆 {others}")
     director.on_opening()
-    director.on_match_end(SimpleNamespace(match_index=1), [])
+    director.on_match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
     assert players[0].calls == [
-        ("opening_speech", "开局"), ("opening_plan", "规划 {'乙': '发言乙'} ()"),
-        ("match_1_speech", "局末"), ("match_1_memory", "记忆 {'乙': '发言乙'}"), ("match_1_plan", "规划 [] (2,)"),
+        ("opening_speech", "开局"), ("opening_plan", "规划 {'乙': '发言乙'}"),
+        ("match_2_speech", "局末 2"), ("match_2_memory", "记忆 {'乙': '发言乙'}"), ("match_2_plan", "规划 [1, 2]"),
     ]
-    assert players[1].calls[1] == ("opening_plan", "规划 {'甲': '发言甲'} ()")
+    assert players[1].calls[1] == ("opening_plan", "规划 {'甲': '发言甲'}")
 
 
 def test_director_orders_speeches_by_seat_not_completion(monkeypatch, tmp_path):

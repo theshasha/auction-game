@@ -6,7 +6,7 @@ import pytest
 
 from auction_game.ai import prompts
 from tests.support.factories import (
-    NAMES, TEST_GAME, history, make_obs, make_standings, run_scenario, super_by_day,
+    NAMES, TEST_GAME, history, make_logs, make_obs, make_standings, run_scenario, super_by_day,
 )
 
 
@@ -46,7 +46,7 @@ class TestBidRequest:
         obs.past_match_logs = [{}] * (match_index - 1)
         text = prompts.bid_request(obs)
         assert ("\n\n本局还剩 2 天（含今天），剩余拍卖奖池共 7 分。如果每天都命中，每人最多还能获得 4 命中分。" in text) == visible
-        plan = prompts.next_match_plan_request([], obs.game, match_index)
+        plan = prompts.next_match_plan_request(make_logs(match_index - 1, obs.game), [], obs.game)
         assert ("\n\n本局还剩 3 天（含今天），剩余拍卖奖池共 9 分。如果每天都命中，每人最多还能获得 6 命中分。" in plan) == visible
         assert "。。" not in plan
         assert plan.split("\n\n")[-2].endswith("。")
@@ -69,7 +69,7 @@ class TestBidRequest:
         obs = make_obs(game=game, pool=daily_pool[0])
         texts = [
             prompts.opening_plan_request({}, game),
-            prompts.next_match_plan_request([], game, 2),
+            prompts.next_match_plan_request(make_logs(1, game), [], game),
             prompts.bid_request(obs),
         ]
         remaining_lines = [

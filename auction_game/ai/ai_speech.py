@@ -49,7 +49,8 @@ class AISpeechDirector:
         self._run_round(plan_label, lambda p: p.plan_strategy(
             prompts.opening_plan_request(self._others(speeches, p.name), self.game), "opening_plan", plan_label))
 
-    def on_match_end(self, log: MatchLog, standings: list[StandingsEntry]) -> None:
+    def on_match_end(self, logs: list[MatchLog], standings: list[StandingsEntry]) -> None:
+        log = logs[-1]
         index = log.match_index
         label = f"第 {index} 局局末发言"
         speeches = self._run_round(label, lambda p: p.give_speech(
@@ -60,7 +61,7 @@ class AISpeechDirector:
             prompts.memory_request(self._others(speeches, p.name)), f"match_{index}_memory", memory_label))
         plan_label = f"第 {index + 1} 局策略规划（含首日出价）"
         self._run_round(plan_label, lambda p: p.plan_strategy(
-            prompts.next_match_plan_request(standings, self.game, index + 1), f"match_{index}_plan", plan_label))
+            prompts.next_match_plan_request(logs, standings, self.game), f"match_{index}_plan", plan_label))
 
     def on_final(self, standings: list[StandingsEntry], log: MatchLog) -> None:
         label = "最终感言"

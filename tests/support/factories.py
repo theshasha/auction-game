@@ -68,6 +68,11 @@ def make_log(match_index=1, is_playoff=False, days=None, auction_scores=None, ga
     )
 
 
+def make_logs(count, game=TEST_GAME):
+    """已结束的前 count 局，都是正赛局。"""
+    return [make_log(match_index=index, game=game) for index in range(1, count + 1)]
+
+
 def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None):
     """通过生产路径排名；不给 scores_history 时总分只含拍卖分。"""
     if scores_history is None:

@@ -139,12 +139,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         super_cost=2, super_bounty=3, super_hit_score=2,
         regular_matches=1, max_playoffs=2,
     ),
-    GameSettings(
-        initial_coins=7, daily_salary=0, daily_pool=(1,), max_bid=0,
-        super_cost=2, super_bounty=3, super_hit_score=2,
-        regular_matches=1, max_playoffs=2,
-    ),
-], ids=["poor", "zero-max-bid"])
+], ids=["poor"])
 def test_offline_economic_edges_finish(game, tmp_path, monkeypatch, demo_configuration):
     monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "edge"

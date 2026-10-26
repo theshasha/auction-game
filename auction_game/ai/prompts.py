@@ -243,14 +243,17 @@ def render_match_log(log: MatchLog) -> str:
 
 
 def render_standings(standings: list[StandingsEntry]) -> str:
-    """按总分展示累计排名及已结束局分数，拍卖分作为辅助信息。"""
+    """按总分展示累计排名及已结束局分数，拍卖分和命中分作为辅助信息。
+
+    总分只由拍卖分和命中分组成，命中分用两者之差得出。
+    """
     match_count = max((len(entry.scores_per_match) for entry in standings), default=0)
     match_headers = [f"第{i + 1}局" for i in range(match_count)]
     header = "| 排名 | 玩家 | 总分 |"
     if match_headers:
         header += " " + " | ".join(match_headers) + " |"
-    header += " 拍卖分 |"
-    separator = "|" + " --- |" * (4 + match_count)
+    header += " 拍卖分 | 命中分 |"
+    separator = "|" + " --- |" * (5 + match_count)
     rows = []
     for entry in standings:
         row = f"| {entry.rank} | {entry.player} | {entry.total_score} |"
@@ -258,16 +261,19 @@ def render_standings(standings: list[StandingsEntry]) -> str:
             cells = [str(score) for score in entry.scores_per_match]
             cells += [""] * (match_count - len(cells))
             row += " " + " | ".join(cells) + " |"
-        row += f" {entry.total_auction_score} |"
+        row += f" {entry.total_auction_score} | {entry.total_score - entry.total_auction_score} |"
         rows.append(row)
     return "\n".join([header, separator, *rows])
 
 
+def _match_title(log: MatchLog) -> str:
+    return f"第 {log.match_index} 局（{'加赛局' if log.is_playoff else '正赛局'}）"
+
+
 def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry]) -> str:
     """只在还有下一局时调用。"""
-    kind = "加赛局" if log.is_playoff else "正赛局"
     lines = [
-        f"第 {log.match_index} 局（{kind}）结束。",
+        f"{_match_title(log)}结束。",
         f"本局完整出价日志：\n\n{render_match_log(log)}",
         f"截至当前的累计排名与分数明细：\n\n{render_standings(standings)}",
     ]
@@ -288,13 +294,17 @@ def memory_request(others_speeches: dict[str, str]) -> str:
         "- 记下对手的出价倾向和自己要做的调整，每条都要能直接用于下一局的出价。\n"
         "- 保留仍然有用的旧经验，改掉被本局推翻的判断。\n"
         "- 只写结论，不写例子和出价记录。\n"
-        "- 规则与最新成绩会另行提供，无需抄写。\n\n"
+        "- 规则、最新成绩和之前各局的出价日志会另行提供，无需抄写。\n\n"
         "全文不超过 1000 字。"
     )
 
 
-def next_match_plan_request(standings: list[StandingsEntry], game: GameSettings, match_index: int) -> str:
+def next_match_plan_request(past_logs: list[MatchLog], standings: list[StandingsEntry], game: GameSettings) -> str:
+    """past_logs 是已结束的全部局。整理记忆清空了旧对话，这里补回各局出价日志，留在新一局的对话里。"""
+    match_index = len(past_logs) + 1
+    logs_text = "\n\n".join(f"{_match_title(log)}：\n\n{render_match_log(log)}" for log in past_logs)
     return (
+        f"之前各局的完整出价日志：\n\n{logs_text}\n\n"
         f"截至当前的最新累计成绩：\n\n{render_standings(standings)}\n\n"
         f"请结合之前保存的私人笔记，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)
@@ -302,10 +312,9 @@ def next_match_plan_request(standings: list[StandingsEntry], game: GameSettings,
 
 
 def final_speech_request(standings: list[StandingsEntry], log: MatchLog) -> str:
-    """请求最终感言，并提供最后一局的出价日志；这一局不再单独安排局后发言。"""
-    kind = "加赛局" if log.is_playoff else "正赛局"
+    """请求最终感言，并提供最后一局的出价日志；之前各局的日志已在本局规划请求中给出。"""
     return (
-        f"第 {log.match_index} 局（{kind}）结束，这也是最后一局。\n\n本局完整出价日志：\n\n"
+        f"{_match_title(log)}结束，这也是最后一局。\n\n本局完整出价日志：\n\n"
         f"{render_match_log(log)}\n\n"
         f"比赛全部结束。最终排名与分数明细：\n\n{render_standings(standings)}\n\n"
         "请向全体玩家发表你的最终感言。"
@@ -316,5 +325,5 @@ def final_summary_request(others_speeches: dict[str, str]) -> str:
     return (
         "以下是其他玩家的最终感言：\n"
         + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
-        + "\n最后，请写一段只给观众看的总结发言。"
+        + "\n最后，请写一段只给观众看的总结发言，用第一人称，直接写正文。"
     )
