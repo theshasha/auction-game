@@ -20,6 +20,7 @@ from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
 
 RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(?:-test)?(_\d+)?$")  # 时间戳场次目录，排除 archive 等归档目录
+TASK_LABELS = {"speech": "发言", "plan": "规划", "bid": "出价", "memory": "记忆", "summary": "观众总结"}
 
 
 def find_latest_ai_run() -> Path:
@@ -175,6 +176,65 @@ def print_player_stats(stats: dict) -> None:
         print(f"  正常出价为零：{row['zero_bids']}次")
 
 
+def collect_usage(run_dir: Path, players: list[dict]) -> dict:
+    """逐条累加任务日志中模型回复的用量，含纠错往返和失败、取消任务里已收到的回复。
+
+    失败的请求在日志里只有报错，没有用量，只计次数。
+    """
+    paths = RunPaths(run_dir)
+    by_player: dict[str, Counter] = {}
+    by_task: dict[str, Counter] = {}
+    largest_inputs: dict[str, tuple[int, str, str]] = {}
+    for pc in players:
+        name = pc["name"]
+        player_totals = by_player[name] = Counter()
+        for line in paths.player(pc["number"]).read_text(encoding="utf-8").splitlines():
+            entry = json.loads(line)
+            if entry["task"] == "system":
+                continue
+            task_totals = by_task.setdefault(entry["task"], Counter())
+            for totals in (player_totals, task_totals):
+                totals["failed_requests"] += len(entry["request_errors"])
+            for message in entry["messages"]:
+                if message["kind"] != "response":
+                    continue
+                usage = message["usage"]
+                for totals in (player_totals, task_totals):
+                    totals["requests"] += 1
+                    totals["input"] += usage["input_tokens"]
+                    totals["cache_read"] += usage["cache_read_tokens"]
+                    totals["output"] += usage["output_tokens"]
+                if usage["input_tokens"] > largest_inputs.get(entry["task"], (-1,))[0]:
+                    largest_inputs[entry["task"]] = (usage["input_tokens"], name, entry["context"])
+    return {"players": by_player,
+            "tasks": {task: by_task[task] for task in TASK_LABELS if task in by_task},
+            "largest_inputs": largest_inputs}
+
+
+def _usage_text(totals: Counter) -> str:
+    text = f"请求 {totals['requests']} 次，输入 {totals['input']:,}"
+    if totals["input"]:
+        text += f"（缓存命中 {totals['cache_read']:,}，{totals['cache_read'] / totals['input']:.0%}）"
+    text += f"，输出 {totals['output']:,}"
+    if totals["failed_requests"]:
+        text += f"；另有 {totals['failed_requests']} 次请求失败"
+    return text
+
+
+def print_usage(usage: dict) -> None:
+    print("模型用量（token）")
+    print("  输入含缓存命中，输出含推理；失败的请求没有用量记录，只计次数")
+    for name, totals in usage["players"].items():
+        print(f"  {name}：{_usage_text(totals)}")
+    print("  按任务：")
+    for task, totals in usage["tasks"].items():
+        line = f"  {TASK_LABELS[task]}：{_usage_text(totals)}"
+        if task in usage["largest_inputs"]:
+            tokens, name, context = usage["largest_inputs"][task]
+            line += f"；最大单次输入 {tokens:,}，来自 {name} {context}"
+        print(line)
+
+
 def analyze(run_dir: Path) -> None:
     snapshot = RunPaths(run_dir).read_config()
     matches = load_match_logs(run_dir)
@@ -279,6 +339,11 @@ def analyze(run_dir: Path) -> None:
 
     print("特殊情况")
     print(f"出 0 共 {zero_bids} 笔（含流局日和超级出价），其中 0 价获胜 {zero_bid_wins} 次")
+
+    # Bot 不调用模型，离线赛的用量是假模型估算的。
+    if snapshot["run_type"] in ("ai", "ai-test"):
+        print()
+        print_usage(collect_usage(run_dir, snapshot["players"]))
 
 
 def main() -> None:

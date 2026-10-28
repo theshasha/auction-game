@@ -20,11 +20,16 @@ from copy import deepcopy
 from dataclasses import asdict, replace
 
 import pytest
+from pydantic_ai.messages import ModelRequest, ModelResponse, RetryPromptPart, TextPart, UserPromptPart
+from pydantic_ai.usage import RequestUsage
 
 from tests.support.factories import TEST_GAME, make_day, make_log
 
+from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
+from auction_game.reporting.agent_log import AgentLog
 from auction_game.reporting.analyze import analyze, collect_player_stats, find_latest_ai_run, load_match_logs, main
 from auction_game.reporting.run_output import initialize_run
+from auction_game.reporting.run_paths import RunPaths
 from auction_game.game.engine import compute_standings
 
 ANALYZE_GAME = replace(TEST_GAME, daily_pool=(1, 1))
@@ -183,6 +188,7 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "改变当日结果：1 天" in output
     assert "含正常报价及超级数值" in output
     assert "获胜价平均" in output
+    assert "模型用量" not in output  # Bot 场次没有模型调用
 
 
 @pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed,collision_hits,"
@@ -283,6 +289,10 @@ def write_matches(run_dir, matches, *, run_type="bot", players=None):
     paths = initialize_run(run_dir, {"run_type": run_type,
                                      "mode": "test_model" if run_type == "ai-test" else "regular",
                                      "game": first["game"], "players": roster}, "test rules")
+    if run_type != "bot":
+        # 模型玩家创建时就写下系统提示，每人都有任务日志。
+        for pc in paths.read_config()["players"]:
+            player_log(run_dir, pc).system_prompt("test system prompt")
     auction_scores_history = {name: [] for name in first["auction_scores"]}
     scores_history = {name: [] for name in first["scores"]}
     for payload in sorted(matches, key=lambda payload: payload["match"]["match_index"]):
@@ -295,6 +305,75 @@ def write_matches(run_dir, matches, *, run_type="bot", players=None):
         paths.match(payload["match"]["match_index"]).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
+
+
+def player_log(run_dir, pc):
+    """用生产日志写入器追加到场次里这名玩家的任务日志。"""
+    paths = RunPaths(run_dir)
+    return AgentLog(pc["name"], paths.player(pc["number"]), readable_path=paths.player(pc["number"], readable=True))
+
+
+def model_reply(input_tokens, output_tokens, cache_read_tokens=0):
+    return ModelResponse(parts=[TextPart("回复")], usage=RequestUsage(
+        input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens))
+
+
+def request_error(attempt):
+    return {"request": 1, "attempt": attempt, "type": "ModelHTTPError", "message": "status_code: 524"}
+
+
+def test_usage_sums_every_reply_by_player_and_task(tmp_path, capsys):
+    run_dir = tmp_path / "20260909_120000_ai"
+    write_matches(run_dir, make_matches(), run_type="ai")
+    jia, yi = RunPaths(run_dir).read_config()["players"][:2]
+    bid_entry = {"phase": "bid", "task": "bid", "context": "第 1 局第 2 天"}
+    jia_log = player_log(run_dir, jia)
+    jia_log.success({"phase": "opening_speech", "task": "speech", "context": "开局发言"},
+                    ExecutionResult("发言", [ModelRequest(parts=[UserPromptPart("请发言")]),
+                                             model_reply(100, 10, 40)], []))
+    # 纠错往返的两条回复都计入，重发前失败的请求只计次数。
+    jia_log.success(bid_entry, ExecutionResult("出价", [
+        ModelRequest(parts=[UserPromptPart("请出价")]), model_reply(200, 20),
+        ModelRequest(parts=[RetryPromptPart("格式错误")]), model_reply(300, 30, 150),
+    ], [request_error(1)]))
+    yi_log = player_log(run_dir, yi)
+    yi_log.failure(bid_entry, CallFailedError("请求失败", messages=[ModelRequest(parts=[UserPromptPart("请出价")])],
+                                              request_errors=[request_error(1), request_error(2)]))
+    yi_log.success(bid_entry, ExecutionResult("出价", [ModelRequest(parts=[UserPromptPart("请出价")]),
+                                                     model_reply(250, 25)], []))
+    yi_log.success({"phase": "final_summary", "task": "summary", "context": "观众总结（仅观众可见）"},
+                   ExecutionResult("总结", [ModelRequest(parts=[UserPromptPart("请总结")]),
+                                          model_reply(1000, 5)], []))
+
+    analyze(run_dir)
+    output = capsys.readouterr().out
+    usage = output.split("模型用量（token）\n", 1)[1]
+    assert usage.splitlines() == [
+        "  输入含缓存命中，输出含推理；失败的请求没有用量记录，只计次数",
+        "  甲：请求 3 次，输入 600（缓存命中 190，32%），输出 60；另有 1 次请求失败",
+        "  乙：请求 2 次，输入 1,250（缓存命中 0，0%），输出 30；另有 2 次请求失败",
+        "  丙：请求 0 次，输入 0，输出 0",
+        "  丁：请求 0 次，输入 0，输出 0",
+        "  戊：请求 0 次，输入 0，输出 0",
+        "  己：请求 0 次，输入 0，输出 0",
+        "  按任务：",
+        "  发言：请求 1 次，输入 100（缓存命中 40，40%），输出 10；最大单次输入 100，来自 甲 开局发言",
+        "  出价：请求 3 次，输入 750（缓存命中 150，20%），输出 75；另有 3 次请求失败；"
+        "最大单次输入 300，来自 甲 第 1 局第 2 天",
+        "  观众总结：请求 1 次，输入 1,000（缓存命中 0，0%），输出 5；最大单次输入 1,000，来自 乙 观众总结（仅观众可见）",
+    ]
+
+
+def test_usage_lists_failed_only_task_without_largest_input(tmp_path, capsys):
+    run_dir = tmp_path / "20260909_120000_ai-test"
+    write_matches(run_dir, make_matches(), run_type="ai-test")
+    jia = RunPaths(run_dir).read_config()["players"][0]
+    player_log(run_dir, jia).failure(
+        {"phase": "final_summary", "task": "summary", "context": "观众总结（仅观众可见）"},
+        CallFailedError("请求失败", messages=[ModelRequest(parts=[UserPromptPart("请总结")])],
+                        request_errors=[request_error(1)]))
+    analyze(run_dir)
+    assert "  观众总结：请求 0 次，输入 0，输出 0；另有 1 次请求失败\n" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("latest_type,older_type", [("ai-test", "ai"), ("ai", "ai-test")])
@@ -466,3 +545,4 @@ def test_offline_run_reports_fake_execution_and_configured_model(tmp_path, capsy
     assert "配置模型 responses / configured-model" in output
     assert "常规阵容结果" not in output
     assert "→ 实际 responses" not in output
+    assert "模型用量" not in output
