@@ -1,4 +1,5 @@
 # 目录键供 players.yaml 和 config.yaml 的 test_model 引用；models_dev 是该模型在 models.dev 里的条目，可能和渠道的 model ID 不同。
+# 来源没有 medium 档位的模型显式指定 low，其余按能力快照用 medium；见 docs/usage.md。
 models:
   gpt_astra:
     name: GPT姐姐
@@ -29,6 +30,7 @@ models:
     model: deepseek-flash
     provider: hub
     protocol: chat
+    reasoning_effort: low
     models_dev:
       provider: deepseek
       model: deepseek-flash
@@ -53,6 +55,7 @@ models:
     model: glm-5.3
     provider: hub
     protocol: chat
+    reasoning_effort: low
     models_dev:
       provider: zhipuai
       model: glm-5.3
@@ -61,6 +64,7 @@ models:
     model: glm-5.3-flash
     provider: hub
     protocol: chat
+    reasoning_effort: low
     models_dev:
       provider: zhipuai
       model: glm-5.3-flash
@@ -69,6 +73,7 @@ models:
     model: deepseek-v4-pro
     provider: hub
     protocol: chat
+    reasoning_effort: low
     models_dev:
       provider: deepseek
       model: deepseek-v4-pro
@@ -117,6 +122,7 @@ models:
     model: kimi-k3
     provider: hub
     protocol: chat
+    reasoning_effort: low
     models_dev:
       provider: moonshotai
       model: kimi-k3
