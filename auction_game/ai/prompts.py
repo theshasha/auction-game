@@ -252,31 +252,42 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry]) -> 
     # 正赛打完后还有下一局，说明第一名并列，进入加赛。
     if log.match_index >= log.game.regular_matches:
         lines.append("第一名总分并列，全员进入加赛。")
-    lines.append("请向全体玩家发表本局结束后的感想（不超过 300 字）。")
+    lines.append("请向全体玩家发表你的局末发言（不超过 300 字）。")
     return "\n\n".join(lines)
 
 
-def memory_request(others_speeches: dict[str, str]) -> str:
-    """补充其他玩家的发言；本人的发言已在对话中，整理记忆后才清空对话。"""
+def memory_request(others_speeches: dict[str, str], match_index: int) -> str:
+    """补充其他玩家的发言；本人的发言已在对话中，整理记忆后才清空对话。第 1 局结束时还没有旧记忆。"""
+    has_old_memory = match_index > 1
     return (
         "以下是其他玩家在本局结束后的公开发言：\n\n"
         + "\n\n".join(f"【{name}】{text}" for name, text in others_speeches.items())
-        + "\n\n请结合旧记忆、本局经历和公开发言，整理一份只有自己能看的笔记。"
-        "它会完整替换旧记忆；下一局你看不到之前各局的原始对话和公开发言，要继续用的信息都写在这里。\n\n"
+        + f"\n\n请结合{'旧记忆、' if has_old_memory else ''}本局经历和公开发言，整理一份只有自己能看的笔记。"
+        + ("它会完整替换旧记忆；" if has_old_memory else "")
+        + "下一局你看不到之前各局的原始对话和公开发言，要继续用的信息都写在这里。\n\n"
         "- 记下对手的出价倾向和自己要做的调整，每条都要能直接用于下一局的出价。\n"
-        "- 保留仍然有用的旧经验，改掉被本局推翻的判断。\n"
-        "- 只写结论，不写例子和出价记录。\n"
+        + ("- 保留仍然有用的旧经验，改掉被本局推翻的判断。\n" if has_old_memory else "")
+        + "- 只写结论，不写例子和出价记录。\n"
         "- 规则、最新成绩和之前各局的出价日志会另行提供，无需抄写。\n\n"
         "全文不超过 1000 字。"
     )
 
 
 def next_match_plan_request(past_logs: list[MatchLog], standings: list[StandingsEntry], game: GameSettings) -> str:
-    """past_logs 是已结束的全部局。整理记忆清空了旧对话，这里补回各局出价日志，留在新一局的对话里。"""
+    """past_logs 是已结束的全部局。整理记忆清空了旧对话，这里补回各局出价日志，留在新一局的对话里。
+
+    加赛局写明并列第一的玩家：进入加赛的消息只在局末发言请求里，整理记忆后就看不到了。
+    """
     match_index = len(past_logs) + 1
     logs_text = "\n\n".join(f"{_match_title(log)}：\n\n{render_match_log(log)}" for log in past_logs)
+    playoff_note = ""
+    if match_index > game.regular_matches:
+        leaders = [entry for entry in standings if entry.rank == 1]
+        playoff_note = (f"第 {match_index} 局是加赛局。目前第一名总分并列："
+                        f"{'、'.join(entry.player for entry in leaders)}各 {leaders[0].total_score} 分。\n\n")
     return (
-        f"之前各局的完整出价日志：\n\n{logs_text}\n\n"
+        playoff_note
+        + f"之前各局的完整出价日志：\n\n{logs_text}\n\n"
         f"截至当前的最新累计成绩：\n\n{render_standings(standings)}\n\n"
         f"请结合之前保存的私人笔记，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)

@@ -105,7 +105,7 @@ def test_sdk_plain_memory_and_cross_match_replacement(protocol, tmp_path):
                            reply(bid_reply(1)), reply({"memory": "cumulative-v2"}), reply(bid_reply(2))])
     player = make_player(TaskRunner(h.factory), tmp_path)
     player.give_speech("old match raw", "match_1_speech")
-    player.save_memory(prompts.memory_request({"Bravo": "other signal"}), "match_1_memory")
+    player.save_memory(prompts.memory_request({"Bravo": "other signal"}, 1), "match_1_memory")
     assert "不加格式标签或 JSON 外壳" in json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert player.memory == "cumulative-v1"
     player.plan_strategy(prompts.next_match_plan_request(make_logs(1), [], player.game), "match_1_plan")
@@ -128,7 +128,7 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     player = make_player(runner, tmp_path)
     player.give_speech("first match raw", "opening_speech")
     checkpoint = player.checkpoint()
-    player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}), "match_1_memory")
+    player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}, 1), "match_1_memory")
     assert "own raw signal" in encoded(runner.calls[-1]) and "other raw signal" in encoded(runner.calls[-1])
     assert player.memory == "第一版经验"
     assert "first match raw" not in encoded(player.messages)
@@ -197,9 +197,11 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
         p.name = name
         players.append(p)
     director = AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None), tmp_path, game=players[0].game)
-    # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。
+    # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。下一局是加赛时两人总分并列。
+    next_is_playoff = match_index >= game.regular_matches
     standings = make_standings({"Alpha": [2] * match_index, "Bravo": [1] * match_index},
-                              scores_history={"Alpha": [2] * match_index, "Bravo": [3] * match_index})
+                              scores_history={"Alpha": [3 if next_is_playoff else 2] * match_index,
+                                              "Bravo": [3] * match_index})
     logs = [*make_logs(match_index - 1, game=game), make_log(match_index=match_index, is_playoff=playoff, game=game)]
     director.on_match_end(logs, standings)
     for p in players:
@@ -212,6 +214,8 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
         for entry in standings:
             row = next(line for line in plan_input.splitlines() if f"| {entry.player} |" in line)
             assert row.split(" | ")[:3] == [f"| {entry.rank}", entry.player, str(entry.total_score)]
+        assert plan_input.startswith(f"第 {match_index + 1} 局是加赛局。目前第一名总分并列：Alpha、Bravo各 "
+                                     f"{3 * match_index} 分。") is next_is_playoff
         for fact in (f"第 {match_index + 1} 局第 1 天的出价", "你有 13 枚金币",
                      "今日奖池为 2 分", "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
                      "如果每天都命中，每人最多还能获得 6 命中分"):

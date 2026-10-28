@@ -48,7 +48,8 @@ class TestBidRequest:
         obs.match_index = match_index
         text = prompts.bid_request(obs)
         assert ("\n\n本局还剩 2 天（含今天），剩余拍卖奖池共 7 分。如果每天都命中，每人最多还能获得 4 命中分。" in text) == visible
-        plan = prompts.next_match_plan_request(make_logs(match_index - 1, obs.game), [], obs.game)
+        tied = make_standings({"甲": [0], "乙": [0]})
+        plan = prompts.next_match_plan_request(make_logs(match_index - 1, obs.game), tied, obs.game)
         assert ("\n\n本局还剩 3 天（含今天），剩余拍卖奖池共 9 分。如果每天都命中，每人最多还能获得 6 命中分。" in plan) == visible
         assert "。。" not in plan
         assert plan.split("\n\n")[-2].endswith("。")
@@ -71,7 +72,7 @@ class TestBidRequest:
         obs = make_obs(game=game, pool=daily_pool[0])
         texts = [
             prompts.opening_plan_request({}, game),
-            prompts.next_match_plan_request(make_logs(1, game), [], game),
+            prompts.next_match_plan_request(make_logs(1, game), make_standings({"甲": [0], "乙": [0]}), game),
             prompts.bid_request(obs),
         ]
         remaining_lines = [

@@ -87,16 +87,19 @@ class TestSpeechFields:
         assert "用第一人称" in text
 
 
-def test_memory_request_lists_other_speeches_and_key_requirements():
-    text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"})
+@pytest.mark.parametrize("match_index", [1, 2])
+def test_memory_request_lists_other_speeches_and_key_requirements(match_index):
+    text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"}, match_index)
     assert "公开发言：\n\n【乙】公开信号\n\n【丙】另一条公开信号\n\n请结合" in text
-    for required in ("完整替换旧记忆", "保留仍然有用的旧经验", "改掉被本局推翻的判断",
-                     "只写结论", "不超过 1000 字"):
+    for required in ("只写结论", "不超过 1000 字"):
         assert required in text
+    # 第 1 局结束时还没有旧记忆，之后每局都要在旧记忆上更新。
+    for old_memory in ("结合旧记忆", "完整替换旧记忆", "保留仍然有用的旧经验", "改掉被本局推翻的判断"):
+        assert (old_memory in text) is (match_index > 1)
 
 
 class TestPlayoffNotice:
-    """局末发言只在还有下一局时发出；正赛打完后还有下一局就预告加赛。"""
+    """局末发言只在还有下一局时发出；正赛打完后还有下一局就预告加赛，加赛局的规划请求写明并列第一的玩家。"""
 
     @pytest.mark.parametrize(
         "regular_matches, match_index, is_playoff, expected",
@@ -128,6 +131,14 @@ class TestPlayoffNotice:
         if expected:
             assert notice in text
 
+    @pytest.mark.parametrize("match_index", [3, 4, 5], ids=["last-regular", "first-playoff", "next-playoff"])
+    def test_playoff_plan_names_tied_leaders(self, match_index):
+        game = replace(TEST_GAME, regular_matches=3)
+        standings = make_standings({"甲": [1], "乙": [2], "丙": [0]}, scores_history={"甲": [9], "乙": [9], "丙": [4]})
+        text = prompts.next_match_plan_request(make_logs(match_index - 1, game), standings, game)
+        notice = f"第 {match_index} 局是加赛局。目前第一名总分并列：乙、甲各 9 分。\n\n之前各局的完整出价日志"
+        assert text.startswith(notice) is (match_index > game.regular_matches)
+
 
 class TestPlanBidMerge:
     """规划请求保留首日资源、累计分数与策略要求。"""
@@ -143,7 +154,7 @@ class TestPlanBidMerge:
         assert f"第 1 局（正赛局）：\n\n{prompts.render_match_log(logs[0])}" in text
         assert f"第 2 局（加赛局）：\n\n{prompts.render_match_log(logs[1])}" in text
         assert text.index("出价日志") < text.index("最新累计成绩") < text.index("规划第 3 局")
-        assert "之前各局的出价日志会另行提供" in prompts.memory_request({})
+        assert "之前各局的出价日志会另行提供" in prompts.memory_request({}, 2)
 
     @pytest.mark.parametrize(
         "build, speech_kind, strategy, bid_task",
@@ -176,8 +187,9 @@ class TestPlanBidMerge:
                              ids=["opening", "early-regular", "last-regular", "playoff"])
     def test_plans_only_show_remaining_scores_in_last_regular_match_and_playoffs(self, opening, match_index):
         game = replace(TEST_GAME, daily_pool=(2, 1, 3), super_hit_score=2, regular_matches=3)
+        tied = make_standings({"甲": [0], "乙": [0]})
         text = (prompts.opening_plan_request({}, game) if opening
-                else prompts.next_match_plan_request(make_logs(match_index - 1, game), [], game))
+                else prompts.next_match_plan_request(make_logs(match_index - 1, game), tied, game))
         show_remaining = match_index >= game.regular_matches
         assert ("本局还剩" in text) is show_remaining
         assert ("每人最多还能获得" in text) is show_remaining

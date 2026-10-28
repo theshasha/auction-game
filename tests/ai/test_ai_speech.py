@@ -61,12 +61,12 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
     monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", opening_plan_request)
     monkeypatch.setattr(ai_speech.prompts, "next_match_plan_request", next_match_plan_request)
     monkeypatch.setattr(ai_speech.prompts, "match_end_speech_request", lambda log, standings: f"局末 {log.match_index}")
-    monkeypatch.setattr(ai_speech.prompts, "memory_request", lambda others: f"记忆 {others}")
+    monkeypatch.setattr(ai_speech.prompts, "memory_request", lambda others, index: f"记忆 {others} {index}")
     director.on_opening()
     director.on_match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
     assert players[0].calls == [
         ("opening_speech", "开局"), ("opening_plan", "规划 {'乙': '发言乙'}"),
-        ("match_2_speech", "局末 2"), ("match_2_memory", "记忆 {'乙': '发言乙'}"), ("match_2_plan", "规划 [1, 2]"),
+        ("match_2_speech", "局末 2"), ("match_2_memory", "记忆 {'乙': '发言乙'} 2"), ("match_2_plan", "规划 [1, 2]"),
     ]
     assert players[1].calls[1] == ("opening_plan", "规划 {'甲': '发言甲'}")
 
