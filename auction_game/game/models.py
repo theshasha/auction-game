@@ -2,67 +2,72 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import asdict, dataclass, field
+from typing import Literal, Optional
 
 from auction_game.game.game_rules import GameSettings
 
 
-@dataclass
-class BidRecord:
-    """一笔出价。每名玩家每天一笔正常出价，可再加一笔超级出价（is_super=True）。"""
+@dataclass(frozen=True)
+class PlayerDayResult:
+    """一名玩家一天的结算，由引擎生成，其他地方只读。"""
 
     player: str
-    bid: int
-    is_super: bool = False
+    bid: int                     # 正常出价
+    super_bid: Optional[int]     # 超级出价，未使用为 None
+    outcome: Literal["won", "collided", "refunded"]  # 正常出价获胜、撞车或退还；获胜和撞车全额扣款
+    sniped: bool                 # 正常出价所在价位被超级出价命中；此时 outcome 为 collided，可能同时与他人互撞
+    super_hit: bool              # 超级出价是否命中；未使用为 False
+    coins_delta: int             # 当天结算的金币变化：正常出价扣款、超级成本和悬赏，不含工资
+    score: int                   # 当日得分：拍卖分加命中分
 
 
-@dataclass
+@dataclass(frozen=True)
 class DayResult:
-    """一天的完整结算结果。public 视图 = 系统每日公布的信息。"""
+    """一天的结算结果。规则四.1：第 2 天起每天开始时全部公开。"""
 
     day: int
-    bids: list[BidRecord]
     pool: int                    # 当天配置奖池，流局时仍记录作废前的金额
-    winner: Optional[str]        # None 表示流局
-    winning_bid: Optional[int]
-    auction_score: int           # 获胜者取得的拍卖分（恒等于 pool；流局为 0）
-    # 当天超级出价使用情况；每条 {"player": str, "value": int, "hit": bool}，
-    # 命中即获得本场配置的金币悬赏与命中分；出价明细次日公开
-    super_uses: list[dict] = field(default_factory=list)
-    # 当天撞车价位的具体数值（升序；只含正常出价被扣款的价位：
-    # 正常出价互撞 ≥2 笔 + 被超级出价命中（≥1 笔正常出价）的数值）
-    collision_values: list[int] = field(default_factory=list)
-    is_void: bool = False            # 是否流局（当天拍卖分作废）
+    players: tuple[PlayerDayResult, ...]  # 按参赛顺序
 
-    def public_view(self) -> dict:
-        """规则四.1：第 2 天起每天开始时公布昨日完整出价明细（全场玩家的
-        正常出价数值 + 是否使用超级出价及狙击数值）与昨日获胜者/流局情况。
-        super_uses 与 collision_values 可由明细推出，保留是为呈现层免推导。"""
-        bids_detail = []
-        for record in self.bids:
-            if record.is_super:
-                continue
-            super_record = next(
-                (r for r in self.bids if r.player == record.player and r.is_super),
-                None,
-            )
-            bids_detail.append(
-                {
-                    "player": record.player,
-                    "bid": record.bid,
-                    "super_bid": super_record.bid if super_record is not None else None,
-                }
-            )
+    def result_of(self, name: str) -> PlayerDayResult:
+        return next(result for result in self.players if result.player == name)
+
+    @property
+    def _winning(self) -> Optional[PlayerDayResult]:
+        return next((result for result in self.players if result.outcome == "won"), None)
+
+    @property
+    def winner(self) -> Optional[str]:
+        """None 表示流局。"""
+        return self._winning.player if self._winning else None
+
+    @property
+    def winning_bid(self) -> Optional[int]:
+        return self._winning.bid if self._winning else None
+
+    @property
+    def is_void(self) -> bool:
+        """所有正常出价都撞车，当天奖池作废。"""
+        return self._winning is None
+
+    @property
+    def auction_score(self) -> int:
+        """获胜者取得的拍卖分，流局为 0。"""
+        return 0 if self.is_void else self.pool
+
+    @property
+    def collision_values(self) -> list[int]:
+        """正常出价被扣款的价位（互撞或被狙），升序。"""
+        return sorted({result.bid for result in self.players if result.outcome == "collided"})
+
+    def to_dict(self) -> dict:
         return {
             "day": self.day,
-            "winner": self.winner if not self.is_void else "流局",
-            "winning_bid": self.winning_bid,
             "pool": self.pool,
-            "auction_score": self.auction_score,
-            "bids_detail": bids_detail,
-            "super_uses": [dict(use) for use in self.super_uses],
-            "collision_values": list(self.collision_values),
+            "winner": self.winner,
+            "winning_bid": self.winning_bid,
+            "players": [asdict(result) for result in self.players],
         }
 
 
@@ -86,23 +91,7 @@ class MatchLog:
             "auction_scores": dict(self.auction_scores),
             "scores": dict(self.scores),
             "remaining_coins": dict(self.remaining_coins),
-            "days": [
-                {
-                    "day": day.day,
-                    "bids": [
-                        {"player": b.player, "bid": b.bid, "is_super": b.is_super}
-                        for b in day.bids
-                    ],
-                    "pool": day.pool,
-                    "winner": day.winner,
-                    "winning_bid": day.winning_bid,
-                    "auction_score": day.auction_score,
-                    "super_uses": [dict(use) for use in day.super_uses],
-                    "collision_values": list(day.collision_values),
-                    "is_void": day.is_void,
-                }
-                for day in self.days
-            ],
+            "days": [day.to_dict() for day in self.days],
         }
 
 
@@ -126,20 +115,12 @@ class Observation:
     my_coins: int
     my_match_auction_score: int  # 本局已取得的拍卖分
     my_total_auction_score: int  # 含本局在内的累计拍卖分
+    match_index: int             # 当前第几局（1 起；正赛结束后继续编号加赛）
     day: int                     # 当前第几天（1 起）
     today_pool: int              # 当天配置奖池
-    today_history: list[dict]    # 本局已过天数的每日公布信息（DayResult.public_view）
+    today_history: list[DayResult]  # 本局已结束各天的结算，含自己昨日的结果
     standings: list[StandingsEntry]   # 截至昨日结算后的累计排名
-    past_match_logs: list[dict]  # 已结束各局的完整公开日志
     game: GameSettings          # 本场不可变规则参数，与裁判和日志共用
-    # 昨日本人的结算结果（第 1 天用默认值）。都能从公开记录推出，
-    # 直接列出是为了避免模型算错扣款，进而误判其他玩家的余额。
-    my_last_bid: Optional[int] = None      # 昨日自己的正常出价
-    my_last_deduction: Optional[int] = None  # 昨日正常出价的扣款（退还为 0；超级成本另列）
-    my_last_collided: bool = False         # 昨日自己的正常出价是否撞车（互撞或被狙）
-    my_last_sniped: bool = False           # 昨日自己的正常出价是否被超级出价狙中
-    my_last_super_bid: Optional[int] = None  # 昨日自己的超级出价（None = 昨日未使用）
-    my_last_super_hit: bool = False        # 昨日自己的超级出价是否命中（金币悬赏与命中分）
     # 全场每人金币余额（含自己，含当日工资）：规则四.1 规定第 2 天起每天
     # 开始时公布；第 1 天为 None（均为本场初始金币，无信息量，不渲染）。
     all_coins: Optional[dict[str, int]] = None

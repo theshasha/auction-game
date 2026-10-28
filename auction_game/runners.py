@@ -136,7 +136,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
 
     def bid_collector(observations):
         sample_obs = observations[0][1]  # 同一轮内所有玩家的局/天相同
-        label = f"第 {len(sample_obs.past_match_logs) + 1} 局第 {sample_obs.day} 天出价"
+        label = f"第 {sample_obs.match_index} 局第 {sample_obs.day} 天出价"
         tasks = [
             RoundTask(
                 key=player.name,

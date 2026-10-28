@@ -6,28 +6,23 @@
 狙击者获得系统发放的 3 金币悬赏（多人命中同一数值各得 3）。
 """
 
-from copy import deepcopy
-
 import pytest
 
 from auction_game.game.engine import resolve_bids
-from tests.support.factories import make_day, run_scenario, super_by_day
+from tests.support.factories import NAMES, run_scenario, super_by_day
 
 
-def test_resolve_bids_is_pure():
-    day = make_day(1, [0, 4, 3, 2, 2, 1], 1, "丙", 3, [2, 4],
-                   super_bids={"丙": (4, True), "己": (4, True), "丁": (7, False)})
-    original = deepcopy(day.bids)
-    winner, collisions, hits = resolve_bids(day.bids)
-    assert winner is day.bids[2]
-    assert collisions == {2, 4}
-    assert hits == {4}
-    normal_bids = [bid for bid in day.bids if not bid.is_super]
-    winner, collisions, hits = resolve_bids(normal_bids)
-    assert winner is day.bids[1]
-    assert collisions == {2}
-    assert hits == set()
-    assert day.bids == original
+def super_uses(day):
+    """当天用了超级出价的人：(玩家, 超级出价, 是否命中)。"""
+    return [(result.player, result.super_bid, result.super_hit)
+            for result in day.players if result.super_bid is not None]
+
+
+def test_resolve_bids_with_and_without_supers():
+    normal_bids = list(zip(NAMES, [0, 4, 3, 2, 2, 1]))
+    assert resolve_bids(normal_bids, [4, 4, 7]) == ("丙", {2, 4}, {4})
+    # 统计里的反事实判定：去掉超级出价后只按正常出价重判。
+    assert resolve_bids(normal_bids, []) == ("乙", {2}, set())
 
 
 class TestSuperBid:
@@ -43,18 +38,19 @@ class TestSuperBid:
         )
         day1 = log.days[0]
         assert day1.winner == "丙" and day1.winning_bid == 5
-        assert day1.super_uses == [{"player": "乙", "value": 6, "hit": True}]
+        assert super_uses(day1) == [("乙", 6, True)]
         assert day1.collision_values == [3, 6]  # 甲被狙的 6 + 丁戊互撞的 3
+        assert [(result.outcome, result.sniped) for result in day1.players] == [
+            ("collided", True), ("refunded", False), ("won", False),
+            ("collided", False), ("collided", False), ("refunded", False),
+        ]
 
         # 甲被狙扣 6：余额 7-6+3=4
         assert captured["甲"][1].my_coins == 4
         # 乙第 1 天净 +1（-2 成本 +3 悬赏）：次日余额 7-2+3+3=11。
         assert captured["乙"][1].my_coins == 11
         # 不限次数：第 2 天乙的超级出价（5，异于正常出价 6，6+2≤11）再次被受理
-        day2_super = next(
-            (r for r in log.days[1].bids if r.player == "乙" and r.is_super), None
-        )
-        assert day2_super is not None and day2_super.bid == 5
+        assert log.days[1].result_of("乙").super_bid == 5
 
     def test_super_whiff_still_costs(self):
         # 乙正常出 4 + 超级出价 6：正常出价 5/4/3/2/1/0 全唯一，6 上没有正常出价
@@ -67,7 +63,7 @@ class TestSuperBid:
         )
         day1 = log.days[0]
         assert day1.winner == "甲" and day1.winning_bid == 5
-        assert day1.super_uses == [{"player": "乙", "value": 6, "hit": False}]
+        assert super_uses(day1) == [("乙", 6, False)]
         assert day1.collision_values == []
         # 落空也扣 2 成本：乙第 1 天 7-2=5，第 2 天工资后为 8（而非 10）
         assert captured["乙"][1].my_coins == 8
@@ -92,8 +88,8 @@ class TestSuperBid:
             capture=captured,
         )
         day2 = log.days[1]
-        assert day2.super_uses == [{"player": "甲", "value": 6, "hit": False}]
-        assert day2.is_void and day2.winner is None
+        assert super_uses(day2) == [("甲", 6, False)]
+        assert day2.is_void and day2.winner is None and day2.auction_score == 0
         assert log.days[2].pool == 4
         assert captured["甲"][2].my_coins == 5  # 7-6+3-2+3，纯狙击仍扣成本
 
@@ -113,10 +109,7 @@ class TestSuperBid:
             capture=captured,
         )
         day1 = log.days[0]
-        assert day1.super_uses == [
-            {"player": "乙", "value": 6, "hit": True},
-            {"player": "己", "value": 6, "hit": True},
-        ]
+        assert super_uses(day1) == [("乙", 6, True), ("己", 6, True)]
         assert day1.winner == "丙" and day1.winning_bid == 5
         # 乙/己各净 +1（-2 +3）：次日余额均为 11；甲被狙扣 6：余额 4
         assert captured["乙"][1].my_coins == 11
@@ -136,7 +129,7 @@ class TestSuperBid:
             capture=captured,
         )
         day1 = log.days[0]
-        assert day1.super_uses == [{"player": "乙", "value": 0, "hit": True}]
+        assert super_uses(day1) == [("乙", 0, True)]
         assert day1.winner == "甲" and day1.winning_bid == 5
         assert day1.collision_values == [0]
         assert captured["乙"][1].my_coins == 11
@@ -152,8 +145,10 @@ class TestSuperBid:
             capture=captured,
         )
         day1 = log.days[0]
-        assert day1.super_uses == [{"player": "丙", "value": 6, "hit": True}]
+        assert super_uses(day1) == [("丙", 6, True)]
         assert day1.collision_values == [6]
+        # 本来就互撞的价位被狙，结局仍是撞车，同时记为被狙。
+        assert [(result.outcome, result.sniped) for result in day1.players[:2]] == [("collided", True)] * 2
         assert day1.winner == "丙" and day1.winning_bid == 4
         # 丙：7 - 4（获胜扣款）- 2（成本）+ 3（悬赏）= 4，第 2 天工资后为 7
         assert captured["丙"][1].my_coins == 7
@@ -176,11 +171,7 @@ class TestSuperBid:
             capture=captured,
         )
         assert log.days[0].is_void and log.days[-1].is_void
-        assert log.days[0].super_uses == [
-            {"player": "甲", "value": 0, "hit": True},
-            {"player": "乙", "value": 0, "hit": True},
-            {"player": "丙", "value": 4, "hit": True},
-        ]
+        assert super_uses(log.days[0]) == [("甲", 0, True), ("乙", 0, True), ("丙", 4, True)]
         assert [day.pool for day in log.days] == [4, 4, 4, 4, 4, 4]
         assert log.auction_scores == {"甲": 0, "乙": 0, "丙": 0, "丁": 4, "戊": 0, "己": 0}
         assert log.scores == {"甲": 4, "乙": 4, "丙": 4, "丁": 4, "戊": 0, "己": 0}
@@ -191,35 +182,21 @@ class TestSuperBid:
         assert captured["丙"][1].my_match_score == 2
         assert captured["丁"][2].my_match_score == 4
 
-    def test_super_observation_fields(self):
-        # Observation 携带昨日超级出价结局（数值/命中，无次数状态字段）；
-        # 被狙者标记「被狙」；公开视图含出价明细（次日即公开正常出价与超级数值）
+    def test_next_day_observation_carries_settled_records(self):
+        # 次日观察带昨日全员结算：狙击者的命中和悬赏、被狙者的扣款、未使用者的空超级出价
         captured = {}
-        run_scenario(
+        log = run_scenario(
             {1: [6, 4, 5, 3, 3, 2]},
             super_strategies={"乙": super_by_day({1: 6})},
             capture=captured,
         )
-        day2_obs = captured["乙"][1]
-        assert day2_obs.my_last_super_bid == 6
-        assert day2_obs.my_last_super_hit  # 命中甲的唯一 6
-        # 被狙者视角：甲的正常出价 6 标记为「被狙」，按撞车扣 6
-        assert captured["甲"][1].my_last_sniped
-        assert captured["甲"][1].my_last_collided
-        assert captured["甲"][1].my_last_deduction == 6
-        # 未使用者的昨日字段为默认值
-        assert captured["丙"][1].my_last_super_bid is None
-        assert not captured["丙"][1].my_last_super_hit
-        # 出价明细次日公开：正常出价数值 + 超级出价数值（命中与否可由明细推出）
-        assert captured["丙"][1].today_history[0]["super_uses"] == [
-            {"player": "乙", "value": 6, "hit": True}
-        ]
-        assert captured["丙"][1].today_history[0]["collision_values"] == [3, 6]
-        assert captured["丙"][1].today_history[0]["bids_detail"] == [
-            {"player": "甲", "bid": 6, "super_bid": None},
-            {"player": "乙", "bid": 4, "super_bid": 6},
-            {"player": "丙", "bid": 5, "super_bid": None},
-            {"player": "丁", "bid": 3, "super_bid": None},
-            {"player": "戊", "bid": 3, "super_bid": None},
-            {"player": "己", "bid": 2, "super_bid": None},
+        yesterday = captured["丙"][1].today_history[0]
+        assert yesterday is log.days[0]
+        sniper, target, winner = (yesterday.result_of(name) for name in ("乙", "甲", "丙"))
+        # 乙正常出价 4 退还，超级出价 -2 成本 +3 悬赏，得 2 命中分
+        assert (sniper.super_bid, sniper.super_hit, sniper.coins_delta, sniper.score) == (6, True, 1, 2)
+        assert (target.outcome, target.sniped, target.coins_delta, target.score) == ("collided", True, -6, 0)
+        assert (winner.super_bid, winner.super_hit, winner.coins_delta, winner.score) == (None, False, -5, 4)
+        assert [(result.player, result.bid, result.super_bid) for result in yesterday.players] == [
+            ("甲", 6, None), ("乙", 4, 6), ("丙", 5, None), ("丁", 3, None), ("戊", 3, None), ("己", 2, None),
         ]

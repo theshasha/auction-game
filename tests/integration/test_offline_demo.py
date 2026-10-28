@@ -17,6 +17,12 @@ from auction_game.reporting.run_paths import RunPaths
 from tests.support.factories import task_entries
 
 
+def super_uses(day):
+    """局日志里一天的超级出价：(玩家, 超级出价, 是否命中)。"""
+    return [(result["player"], result["super_bid"], result["super_hit"])
+            for result in day["players"] if result["super_bid"] is not None]
+
+
 @pytest.fixture
 def demo_configuration(monkeypatch, config_files):
     """完整阶段使用合成参数；生产 game.yaml 仅由独立烟测读取。"""
@@ -54,8 +60,8 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         assert match["game"] == game.to_dict()
         first, second, *later = match["days"]
         winner = names[{1: 0, 2: 1, 3: 2}.get(number, 0)]
-        assert first["is_void"] and first["super_uses"] == [{"player": names[0], "value": 1, "hit": False}]
-        assert second["super_uses"] == [{"player": name, "value": 2, "hit": True} for name in names[:2]]
+        assert first["winner"] is None and super_uses(first) == [(names[0], 1, False)]
+        assert super_uses(second) == [(name, 2, True) for name in names[:2]]
         assert all(day["winner"] == winner for day in [second, *later])
         for name in names:
             totals[name] += match["scores"][name]
@@ -108,7 +114,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
             assert text == result
         if entry["task"] == "plan":
             match_index = 1 if entry["phase"] == "opening_plan" else int(entry["phase"].split("_")[1]) + 1
-            actual = matches[match_index - 1]["match"]["days"][0]["bids"][0]
+            actual = matches[match_index - 1]["match"]["days"][0]["players"][0]
             assert actual["player"] == names[0] and result["bid"] == actual["bid"]
     markdown = paths.player(1, readable=True).read_text(encoding="utf-8")
     assert markdown.count("## 系统提示") == 1 and markdown.count("【你的身份】") == 1

@@ -37,11 +37,8 @@ ANALYZE_GAME = replace(TEST_GAME, daily_pool=(1, 1))
 
 def make_match_1() -> dict:
     days = [
-        make_day(1, [5, 4, 3, 2, 1, 0], pool=1, winner="乙", winning_bid=4,
-                 collision_values=[5], auction_score=1,
-                 super_bids={"乙": (5, True), "丙": (6, False)}),
-        make_day(2, [3, 3, 1, 2, 0, 6], pool=1, winner="己", winning_bid=6,
-                 collision_values=[3], auction_score=1),
+        make_day(1, [5, 4, 3, 2, 1, 0], super_bids={"乙": 5, "丙": 6}),
+        make_day(2, [3, 3, 1, 2, 0, 6]),
     ]
     auction_scores = {"甲": 0, "乙": 1, "丙": 0, "丁": 0, "戊": 0, "己": 1}
     scores = {**auction_scores, "乙": 3}
@@ -52,10 +49,8 @@ def make_match_1() -> dict:
 
 def make_match_2() -> dict:
     days = [
-        make_day(1, [0, 3, 0, 2, 5, 4], pool=1, winner="戊", winning_bid=5,
-                 collision_values=[0], auction_score=1),
-        make_day(2, [0, 4, 1, 2, 3, 2], pool=1, winner="乙", winning_bid=4,
-                 collision_values=[2], auction_score=1),
+        make_day(1, [0, 3, 0, 2, 5, 4]),
+        make_day(2, [0, 4, 1, 2, 3, 2]),
     ]
     auction_scores = {"甲": 0, "乙": 1, "丙": 0, "丁": 0, "戊": 1, "己": 0}
     remaining = {"甲": 10, "乙": 6, "丙": 10, "丁": 8, "戊": 5, "己": 8}
@@ -94,12 +89,7 @@ def test_score_matrices_and_top_match_counts():
 
 @pytest.mark.parametrize("all_void", [False, True])
 def test_solo_top_and_all_zero_tied_matches(all_void, tmp_path, capsys):
-    days = [
-        make_day(day, [2, 2] if all_void else [2, 1], 1,
-                 None if all_void else "甲", None if all_void else 2,
-                 [2] if all_void else [], 0 if all_void else 1, is_void=all_void)
-        for day in (1, 2)
-    ]
+    days = [make_day(day, [2, 2] if all_void else [2, 1]) for day in (1, 2)]
     points = {"甲": 0 if all_void else 2, "乙": 0}
     match = make_log(days=days, auction_scores=points, scores=points,
                      game=ANALYZE_GAME).to_dict()
@@ -208,11 +198,14 @@ def test_super_result_days_compare_all_supers_once_without_changing_logs(
     bids, super_bids, winner, winning_bid, collisions, changed, collision_hits, normal_burn, sniped_burn,
 ):
     days = [
-        make_day(1, bids, 1, winner, winning_bid, collisions, int(winner is not None),
-                 is_void=winner is None, super_bids=super_bids),
-        make_day(2, [0] * len(bids), 1, None, None, [0], is_void=True),
+        make_day(1, bids, super_bids={name: value for name, (value, _) in super_bids.items()}),
+        make_day(2, [0] * len(bids)),
     ]
-    names = [bid.player for bid in days[0].bids if not bid.is_super]
+    # 场景本身由引擎结算，这里确认它就是参数描述的那种情况。
+    assert (days[0].winner, days[0].winning_bid, days[0].collision_values) == (winner, winning_bid, collisions)
+    assert {result.player: result.super_hit for result in days[0].players if result.super_bid is not None} == {
+        name: hit for name, (_, hit) in super_bids.items()}
+    names = [result.player for result in days[0].players]
     auction_scores = {name: int(name == winner) for name in names}
     # 各超级命中独立得 2 分，含流局日。
     scores = {name: auction_scores[name] + (2 if super_bids.get(name, (0, False))[1] else 0)
@@ -248,9 +241,8 @@ def test_super_result_days_without_super_usage(tmp_path, capsys):
 
 def test_super_collision_hits_include_void_days(tmp_path, capsys):
     days = [
-        make_day(1, [0, 0, 3, 3], 1, None, None, [0, 3], is_void=True,
-                 super_bids={"乙": (3, True), "丙": (0, True), "丁": (0, True)}),
-        make_day(2, [0, 0, 0, 0], 1, None, None, [0], is_void=True),
+        make_day(1, [0, 0, 3, 3], super_bids={"乙": 3, "丙": 0, "丁": 0}),
+        make_day(2, [0, 0, 0, 0]),
     ]
     matches = [{"match": make_log(days=days, auction_scores=dict.fromkeys(["甲", "乙", "丙", "丁"], 0),
                                   scores={"甲": 0, "乙": 2, "丙": 2, "丁": 2},
@@ -268,8 +260,8 @@ def test_super_collision_hits_include_void_days(tmp_path, capsys):
 def test_super_result_days_do_not_simulate_future():
     game = replace(ANALYZE_GAME, daily_salary=0)
     days = [
-        make_day(1, [0, 5, 3], 1, "乙", 5, [], 1, super_bids={"甲": (6, False)}),
-        make_day(2, [0, 0, 3], 1, "丙", 3, [0], 1),
+        make_day(1, [0, 5, 3], super_bids={"甲": 6}, game=game),
+        make_day(2, [0, 0, 3], game=game),
     ]
     # 移除首日超级后只重判首日，不重算次日余额或报价。
     points = {"甲": 0, "乙": 1, "丙": 1}
@@ -431,9 +423,9 @@ def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, caps
     game = replace(TEST_GAME, initial_coins=20, daily_salary=4, daily_pool=(2, 4, 3),
                    max_bid=9, super_cost=1, super_bounty=5, regular_matches=2, max_playoffs=4)
     days = [
-        make_day(1, [9, 7, 5], 2, "乙", 7, [9], 2, super_bids={"乙": (9, True)}),
-        make_day(2, [2, 2, 0], 4, "丙", 0, [2], 4),
-        make_day(3, [9, 3, 1], 3, "甲", 9, [], 3),
+        make_day(1, [9, 7, 5], pool=2, super_bids={"乙": 9}, game=game),
+        make_day(2, [2, 2, 0], pool=4, game=game),
+        make_day(3, [9, 3, 1], pool=3, game=game),
     ]
     log = make_log(match_index=3, is_playoff=True, game=game, days=days,
                    auction_scores={"甲": 3, "乙": 2, "丙": 4},
@@ -481,8 +473,8 @@ def test_loading_orders_matches_by_file_number(tmp_path):
 
 def test_mean_bids_exclude_void_days(tmp_path, capsys):
     days = [
-        make_day(1, [2, 2, 2, 2, 2, 2], 1, None, None, [2], is_void=True),
-        make_day(2, [0, 3, 0, 2, 5, 4], 1, "戊", 5, [0], 1),
+        make_day(1, [2, 2, 2, 2, 2, 2]),
+        make_day(2, [0, 3, 0, 2, 5, 4]),
     ]
     points = {"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 1, "己": 0}
     match = make_log(days=days, auction_scores=points, scores=points,
@@ -503,10 +495,8 @@ def test_mean_bids_exclude_void_days(tmp_path, capsys):
 
 def test_aggregate_zero_bids_include_super_but_player_zero_bids_only_normal(tmp_path, capsys):
     days = [
-        make_day(1, [0, 0, 1, 1, 0, 0], 1, None, None, [0, 1], is_void=True,
-                 super_bids={"丙": (0, True)}),
-        make_day(2, [1, 0, 2, 3, 4, 5], 1, "己", 5, [0], 1,
-                 super_bids={"甲": (0, True)}),
+        make_day(1, [0, 0, 1, 1, 0, 0], super_bids={"丙": 0}),
+        make_day(2, [1, 0, 2, 3, 4, 5], super_bids={"甲": 0}),
     ]
     match = make_log(days=days, auction_scores={"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 1},
                      scores={"甲": 2, "乙": 0, "丙": 2, "丁": 0, "戊": 0, "己": 1},
@@ -522,8 +512,8 @@ def test_aggregate_zero_bids_include_super_but_player_zero_bids_only_normal(tmp_
 def test_total_score_ranking_can_reverse_auction_score_ranking():
     game = replace(ANALYZE_GAME, daily_pool=(1, 1), super_hit_score=3)
     days = [
-        make_day(1, [5, 4, 3], 1, "甲", 5, [3], 1, super_bids={"乙": (3, True)}),
-        make_day(2, [5, 1, 0], 1, "甲", 5, [], 1),
+        make_day(1, [5, 4, 3], super_bids={"乙": 3}, game=game),
+        make_day(2, [5, 1, 0], game=game),
     ]
     match = make_log(days=days, auction_scores={"甲": 2, "乙": 0, "丙": 0},
                      scores={"甲": 2, "乙": 3, "丙": 0}, game=game).to_dict()

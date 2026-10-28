@@ -15,7 +15,6 @@ from pathlib import Path
 
 from auction_game.game.engine import resolve_bids
 from auction_game.game.game_rules import GameSettings
-from auction_game.game.models import BidRecord
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
 
@@ -86,40 +85,36 @@ def collect_player_stats(matches: list[dict]) -> dict:
         for name in champions:
             top_matches[name] += 1
         for day in days:
-            normal_bid_counts = Counter(bid["bid"] for bid in day["bids"] if not bid["is_super"])
-            if day["super_uses"]:
+            results = day["players"]
+            normal_bid_counts = Counter(result["bid"] for result in results)
+            super_results = [result for result in results if result["super_bid"] is not None]
+            if super_results:
                 super_days += 1
-                # 固定当天正常报价，移除全部超级后重新判定，只比较当天结果。
-                normal_only = [BidRecord(player=bid["player"], bid=bid["bid"])
-                               for bid in day["bids"] if not bid["is_super"]]
                 super_collision_hits += sum(
-                    use["hit"] and normal_bid_counts[use["value"]] >= 2
-                    for use in day["super_uses"]
+                    result["super_hit"] and normal_bid_counts[result["super_bid"]] >= 2
+                    for result in super_results
                 )
-                without_super, _, _ = resolve_bids(normal_only)
-                without_super_winner = without_super.player if without_super is not None else None
-                if (without_super_winner, without_super is None) != (day["winner"], day["is_void"]):
+                # 固定当天正常报价，移除全部超级后重新判定，只比较当天结果。
+                without_super, _, _ = resolve_bids(((result["player"], result["bid"]) for result in results), ())
+                if without_super != day["winner"]:
                     super_changed_days += 1
-            burned_values = set(day["collision_values"])
-            for bid in day["bids"]:
-                name = bid["player"]
-                if bid["is_super"]:
-                    continue
-                if bid["bid"] == 0:
+            for result in results:
+                name, bid = result["player"], result["bid"]
+                if bid == 0:
                     zero_bid_counts[name] += 1
-                if bid["bid"] in burned_values:
-                    collision_burn[name] += bid["bid"]
+                if result["outcome"] == "collided":
+                    collision_burn[name] += bid
                     # 原本互撞的价位即使同时被狙，也只归入正常报价互撞。
-                    if normal_bid_counts[bid["bid"]] >= 2:
-                        normal_collision_burn[name] += bid["bid"]
+                    if normal_bid_counts[bid] >= 2:
+                        normal_collision_burn[name] += bid
                     else:
-                        unique_sniped_burn[name] += bid["bid"]
-                if not day["is_void"]:
-                    normal_bids[name].append(bid["bid"])
-            for use in day["super_uses"]:
-                super_uses_count[use["player"]] += 1
-                if use["hit"]:
-                    super_hits[use["player"]] += 1
+                        unique_sniped_burn[name] += bid
+                if day["winner"] is not None:
+                    normal_bids[name].append(bid)
+                if result["super_bid"] is not None:
+                    super_uses_count[name] += 1
+                    if result["super_hit"]:
+                        super_hits[name] += 1
 
     rows = []
     for name in player_names:
@@ -281,13 +276,14 @@ def analyze(run_dir: Path) -> None:
         for day in match["days"]:
             total_days += 1
             pools_by_day_index.setdefault(day["day"], []).append(day["pool"])
-            for bid in day["bids"]:
-                if bid["bid"] == 0:
-                    zero_bids += 1
-            if day["is_void"]:
+            # 正常出价和超级出价的数值都算。
+            values = [value for result in day["players"] for value in (result["bid"], result["super_bid"])
+                      if value is not None]
+            zero_bids += values.count(0)
+            if day["winner"] is None:
                 void_days += 1
                 continue
-            bids_by_day_index.setdefault(day["day"], []).extend(b["bid"] for b in day["bids"])
+            bids_by_day_index.setdefault(day["day"], []).extend(values)
             winning_bids.append(day["winning_bid"])
             if day["winning_bid"] == game.max_bid:
                 cap_wins += 1

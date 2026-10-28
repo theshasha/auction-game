@@ -64,7 +64,6 @@ def run_tournament(
             is_playoff=is_playoff,
             auction_scores_history=auction_scores_history,
             scores_history=scores_history,
-            past_logs=result.match_logs,
             game=game,
             bid_collector=bid_collector,
             on_day_end=on_day_end,

@@ -7,14 +7,15 @@
 from __future__ import annotations
 
 
-from auction_game.game.engine import calculate_day_scores
 from auction_game.game.game_rules import GameSettings
-from auction_game.game.models import MatchLog, Observation, StandingsEntry
+from auction_game.game.models import MatchLog, Observation, PlayerDayResult, StandingsEntry
 from auction_game.game.rules import render_rules
 
 
 # 出价要求在系统提示的规则里，这里只提醒当前任务。
 BID_HINT = "请分析局势并提交今日出价。"
+# 正常出价结果在出价表里的写法；被狙也写作撞车。
+OUTCOME_TEXT = {"won": "获胜", "collided": "撞车", "refunded": "退款"}
 
 
 def build_system_prompt(
@@ -93,53 +94,51 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) ->
 
 
 def _my_last_day_line(obs: Observation) -> str:
-    """只解释本人金币结算；报价与得分由公开明细提供。"""
+    """只解释本人金币结算；报价与得分由公开明细提供。
+
+    这些都能从公开记录推出，单独写出是为了避免模型算错扣款，进而误判其他玩家的余额。
+    """
     yesterday = obs.today_history[-1]
-    is_void = yesterday["winner"] == "流局"
-    won = yesterday["winner"] == obs.my_name
+    mine = yesterday.result_of(obs.my_name)
 
     segments = []
-    if is_void:
-        segments.append(f"所有正常出价都撞车，昨天流局，你的正常出价扣除 {obs.my_last_deduction} 金币")
-    elif won:
-        segments.append(f"正常出价获胜，扣除 {obs.my_last_deduction} 金币")
-    elif obs.my_last_sniped:
-        segments.append(f"正常出价被超级出价命中，扣除 {obs.my_last_deduction} 金币")
-    elif obs.my_last_collided:
-        segments.append(f"正常出价撞车，扣除 {obs.my_last_deduction} 金币")
+    if yesterday.is_void:
+        segments.append(f"所有正常出价都撞车，昨天流局，你的正常出价扣除 {mine.bid} 金币")
+    elif mine.outcome == "won":
+        segments.append(f"正常出价获胜，扣除 {mine.bid} 金币")
+    elif mine.sniped:
+        segments.append(f"正常出价被超级出价命中，扣除 {mine.bid} 金币")
+    elif mine.outcome == "collided":
+        segments.append(f"正常出价撞车，扣除 {mine.bid} 金币")
     else:
         segments.append("正常出价没有撞车，但也没有获胜，金币全额退还")
 
-    if obs.my_last_super_bid is not None:
+    if mine.super_bid is not None:
         segments.append(f"超级出价花费 {obs.game.super_cost} 金币")
-        if obs.my_last_super_hit:
+        if mine.super_hit:
             segments.append(f"获得 {obs.game.super_bounty} 金币悬赏")
     return "昨日你的金币结算：\n\n" + "\n".join(f"- {segment}。" for segment in segments)
 
 
-def _yesterday_bids_table(obs: Observation, super_hit_by_player: dict[str, bool]) -> str:
-    """昨日报价与当前余额按玩家对齐；正常出价结果与局末出价日志的判定一致。"""
-    yesterday = obs.today_history[-1]
+def _super_cell(result: PlayerDayResult) -> tuple[str, str]:
+    """超级出价数值和命中情况；未使用时两格都是“—”。"""
+    if result.super_bid is None:
+        return "—", "—"
+    return str(result.super_bid), "命中" if result.super_hit else "落空"
+
+
+def _yesterday_bids_table(obs: Observation) -> str:
+    """昨日报价与当前余额按玩家对齐；正常出价结果与局末出价日志的写法一致。"""
     headers = ["玩家", "正常出价", "正常出价结果", "超级出价", "命中情况", "当前金币"]
     lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
-    for detail in yesterday["bids_detail"]:
-        name = detail["player"]
-        if name == yesterday["winner"]:
-            outcome = "获胜"
-        elif detail["bid"] in yesterday["collision_values"]:
-            outcome = "撞车"
-        else:
-            outcome = "退款"
-        super_bid = detail["super_bid"]
-        hit = "—" if super_bid is None else ("命中" if super_hit_by_player.get(name, False) else "落空")
-        cells = [name, str(detail["bid"]), outcome, "—" if super_bid is None else str(super_bid), hit,
-                 str(obs.all_coins[name])]
+    for result in obs.today_history[-1].players:
+        cells = [result.player, str(result.bid), OUTCOME_TEXT[result.outcome], *_super_cell(result),
+                 str(obs.all_coins[result.player])]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
 
 def bid_request(obs: Observation) -> str:
-    match_index = len(obs.past_match_logs) + 1
     # 余额已经包含当天工资，注明这一点，避免重复计算。
     status_notes = []
     if obs.day >= 2:
@@ -154,31 +153,26 @@ def bid_request(obs: Observation) -> str:
     if obs.day == obs.game.max_days:
         status_line += "\n\n本局最后一天，结束后金币清零。"
     status_line += "\n\n" + _total_scores_line(obs.standings)
-    status_line += _remaining_scores_info(obs.game, match_index, obs.day, obs.today_pool)
+    status_line += _remaining_scores_info(obs.game, obs.match_index, obs.day, obs.today_pool)
     if not obs.today_history:
-        return f"当前是第 {match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{BID_HINT}"
+        return f"当前是第 {obs.match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{BID_HINT}"
 
     yesterday = obs.today_history[-1]
-    winner = None if yesterday["winner"] == "流局" else yesterday["winner"]
-    if winner is None:
-        announcement = f"昨日公布：流局，奖池 {yesterday['pool']} 分作废。"
+    if yesterday.is_void:
+        announcement = f"昨日公布：流局，奖池 {yesterday.pool} 分作废。"
     else:
         announcement = (
-            f"昨日公布：{winner} 以 {yesterday['winning_bid']} 金币的正常出价获胜，"
-            f"拍卖得分 {yesterday['auction_score']} 分。"
+            f"昨日公布：{yesterday.winner} 以 {yesterday.winning_bid} 金币的正常出价获胜，"
+            f"拍卖得分 {yesterday.auction_score} 分。"
         )
-    # 保留含 0 出价与超级出价命中状态的完整明细。
-    super_hit_by_player = {use["player"]: use["hit"] for use in yesterday["super_uses"]}
     hit_scores = "、".join(
-        f"{name} {obs.game.super_hit_score} 分"
-        for name, hit in super_hit_by_player.items()
-        if hit
+        f"{result.player} {obs.game.super_hit_score} 分" for result in yesterday.players if result.super_hit
     )
     hit_announcement = f"昨日命中得分：{hit_scores}。" if hit_scores else "昨日无人命中。"
     lines = [
-        f"当前是第 {match_index} 局第 {obs.day} 天。", "",
+        f"当前是第 {obs.match_index} 局第 {obs.day} 天。", "",
         announcement, "", hit_announcement, "", "昨日出价明细与当前金币（已含今日工资）：", "",
-        _yesterday_bids_table(obs, super_hit_by_player), "",
+        _yesterday_bids_table(obs), "",
         _my_last_day_line(obs), "",
         status_line,
     ]
@@ -186,51 +180,29 @@ def bid_request(obs: Observation) -> str:
 
 
 def render_match_log(log: MatchLog) -> str:
-    """生成共用出价表：每日得分由引擎计算，本局总分读取已结算的结果。"""
+    """生成共用出价表：每日得分读取每天的结算，本局总分读取局末结果。"""
     summary = [
         "本局得分：" + "、".join(f"{name} {score} 分" for name, score in log.scores.items()),
         "本局拍卖分：" + "、".join(f"{name} {score} 分" for name, score in log.auction_scores.items()),
     ]
-    player_names = [record.player for record in log.days[0].bids if not record.is_super]
+    player_names = [result.player for result in log.days[0].players]
     header = "| 天 | 奖池 | " + " | ".join(player_names) + " | 结果 | 撞车价位 | 当日得分 |"
     separator = "|" + " --- |" * (len(player_names) + 5)
     rows = []
     for day in log.days:
-        hit_by_player = {use["player"] for use in day.super_uses if use["hit"]}
         cells = []
-        for name in player_names:
-            normal = next(record for record in day.bids if record.player == name and not record.is_super)
-            super_record = next(
-                (record for record in day.bids if record.player == name and record.is_super),
-                None,
-            )
-            cell = str(normal.bid)
-            if name == day.winner:
-                cell += "（获胜）"
-            elif normal.bid in day.collision_values:
-                cell += "（撞车）"
-            else:
-                cell += "（退款）"
-            if super_record is not None:
-                cell += f"；超级出价 {super_record.bid}"
-                if name in hit_by_player:
-                    cell += "（命中）"
-                else:
-                    cell += "（落空）"
+        for result in day.players:
+            cell = f"{result.bid}（{OUTCOME_TEXT[result.outcome]}）"
+            if result.super_bid is not None:
+                super_bid, hit = _super_cell(result)
+                cell += f"；超级出价 {super_bid}（{hit}）"
             cells.append(cell)
         if day.is_void:
             outcome = "流局（奖池作废）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 金币获胜"
         collision_text = "、".join(str(value) for value in day.collision_values) or "—"
-        day_scores = calculate_day_scores(
-            player_names,
-            winner=day.winner,
-            auction_score=day.auction_score,
-            super_uses=day.super_uses,
-            game=log.game,
-        )
-        score_text = "、".join(f"{name} {score}" for name, score in day_scores.items() if score) or "—"
+        score_text = "、".join(f"{result.player} {result.score}" for result in day.players if result.score) or "—"
         rows.append(
             f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {collision_text} | {score_text} |"
         )

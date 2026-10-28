@@ -13,34 +13,28 @@ from auction_game.game.engine import compute_standings, run_match
 from auction_game.game.players import ScriptedPlayer
 
 
-class TestMyLastDayObservation:
-    """Observation 携带昨日自我结算结果（出价/扣款/撞车），供提示词直接告知。"""
+class TestDayHistoryObservation:
+    """Observation 带本局已结束各天的全员结算，提示从中取本人昨日的结果。"""
 
-    def test_day1_has_no_last_day_fields(self):
+    def test_day1_has_no_history(self):
         captured = {}
         run_scenario({}, capture=captured)  # 全员每天出 0
         seen = [obs for obs_list in captured.values() for obs in obs_list if obs.day == 1]
         assert len(seen) == 6  # 六人的第 1 天观察
-        for obs in seen:
-            assert obs.my_last_bid is None and obs.my_last_deduction is None
-            assert not obs.my_last_collided
+        assert all(obs.today_history == [] and obs.match_index == 1 for obs in seen)
 
-    def test_crash_winner_refund_fields(self):
+    def test_crash_winner_refund_results(self):
         # 第 1 天：己唯一 1 获胜；第 2 天：6、5、5、3、2、0 →
         # 甲出 6 唯一获胜扣 6（拿全部奖池 4 分），乙丙出 5 撞车各扣 5，
         # 丁出 3、戊出 2 唯一未中退还；第 3 天的 Observation 回看第 2 天
         captured = {}
-        run_scenario({1: [0, 0, 0, 0, 0, 1], 2: [6, 5, 5, 3, 2, 0]}, capture=captured)
-        day3 = {name: captured[name][2] for name in captured}
-
-        assert (day3["甲"].my_last_bid, day3["甲"].my_last_deduction) == (6, 6)
-        assert not day3["甲"].my_last_collided
-        assert (day3["乙"].my_last_bid, day3["乙"].my_last_deduction) == (5, 5)
-        assert day3["乙"].my_last_collided
-        assert (day3["丁"].my_last_bid, day3["丁"].my_last_deduction) == (3, 0)
-        assert not day3["丁"].my_last_collided
-        assert (day3["戊"].my_last_bid, day3["戊"].my_last_deduction) == (2, 0)
-        assert not day3["戊"].my_last_collided
+        log = run_scenario({1: [0, 0, 0, 0, 0, 1], 2: [6, 5, 5, 3, 2, 0]}, capture=captured)
+        history = captured["丁"][2].today_history
+        assert history == log.days[:2]
+        assert [(result.player, result.outcome, result.coins_delta) for result in history[-1].players] == [
+            ("甲", "won", -6), ("乙", "collided", -5), ("丙", "collided", -5),
+            ("丁", "refunded", 0), ("戊", "refunded", 0), ("己", "refunded", 0),
+        ]
 
     def test_zero_collision_on_void_day(self):
         # 甲第 1 天出 7 获胜扣 7；第 2 天全员出 0 撞车流局——甲撞车、扣款 0
@@ -49,9 +43,9 @@ class TestMyLastDayObservation:
         assert log.days[1].is_void
 
         day2_obs, day3_obs = captured["甲"][1], captured["甲"][2]
-        assert (day2_obs.my_last_bid, day2_obs.my_last_deduction) == (7, 7)
-        assert day3_obs.my_last_bid == 0
-        assert day3_obs.my_last_deduction == 0 and day3_obs.my_last_collided
+        assert day2_obs.today_history[-1].result_of("甲").coins_delta == -7
+        mine = day3_obs.today_history[-1].result_of("甲")
+        assert (mine.bid, mine.outcome, mine.coins_delta) == (0, "collided", 0)
 
 
 class TestAllCoinsPublication:
@@ -104,16 +98,15 @@ class TestMatchLogPublication:
         assert data["is_playoff"] is False
         assert len(data["days"]) == 6  # 固定 6 天
         first_day = data["days"][0]
-        assert first_day["bids"][0]["player"] == "甲"
-        assert [b["bid"] for b in first_day["bids"]] == [5, 4, 3, 2, 1, 0]
-        assert all(b["is_super"] is False for b in first_day["bids"])
+        assert first_day["players"][0] == {
+            "player": "甲", "bid": 5, "super_bid": None, "outcome": "won", "sniped": False,
+            "super_hit": False, "coins_delta": -5, "score": 4,
+        }
+        assert [result["bid"] for result in first_day["players"]] == [5, 4, 3, 2, 1, 0]
+        assert [result["outcome"] for result in first_day["players"][1:]] == ["refunded"] * 5
         assert first_day["winner"] == "甲"
         assert first_day["winning_bid"] == 5
         assert first_day["pool"] == 4
-        assert first_day["auction_score"] == 4
-        assert first_day["super_uses"] == []
-        assert first_day["collision_values"] == []
-        assert first_day["is_void"] is False
         assert sum(data["auction_scores"].values()) == 24
         assert data["scores"] == log.scores
         assert sum(data["scores"].values()) == 24
@@ -122,11 +115,9 @@ class TestMatchLogPublication:
         # 局末完整日志含超级出价的数值与命中结果（对局内次日也公开出价明细）
         log = run_scenario({1: [5, 4, 3, 2, 1, 0]}, super_strategies={"乙": super_by_day({1: 6})})
         day1 = log.to_dict()["days"][0]
-        super_records = [b for b in day1["bids"] if b["is_super"]]
-        assert len(super_records) == 1
-        assert super_records[0]["player"] == "乙" and super_records[0]["bid"] == 6
         # 6 上没有正常出价 → 落空
-        assert day1["super_uses"] == [{"player": "乙", "value": 6, "hit": False}]
+        assert [(result["player"], result["super_bid"], result["super_hit"])
+                for result in day1["players"] if result["super_bid"] is not None] == [("乙", 6, False)]
         assert day1["winner"] == "甲" and day1["winning_bid"] == 5
 
 
@@ -148,8 +139,9 @@ class TestScoreObservations:
             for name in names
         ]
         log = run_match(
-            players, 2, False, auction_scores_history, [], game, scores_history=scores_history,
+            players, 2, False, auction_scores_history, game, scores_history=scores_history,
         )
+        assert all(obs.match_index == 2 for observations in captured.values() for obs in observations)
         assert log.auction_scores == {"甲": 0, "乙": 10, "丙": 0}
         assert log.scores == {"甲": 0, "乙": 16, "丙": 0}
         assert [(obs.my_match_score, obs.my_total_score) for obs in captured["乙"]] == [

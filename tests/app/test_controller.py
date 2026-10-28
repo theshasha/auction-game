@@ -83,11 +83,11 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
     alpha.plan_strategy("首日规划", "opening_plan")
     before = [player.checkpoint() for player in (alpha, bravo)]
     settlements, published, day_reports = [], [], []
-    calculate = engine.calculate_day_scores
+    settle = engine.settle_day
 
     def count_settlement(*args, **kwargs):
         settlements.append(True)
-        return calculate(*args, **kwargs)
+        return settle(*args, **kwargs)
 
     def collect(observations):
         tasks = [RoundTask(player.name, lambda p=player, o=obs: p.decide_bid(o), player)
@@ -99,7 +99,7 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         day_reports.append((log.days[-1], standings, coins))
         print_day_result(log, standings, coins)
 
-    monkeypatch.setattr(engine, "calculate_day_scores", count_settlement)
+    monkeypatch.setattr(engine, "settle_day", count_settlement)
     with running(controller, lambda: run_tournament(
         [alpha, bravo], game, bid_collector=collect,
         on_match_end=lambda log, standings: published.append(log),

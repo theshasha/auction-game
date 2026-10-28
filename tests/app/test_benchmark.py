@@ -36,7 +36,7 @@ def test_benchmark_uses_one_game_without_logs(monkeypatch, capsys, tmp_path):
                 assert players[0].decide_bid(obs) == (expected_bid, None)
         result = run_tournament(players, actual_game)
         strategy_records.extend(
-            record for log in result.match_logs for day in log.days for record in day.bids
+            record for log in result.match_logs for day in log.days for record in day.players
             if record.player == "最高可付价玩家"
         )
         return result
@@ -51,7 +51,7 @@ def test_benchmark_uses_one_game_without_logs(monkeypatch, capsys, tmp_path):
     assert not log_dir.exists()
     assert calls == [BOT_NAMES] * 2 + [["最高可付价玩家"] + BOT_NAMES[:5]] * 2
     assert strategy_records
-    assert not any(record.is_super for record in strategy_records)
+    assert not any(record.super_bid is not None for record in strategy_records)
     output = capsys.readouterr().out
     assert "两组各 2 场，共 4 场" in output
     assert "最高可付价对照：2 场（上限 9，无超级，5 个随机对手）" in output
@@ -99,11 +99,11 @@ def test_comparison_describes_only_second_group(monkeypatch, capsys, strategy_sc
             playoff_count=0,
             match_logs=[
                 make_log(game=game, days=[
-                    make_day(1, [6, 5, 4, 3, 2, 0], 3, "甲", 6, [], super_bids={"乙": 8}),
-                    make_day(2, [0] * 6, 12, None, None, [0], is_void=True),
+                    make_day(1, [6, 5, 4, 3, 2, 0], pool=3, super_bids={"乙": 8}, game=game),
+                    make_day(2, [0] * 6, pool=12, game=game),
                 ]),
                 make_log(match_index=2, game=game, days=[
-                    make_day(1, [9] * 6, 9, None, None, [9], is_void=True),
+                    make_day(1, [9] * 6, pool=9, game=game),
                 ]),
             ],
             final_standings=make_standings(auction_scores, scores_history=scores),

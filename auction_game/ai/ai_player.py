@@ -110,7 +110,7 @@ class AIPlayer(Player):
             self._pending_day1_bid = None
             return submission
         output = self._task("bid", prompts.bid_request(obs), "bid",
-                            f"第 {len(obs.past_match_logs) + 1} 局第 {obs.day} 天", coins=obs.my_coins)
+                            f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins)
         return output["bid"], output["super_bid"]
 
     def give_speech(self, user_text: str, phase: str, context: str = "") -> str:

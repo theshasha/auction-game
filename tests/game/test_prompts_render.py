@@ -12,8 +12,8 @@ class TestRenderMatchLog:
     def test_renders_markdown_table_with_player_columns(self):
         log = make_log(
             days=[
-                make_day(1, [5, 4, 3, 2, 1, 0], 1, "甲", 5, [], 1),
-                make_day(2, [3, 3, 2, 2, 2, 0], 1, "己", 0, [2, 3], 1),
+                make_day(1, [5, 4, 3, 2, 1, 0]),
+                make_day(2, [3, 3, 2, 2, 2, 0]),
             ],
             auction_scores=dict(zip(NAMES, [1, 0, 0, 0, 0, 1])),
             scores=dict(zip(NAMES, [1, 0, 0, 0, 0, 1])),
@@ -38,8 +38,8 @@ class TestRenderMatchLog:
         # 超级出价只展示引擎命中结果，不重复固定成本及悬赏。
         # （首日场景：乙超 6 命中甲的唯一 6，丙 5 捡漏获胜）
         log = make_log(days=[
-            make_day(1, [6, 4, 5, 3, 3, 2], 1, "丙", 5, [3, 6], 1, super_bids={"乙": (6, True)}),
-            make_day(2, [3, 4, 5, 3, 2, 1], 1, "丙", 5, [3], 1, super_bids={"甲": 6}),
+            make_day(1, [6, 4, 5, 3, 3, 2], super_bids={"乙": 6}),
+            make_day(2, [3, 4, 5, 3, 2, 1], super_bids={"甲": 6}),
         ], auction_scores=dict(zip(NAMES, [0, 0, 2, 0, 0, 0])),
             scores=dict(zip(NAMES, [0, 2, 2, 0, 0, 0])))
         text = prompts.render_match_log(log)
@@ -56,8 +56,8 @@ class TestRenderMatchLog:
     def test_each_void_day_forfeits_its_own_pool(self):
         log = make_log(
             days=[
-                make_day(2, [2, 2, 2, 1, 1, 1], 1, None, None, [1, 2], is_void=True),
-                make_day(3, [2, 2, 2, 1, 1, 1], 3, None, None, [1, 2], is_void=True),
+                make_day(2, [2, 2, 2, 1, 1, 1], pool=1),
+                make_day(3, [2, 2, 2, 1, 1, 1], pool=3),
             ],
             game=replace(TEST_GAME, daily_pool=(2, 1, 3)),
         )
@@ -70,10 +70,8 @@ class TestRenderMatchLog:
         game = replace(TEST_GAME, daily_pool=(1, 2), super_hit_score=hit_score)
         log = make_log(
             days=[
-                make_day(1, [2, 2, 2, 1, 1, 1], 1, None, None, [1, 2], is_void=True,
-                         super_bids={"甲": (1, True), "乙": (1, True)}),
-                make_day(2, [5, 4, 3, 2, 1, 0], 2, "甲", 5, [4], 2,
-                         super_bids={"甲": (4, True)}),
+                make_day(1, [2, 2, 2, 1, 1, 1], super_bids={"甲": 1, "乙": 1}, game=game),
+                make_day(2, [5, 4, 3, 2, 1, 0], pool=2, super_bids={"甲": 4}, game=game),
             ],
             auction_scores=dict(zip(NAMES, [2, 0, 0, 0, 0, 0])),
             scores=dict(zip(NAMES, [expected + hit_score, hit_score, 0, 0, 0, 0])),
@@ -88,8 +86,7 @@ class TestRenderMatchLog:
 
     def test_last_day_void_still_scores_each_hit(self):
         log = make_log(
-            days=[make_day(1, [2, 2, 2, 1, 1, 1], 1, None, None, [1, 2], is_void=True,
-                           super_bids={"甲": (1, True), "丁": (2, True)})],
+            days=[make_day(1, [2, 2, 2, 1, 1, 1], super_bids={"甲": 1, "丁": 2})],
             scores=dict(zip(NAMES, [2, 0, 0, 2, 0, 0])),
             game=replace(TEST_GAME, daily_pool=(1,)),
         )

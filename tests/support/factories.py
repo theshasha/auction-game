@@ -9,9 +9,9 @@ from pydantic_ai.models.function import FunctionModel
 from auction_game.ai.agent_tasks import TaskRunner
 
 from auction_game.ai.ai_player import AIPlayer
-from auction_game.game.engine import compute_standings, run_match
+from auction_game.game.engine import compute_standings, run_match, settle_day
 from auction_game.game.game_rules import GameSettings
-from auction_game.game.models import BidRecord, DayResult, MatchLog, Observation
+from auction_game.game.models import MatchLog, Observation
 from auction_game.game.players import ScriptedPlayer
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
@@ -29,39 +29,22 @@ CHANNELS = {
 
 # ---------- 数据对象 ----------
 
-def make_day(day, bids, pool, winner, winning_bid, collision_values, auction_score=0,
-             is_void=False, super_bids=None):
-    """构造一天结果。bids 为六人正常出价；super_bids 为 {玩家: 数值} 或
-    {玩家: (数值, 是否命中)}，每个使用者在出价表里追加一笔 is_super=True
-    的记录，并在 super_uses 里登记 {"player", "value", "hit"}。
-    collision_values 为当天撞车价位的具体数值（升序）。"""
-    records = [BidRecord(player=name, bid=bid) for name, bid in zip(NAMES, bids)]
-    super_uses = []
-    for name, super_spec in (super_bids or {}).items():
-        value, hit = super_spec if isinstance(super_spec, tuple) else (super_spec, False)
-        records.append(BidRecord(player=name, bid=value, is_super=True))
-        super_uses.append({"player": name, "value": value, "hit": hit})
-    return DayResult(
-        day=day,
-        bids=records,
-        pool=pool,
-        winner=winner,
-        winning_bid=winning_bid,
-        auction_score=auction_score,
-        super_uses=super_uses,
-        collision_values=list(collision_values),
-        is_void=is_void,
-    )
+def make_day(day, bids, pool=1, super_bids=None, game=TEST_GAME):
+    """用引擎结算一天。bids 是按 NAMES 顺序的正常出价，人数可少于六人；
+    super_bids 是 {玩家: 超级出价}。获胜、撞车和命中都由引擎判定。"""
+    super_bids = super_bids or {}
+    return settle_day(day, pool, [(name, bid, super_bids.get(name)) for name, bid in zip(NAMES, bids)], game)
 
 
 def make_log(match_index=1, is_playoff=False, days=None, auction_scores=None, game=TEST_GAME, *,
              scores=None, remaining_coins=None):
+    """局日志；分数和余额由调用方填写，默认全员 0。"""
     players = auction_scores if auction_scores is not None else NAMES
     return MatchLog(
         match_index=match_index,
         is_playoff=is_playoff,
         game=game,
-        days=days if days is not None else [make_day(1, [5, 4, 3, 2, 1, 0], 1, "甲", 5, [], 1)],
+        days=days if days is not None else [make_day(1, [5, 4, 3, 2, 1, 0], game=game)],
         auction_scores=auction_scores if auction_scores is not None else {name: 0 for name in NAMES},
         scores=scores if scores is not None else {name: 0 for name in players},
         remaining_coins=remaining_coins if remaining_coins is not None else {name: 0 for name in players},
@@ -80,26 +63,9 @@ def make_standings(auction_scores_history: dict[str, list[int]], *, scores_histo
     return compute_standings(auction_scores_history, scores_history=scores_history)
 
 
-def history(**overrides):
-    """一日公布（DayResult.public_view 形状）：默认「乙 以 5 获胜、无撞车、
-    无人用超级」，用 overrides 覆盖字段。调用方自行包列表作 today_history。"""
-    base = {"day": 1, "winner": "乙", "winning_bid": 5, "pool": 1, "auction_score": 1,
-            "bids_detail": [
-                {"player": name, "bid": bid, "super_bid": None}
-                for name, bid in zip(NAMES, [6, 5, 4, 3, 2, 1])
-            ],
-            "super_uses": [], "collision_values": []}
-    base.update(overrides)
-    return base
-
-
 def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, pool=1, coins=7,
-             my_last_bid=None, my_last_deduction=None,
-             my_last_collided=False, my_last_sniped=False,
-             my_last_super_bid=None, my_last_super_hit=False,
-             all_coins=None,
-             past_match_logs=None, game=TEST_GAME, *, match_score=0, total_score=0):
-    """全字段 Observation 工厂。past_match_logs 默认空（即当前为第 1 局）。
+             all_coins=None, match_index=1, game=TEST_GAME, *, match_score=0, total_score=0):
+    """全字段 Observation 工厂，today_history 用 make_day 生成。
 
     和引擎一样总给全员排名；有昨日结果时默认给全员余额。
     """
@@ -113,19 +79,13 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
         my_total_auction_score=total_auction_score,
         my_match_score=match_score,
         my_total_score=total_score,
+        match_index=match_index,
         day=day,
         today_pool=pool,
         today_history=today_history or [],
         standings=make_standings({name: [total_auction_score if name == my_name else 0] for name in names},
                                  scores_history={name: [total_score if name == my_name else 0] for name in names}),
-        past_match_logs=past_match_logs or [],
         game=game,
-        my_last_bid=my_last_bid,
-        my_last_deduction=my_last_deduction,
-        my_last_collided=my_last_collided,
-        my_last_sniped=my_last_sniped,
-        my_last_super_bid=my_last_super_bid,
-        my_last_super_hit=my_last_super_hit,
         all_coins=all_coins,
     )
 
@@ -141,7 +101,7 @@ def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=
     ]
     auction_scores_history = {name: [] for name in NAMES}
     return run_match(
-        players, match_index, is_playoff, auction_scores_history, [], game,
+        players, match_index, is_playoff, auction_scores_history, game,
         scores_history={name: [] for name in NAMES},
     )
 

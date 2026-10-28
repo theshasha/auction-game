@@ -135,14 +135,19 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert all(entry["total_score"] == log.scores[entry["player"]]
                for entry in payload["standings_after_match"])
     days = payload["match"]["days"]
-    assert days[0]["collision_values"] == [4]
-    assert days[0]["super_uses"] == [
-        {"player": "乙", "value": 3, "hit": False},
-        {"player": "丁", "value": 4, "hit": True},
+    # 首日甲乙的 4 被丁狙中，乙狙 3 落空，丙以 9 获胜。
+    assert days[0]["players"][:4] == [
+        {"player": "甲", "bid": 4, "super_bid": None, "outcome": "collided", "sniped": True,
+         "super_hit": False, "coins_delta": -4, "score": 0},
+        {"player": "乙", "bid": 4, "super_bid": 3, "outcome": "collided", "sniped": True,
+         "super_hit": False, "coins_delta": -6, "score": 0},
+        {"player": "丙", "bid": 9, "super_bid": None, "outcome": "won", "sniped": False,
+         "super_hit": False, "coins_delta": -9, "score": 1},
+        {"player": "丁", "bid": 2, "super_bid": 4, "outcome": "refunded", "sniped": False,
+         "super_hit": True, "coins_delta": 3, "score": 2},
     ]
-    assert len(days[0]["bids"]) == 8
-    assert days[2]["bids"][0] == {"player": "甲", "bid": 0, "is_super": False}
-    assert days[1]["is_void"] and days[2]["is_void"]
+    assert (days[0]["winner"], days[0]["winning_bid"]) == ("丙", 9)
+    assert days[1]["winner"] is None and days[2]["winner"] is None
     assert [day["pool"] for day in days] == [1, 2, 3]
-    assert [day["auction_score"] for day in days] == [1, 0, 0]
-    assert days[1]["super_uses"] == [{"player": "丁", "value": 2, "hit": True}]
+    assert [(result["player"], result["super_hit"]) for result in days[1]["players"]
+            if result["super_bid"] is not None] == [("丁", True)]

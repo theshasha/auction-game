@@ -4,7 +4,6 @@
 """
 
 import random
-from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -17,44 +16,34 @@ from tests.support.factories import (
     run_one_match,
     run_scenario,
 )
-from auction_game.game.engine import calculate_day_scores, run_match
+from auction_game.game.engine import run_match, settle_day
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.players import RandomBot, ScriptedPlayer
 from auction_game.configuration import load_game_settings
 
 
-class TestDayScores:
-    @pytest.mark.parametrize(
-        "auction_score, hit_score, expected",
-        [
-            (3, 1, {"甲": 4, "乙": 1, "丙": 0}),
-            (12, 2, {"甲": 14, "乙": 2, "丙": 0}),
-            (0, 2, {"甲": 2, "乙": 2, "丙": 0}),
-            (12, 0, {"甲": 12, "乙": 0, "丙": 0}),
-            (0, 0, {"甲": 0, "乙": 0, "丙": 0}),
-        ],
-    )
-    def test_pure_scores_add_auction_points_and_configured_hit_score(
-        self, auction_score, hit_score, expected
-    ):
-        uses = [
-            {"player": "甲", "value": 6, "hit": True},
-            {"player": "乙", "value": 6, "hit": True},
-            {"player": "丙", "value": 5, "hit": False},
-        ]
-        original = deepcopy(uses)
+class TestSettleDay:
+    """每人一条结算：结局、金币变化（成本 2、悬赏 3）和当日得分。"""
+
+    @pytest.mark.parametrize("pool, hit_score", [(3, 1), (12, 2), (12, 0)])
+    def test_winner_and_snipers_score_pool_and_configured_hit_score(self, pool, hit_score):
+        # 甲 5 唯一获胜并狙中丁的唯一 2；乙也狙中 2；丙狙 7 落空。
         game = replace(TEST_GAME, super_hit_score=hit_score)
-        scores = calculate_day_scores(
-            iter(["甲", "乙", "丙"]),
-            winner="甲", auction_score=auction_score, super_uses=uses, game=game,
-        )
-        assert scores == expected
-        assert uses == original
-        scores["乙"] = 99
-        assert calculate_day_scores(
-            ["甲", "乙", "丙"],
-            winner="甲", auction_score=auction_score, super_uses=uses, game=game,
-        ) == expected
+        day = settle_day(1, pool, [("甲", 5, 2), ("乙", 4, 2), ("丙", 3, 7), ("丁", 2, None)], game)
+        assert [(result.outcome, result.sniped, result.super_hit) for result in day.players] == [
+            ("won", False, True), ("refunded", False, True), ("refunded", False, False), ("collided", True, False),
+        ]
+        assert [result.coins_delta for result in day.players] == [-5 - 2 + 3, -2 + 3, -2, -2]
+        assert [result.score for result in day.players] == [pool + hit_score, hit_score, 0, 0]
+        assert (day.winner, day.winning_bid, day.auction_score, day.collision_values) == ("甲", 5, pool, [2])
+
+    def test_void_day_discards_pool_and_keeps_hit_score(self):
+        # 2 互撞，甲狙中丙的唯一 1，全部正常出价撞车。
+        day = settle_day(1, 4, [("甲", 2, 1), ("乙", 2, None), ("丙", 1, None)], TEST_GAME)
+        assert day.is_void and day.winner is None and day.winning_bid is None and day.auction_score == 0
+        assert [result.outcome for result in day.players] == ["collided"] * 3
+        assert [result.coins_delta for result in day.players] == [-2 - 2 + 3, -2, -1]
+        assert [result.score for result in day.players] == [2, 0, 0]
 
 
 class TestWinningRules:
@@ -250,7 +239,7 @@ class TestConfiguredMatch:
             for name in names
         ]
         log = run_match(
-            players, 1, False, {name: [] for name in names}, [], game,
+            players, 1, False, {name: [] for name in names}, game,
             scores_history={name: [] for name in names},
         )
 
@@ -261,14 +250,15 @@ class TestConfiguredMatch:
         assert log.scores == {"甲": 0, "乙": 11, "丙": 0}
         assert captured["乙"][1].my_match_score == 4
         assert captured["乙"][2].my_match_score == 7
-        assert log.days[0].super_uses == [{"player": "乙", "value": 9, "hit": True}]
-        assert log.days[1].super_uses == [{"player": "乙", "value": 9, "hit": False}]
+        assert [(result.super_bid, result.super_hit) for result in log.days[0].players] == [
+            (None, False), (9, True), (None, False)]
+        assert log.days[1].result_of("乙").super_bid == 9 and not log.days[1].result_of("乙").super_hit
         # 首日甲被狙付 9；乙付正常 3、成本 4、获赏 6；丙退还正常 2。
+        assert [result.coins_delta for result in log.days[0].players] == [-9, -3 - 4 + 6, 0]
         assert captured["甲"][1].all_coins == {"甲": 4, "乙": 12, "丙": 13}
         # 第二日乙付正常 8 和落空成本 4；第三日再加工资 2。
         assert captured["甲"][2].all_coins == {"甲": 6, "乙": 2, "丙": 15}
-        assert captured["甲"][1].my_last_sniped
-        assert captured["甲"][1].my_last_deduction == 9
+        assert log.days[0].result_of("甲").sniped
         assert all(obs.game is game for observations in captured.values() for obs in observations)
         assert log.game is game
         assert log.to_dict()["game"] == game.to_dict()

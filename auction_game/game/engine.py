@@ -8,52 +8,68 @@ from typing import Callable, Optional
 
 from auction_game.game.game_rules import GameSettings, validate_submission
 from auction_game.game.models import (
-    BidRecord,
     DayResult,
     MatchLog,
     Observation,
+    PlayerDayResult,
     StandingsEntry,
 )
 from auction_game.game.players import Player
 
 
 DayEndCallback = Callable[[MatchLog, list[StandingsEntry], dict[str, int]], None]
+Submission = tuple[str, int, Optional[int]]  # (玩家, 正常出价, 超级出价或 None)
 
 
-def resolve_bids(bids: list[BidRecord]) -> tuple[Optional[BidRecord], set[int], set[int]]:
-    """判定当天结果，返回获胜记录、撞车价位和超级命中价位；只有正常出价能获胜。"""
-    normal_bids = [record for record in bids if not record.is_super]
-    normal_counts = Counter(record.bid for record in normal_bids)
-    sniped_values = {
-        record.bid for record in bids if record.is_super and record.bid in normal_counts
-    }
+def resolve_bids(
+    normal_bids: Iterable[tuple[str, int]], super_values: Iterable[int],
+) -> tuple[Optional[str], set[int], set[int]]:
+    """判定当天结果，返回获胜者、撞车价位和超级命中价位；只有正常出价能获胜。"""
+    normal_bids = list(normal_bids)
+    normal_counts = Counter(bid for _, bid in normal_bids)
+    sniped_values = {value for value in super_values if value in normal_counts}
     burned_values = {
         value for value, count in normal_counts.items() if count >= 2 or value in sniped_values
     }
-    winning_record = max(
-        (record for record in normal_bids if record.bid not in burned_values),
-        key=lambda record: record.bid,
-        default=None,
+    winner = max(
+        ((player, bid) for player, bid in normal_bids if bid not in burned_values),
+        key=lambda item: item[1],
+        default=(None, None),
+    )[0]
+    return winner, burned_values, sniped_values
+
+
+def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSettings) -> DayResult:
+    """按规则结算一天的出价，出价须已通过校验。
+
+    获胜和撞车的正常出价全额扣除，其余退还；超级出价每次扣固定成本，命中各领一份悬赏和命中分。
+    获胜者取得当天奖池的拍卖分，流局时奖池作废。
+    """
+    winner, burned_values, sniped_values = resolve_bids(
+        ((player, bid) for player, bid, _ in submissions),
+        (super_bid for _, _, super_bid in submissions if super_bid is not None),
     )
-    return winning_record, burned_values, sniped_values
-
-
-def calculate_day_scores(
-    player_names: Iterable[str],
-    *,
-    winner: str | None,
-    auction_score: int,
-    super_uses: list[dict],
-    game: GameSettings,
-) -> dict[str, int]:
-    """直接累加已判定的拍卖分与逐人命中分，返回全员单日总分。"""
-    scores = {name: 0 for name in player_names}
-    if winner is not None:
-        scores[winner] += auction_score
-    for use in super_uses:
-        if use["hit"]:
-            scores[use["player"]] += game.super_hit_score
-    return scores
+    results = []
+    for player, bid, super_bid in submissions:
+        if player == winner:
+            outcome = "won"
+        elif bid in burned_values:
+            outcome = "collided"
+        else:
+            outcome = "refunded"
+        super_hit = super_bid in sniped_values
+        coins_delta = 0 if outcome == "refunded" else -bid
+        score = pool if outcome == "won" else 0
+        if super_bid is not None:
+            coins_delta -= game.super_cost
+        if super_hit:
+            coins_delta += game.super_bounty
+            score += game.super_hit_score
+        results.append(PlayerDayResult(
+            player=player, bid=bid, super_bid=super_bid, outcome=outcome, sniped=bid in sniped_values,
+            super_hit=super_hit, coins_delta=coins_delta, score=score,
+        ))
+    return DayResult(day=day, pool=pool, players=tuple(results))
 
 
 def compute_standings(
@@ -93,7 +109,6 @@ def run_match(
     match_index: int,
     is_playoff: bool,
     auction_scores_history: dict[str, list[int]],
-    past_logs: list[MatchLog],
     game: GameSettings,
     bid_collector=None,
     *,
@@ -112,137 +127,66 @@ def run_match(
     match_auction_scores = {player.name: 0 for player in players}
     match_scores = {player.name: 0 for player in players}
     log = MatchLog(match_index=match_index, is_playoff=is_playoff, game=game)
-    past_log_dicts = [past_log.to_dict() for past_log in past_logs]
+
+    def current_standings() -> list[StandingsEntry]:
+        return compute_standings(
+            auction_scores_history,
+            scores_history=scores_history,
+            current_match_auction_scores=match_auction_scores,
+            current_match_scores=match_scores,
+        )
+
+    def observe(day: int, pool: int) -> list[tuple[Player, Observation]]:
+        """当天开始时每名玩家能看到的信息，全员共用同一份排名、余额和本局记录。"""
+        # 全员余额第 2 天起公布，取发工资后的值；复制一份，当天结算不会改动它。
+        all_coins = dict(coins) if day >= 2 else None
+        standings = current_standings()
+        history = list(log.days)
+        return [(player, Observation(
+            my_name=player.name,
+            my_coins=coins[player.name],
+            my_match_auction_score=match_auction_scores[player.name],
+            my_total_auction_score=sum(auction_scores_history[player.name]) + match_auction_scores[player.name],
+            my_match_score=match_scores[player.name],
+            my_total_score=sum(scores_history[player.name]) + match_scores[player.name],
+            match_index=match_index,
+            day=day,
+            today_pool=pool,
+            today_history=history,
+            standings=standings,
+            game=game,
+            all_coins=all_coins,
+        )) for player in players]
 
     for day in range(1, game.max_days + 1):
         if day >= 2:
             for name in coins:
                 coins[name] += game.daily_salary
         pool = game.daily_pool[day - 1]
-
-        # 昨日本人的结算结果；扣款只含正常出价，超级出价的成本和悬赏另列。
-        my_last_by_player: dict[str, dict] = {}
-        if log.days:
-            yesterday = log.days[-1]
-            sniped_values = {use["value"] for use in yesterday.super_uses if use["hit"]}
-            super_by_player = {use["player"]: use for use in yesterday.super_uses}
-            for record in yesterday.bids:
-                if record.is_super:
-                    continue
-                collided = record.bid in yesterday.collision_values
-                paid = record.player == yesterday.winner or collided
-                super_use = super_by_player.get(record.player)
-                my_last_by_player[record.player] = {
-                    "my_last_bid": record.bid,
-                    "my_last_deduction": record.bid if paid else 0,
-                    "my_last_collided": collided,
-                    "my_last_sniped": record.bid in sniped_values,
-                    "my_last_super_bid": super_use["value"] if super_use else None,
-                    "my_last_super_hit": bool(super_use and super_use["hit"]),
-                }
-
-        # 全员余额第 2 天起公布，取发工资后的值；复制一份，当天结算不会改动它。
-        all_coins_snapshot = dict(coins) if day >= 2 else None
-        standings_snapshot = compute_standings(
-            auction_scores_history,
-            scores_history=scores_history,
-            current_match_auction_scores=match_auction_scores,
-            current_match_scores=match_scores,
-        )
-        observations = []
-        for player in players:
-            observations.append(
-                (
-                    player,
-                    Observation(
-                        my_name=player.name,
-                        my_coins=coins[player.name],
-                        my_match_auction_score=match_auction_scores[player.name],
-                        my_total_auction_score=sum(auction_scores_history[player.name]) + match_auction_scores[player.name],
-                        my_match_score=match_scores[player.name],
-                        my_total_score=sum(scores_history[player.name]) + match_scores[player.name],
-                        day=day,
-                        today_pool=pool,
-                        today_history=[day_result.public_view() for day_result in log.days],
-                        standings=standings_snapshot,
-                        past_match_logs=past_log_dicts,
-                        game=game,
-                        all_coins=all_coins_snapshot,
-                        **my_last_by_player.get(player.name, {}),
-                    ),
-                )
-            )
+        observations = observe(day, pool)
 
         if bid_collector is None:
             submissions = [player.decide_bid(obs) for player, obs in observations]
         else:
             submissions = bid_collector(observations)
-
-        bids: list[BidRecord] = []
-        super_uses: list[dict] = []
-        for (player, _), (bid, super_bid) in zip(observations, submissions):
-            reason = validate_submission(bid, super_bid, coins[player.name], game)
+        entries = [(player.name, bid, super_bid)
+                   for (player, _), (bid, super_bid) in zip(observations, submissions)]
+        for name, bid, super_bid in entries:
+            reason = validate_submission(bid, super_bid, coins[name], game)
             if reason is not None:
-                raise ValueError(f"{player.name} 的出价不符合规则：{reason}")
-            bids.append(BidRecord(player=player.name, bid=bid))
-            if super_bid is not None:
-                bids.append(BidRecord(player=player.name, bid=super_bid, is_super=True))
-                super_uses.append({"player": player.name, "value": super_bid, "hit": False})
+                raise ValueError(f"{name} 的出价不符合规则：{reason}")
 
-        winning_record, burned_normal_values, sniped_values = resolve_bids(bids)
-        for use in super_uses:
-            use["hit"] = use["value"] in sniped_values
-
-        winner = winning_record.player if winning_record else None
-        winning_bid = winning_record.bid if winning_record else None
-        auction_score = pool if winning_record else 0
-        if winner is not None:
-            match_auction_scores[winner] += auction_score
-
-        # 获胜和撞车的正常出价全额扣除，其余退还；超级出价每次扣固定成本，命中各领一份悬赏。
-        for record in bids:
-            if record.is_super:
-                continue
-            if record is winning_record or record.bid in burned_normal_values:
-                coins[record.player] -= record.bid
-        for use in super_uses:
-            coins[use["player"]] -= game.super_cost
-            if use["hit"]:
-                coins[use["player"]] += game.super_bounty
-
-        day_scores = calculate_day_scores(
-            match_scores,
-            winner=winner,
-            auction_score=auction_score,
-            super_uses=super_uses,
-            game=game,
-        )
-        for name, score in day_scores.items():
-            match_scores[name] += score
-
-        log.days.append(
-            DayResult(
-                day=day,
-                bids=bids,
-                pool=pool,
-                winner=winner,
-                winning_bid=winning_bid,
-                auction_score=auction_score,
-                super_uses=super_uses,
-                collision_values=sorted(burned_normal_values),
-                is_void=winner is None,
-            )
-        )
+        result = settle_day(day, pool, entries, game)
+        for player_result in result.players:
+            coins[player_result.player] += player_result.coins_delta
+            match_scores[player_result.player] += player_result.score
+        if result.winner is not None:
+            match_auction_scores[result.winner] += result.auction_score
+        log.days.append(result)
         log.auction_scores = dict(match_auction_scores)
         log.scores = dict(match_scores)
         log.remaining_coins = dict(coins)
         if on_day_end is not None:
-            standings = compute_standings(
-                auction_scores_history,
-                scores_history=scores_history,
-                current_match_auction_scores=match_auction_scores,
-                current_match_scores=match_scores,
-            )
-            on_day_end(log, standings, dict(coins))
+            on_day_end(log, current_standings(), dict(coins))
 
     return log

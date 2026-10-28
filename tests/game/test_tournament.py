@@ -11,14 +11,10 @@ NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 
 
 def make_players(match_winners: dict[int, str]):
-    """每局由指定玩家包揽拍卖分，其他人以 0 撞车。
-
-    局号 = len(obs.past_match_logs) + 1。
-    """
+    """每局由指定玩家包揽拍卖分，其他人以 0 撞车。"""
     def make_strategy(name):
         def strategy(obs):
-            current_match = len(obs.past_match_logs) + 1
-            return 1 if match_winners.get(current_match) == name else 0
+            return 1 if match_winners.get(obs.match_index) == name else 0
         return strategy
 
     return [ScriptedPlayer(name, make_strategy(name)) for name in NAMES]
@@ -27,7 +23,7 @@ def make_players(match_winners: dict[int, str]):
 def make_bid_players(table, capture=None):
     """三人合法整单脚本；键为 (局号, 天)，未列出的日子全员出 0。"""
     def submission(obs):
-        bids = table.get((len(obs.past_match_logs) + 1, obs.day), {})
+        bids = table.get((obs.match_index, obs.day), {})
         return bids.get(obs.my_name, (0, None))
 
     def strategy(obs):
@@ -77,8 +73,7 @@ class TestRegularSeasonOnly:
         assert len(first_days) == 6
         assert all(obs.my_coins == 11 for obs in first_days)
         assert all(obs.game is game for obs in seen)
-        assert first_days[3].past_match_logs[0]["game"] == game.to_dict()
-        assert first_days[3].past_match_logs[0]["scores"] == {"甲": 9, "乙": 0, "丙": 0}
+        assert [obs.match_index for obs in first_days] == [1, 1, 1, 2, 2, 2]
         assert first_days[3].my_match_score == 0
         assert first_days[3].my_total_score == 9
         assert first_days[3].standings[0].total_score == 9
@@ -222,11 +217,10 @@ class TestDirectorMatchEnd:
         assert {entry.player: entry.scores_per_match for entry in regular_standings} == {
             "甲": [2], "乙": [2], "丙": [0],
         }
-        playoff_opening = [obs for obs in observations if len(obs.past_match_logs) == 1 and obs.day == 1]
+        playoff_opening = [obs for obs in observations if obs.match_index == 2 and obs.day == 1]
         assert {obs.my_name: obs.my_total_score for obs in playoff_opening} == {"甲": 2, "乙": 2, "丙": 0}
         assert all(obs.my_match_score == 0 and obs.my_coins == game.initial_coins for obs in playoff_opening)
-        assert playoff_opening[0].past_match_logs[0]["scores"] == {"甲": 2, "乙": 2, "丙": 0}
-        after_hit = next(obs for obs in observations if len(obs.past_match_logs) == 1
+        after_hit = next(obs for obs in observations if obs.match_index == 2
                          and obs.day == 2 and obs.my_name == "甲")
         assert after_hit.my_match_score == 1 and after_hit.my_total_score == 3
         assert after_hit.standings[0].total_score == 3
@@ -353,7 +347,7 @@ class TestPublicationOnMatchEnd:
         first_log, first_standings = publications[0]
         # 局日志完整：固定 6 天，含每天每人出价
         assert len(first_log.days) == 6
-        assert len(first_log.days[0].bids) == 6
+        assert len(first_log.days[0].players) == 6
         # 局末公开排名含拍卖分明细，且反映该局结果
         first_entry = next(e for e in first_standings if e.player == "甲")
         assert first_entry.total_auction_score == 24
@@ -362,15 +356,15 @@ class TestPublicationOnMatchEnd:
         assert first_entry.total_score == 24
         assert first_entry.scores_per_match == [24]
 
-    def test_players_observe_past_logs_and_standings(self):
-        # 第 2 局第 1 天时，玩家应能看到第 1 局的完整公开日志与当前排名
+    def test_players_observe_match_index_and_standings(self):
+        # 第 2 局第 1 天时，玩家应能看到局号和含第 1 局成绩的当前排名
         seen = []
 
         def make_strategy(name):
             def strategy(obs):
-                if len(obs.past_match_logs) == 1 and obs.day == 1:
+                if obs.match_index == 2 and obs.day == 1:
                     seen.append(obs)
-                return 2 if match_winners.get(len(obs.past_match_logs) + 1) == name else 1
+                return 2 if match_winners.get(obs.match_index) == name else 1
             return strategy
 
         match_winners = {i: "甲" for i in range(1, 8)}
@@ -379,9 +373,6 @@ class TestPublicationOnMatchEnd:
 
         assert len(seen) == 6
         obs = seen[0]
-        assert obs.past_match_logs[0]["match_index"] == 1
-        assert obs.past_match_logs[0]["auction_scores"]["甲"] == 24
-        assert obs.past_match_logs[0]["scores"]["甲"] == 24
         assert obs.my_match_score == 0
         assert obs.my_total_score == 24
         leader = obs.standings[0]

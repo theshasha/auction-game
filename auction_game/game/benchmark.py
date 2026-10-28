@@ -54,7 +54,7 @@ def run_benchmark(count: int) -> int:
                         continue
                     stats["winning_bids"][day.winning_bid] += 1
                     stats["bids_by_day"].setdefault(day.day, []).extend(
-                        record.bid for record in day.bids
+                        bid for result in day.players for bid in (result.bid, result.super_bid) if bid is not None
                     )
         return stats
 

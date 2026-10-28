@@ -216,9 +216,7 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
                      "今日奖池为 2 分", "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
                      "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
-        obs = replace(make_ai_obs(game=game, coins=game.initial_coins),
-                      past_match_logs=[make_log(match_index=i, game=game).to_dict()
-                                       for i in range(1, match_index + 1)])
+        obs = replace(make_ai_obs(game=game, coins=game.initial_coins), match_index=match_index + 1)
         assert p.decide_bid(obs) == (1, 6)
         assert len(p.task_runner.calls) == 3
         assert p.decide_bid(obs) == (0, None)
