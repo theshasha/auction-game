@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from auction_game.ai.text_output import FIXED_TAGS
 from auction_game.game.game_rules import GameSettings
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
 from auction_game.paths import (ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, MODELS_PATH, GAME_PATH, CAPABILITIES_PATH,
@@ -114,7 +115,7 @@ def load_game_settings(path: str | Path = GAME_PATH, *, test_model: bool = False
 
 def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=True,
                        snapshot_path: str | Path | None = None) -> dict[str, dict]:
-    """读取模型目录；有 name 的条目可以参赛，没有的只能作测试模型。"""
+    """读取模型目录；name 是条目参赛时默认的角色名。"""
     path = ROOT_DIR / path
     models = _read_mapping(path).get("models")
     if not isinstance(models, dict) or not models:
@@ -161,7 +162,7 @@ def load_players(path: str | Path = PLAYERS_PATH, models_path: str | Path = MODE
         field = f"players[{index}]"
         if not isinstance(player, dict):
             raise ConfigurationError(f"{players_path}：{field} 必须是键值配置")
-        extra = set(player) - {"model", "persona_title", "persona_text", "predicted_win_rate"}
+        extra = set(player) - {"name", "model", "persona_title", "persona_text", "predicted_win_rate"}
         if extra:
             raise ConfigurationError(f"{players_path}：{field} 不支持字段：{', '.join(sorted(extra))}")
         for key in ("persona_title", "persona_text", "model"):
@@ -172,15 +173,33 @@ def load_players(path: str | Path = PLAYERS_PATH, models_path: str | Path = MODE
         if model_key not in catalog:
             raise ConfigurationError(f"{players_path}：{field}.model 未知目录键：{model_key!r}")
         identity = {"key": model_key, **catalog[model_key]}
-        name = identity.get("name")
-        if not name:
-            raise ConfigurationError(f"{players_path}：{field}.model 没有参赛角色名")
+        name = _player_name(players_path, field, player, model_key, identity.get("name"))
         if name in names:
-            raise ConfigurationError(f"{players_path}：{field} 名字重复：{name!r}")
+            raise ConfigurationError(f"{players_path}：{field} 名字重复：{name!r}；"
+                                     "同一个模型放多名玩家时，给每人写 name")
         names.add(name)
         rate = player.get("predicted_win_rate", 0)
         if type(rate) not in (int, float) or not 0 <= rate <= 100:
             raise ConfigurationError(f"{players_path}：{field}.predicted_win_rate 必须是 0~100 的数字")
-        resolved.append({**player, **catalog[model_key], "model_key": model_key,
+        resolved.append({**player, **catalog[model_key], "name": name, "model_key": model_key,
                          "identity_model": identity, "predicted_win_rate": rate})
     return resolved
+
+
+def _player_name(players_path, field, player, model_key, catalog_name) -> str:
+    """阵容写了 name 就用它，否则用目录里的角色名。限制的原因见 docs/letters.md 的"名字"。"""
+    if "name" in player:
+        name = player["name"]
+        if not isinstance(name, str) or not name:
+            raise ConfigurationError(f"{players_path}：{field}.name 必须是非空字符串")
+        label = f"{field}.name "
+    elif catalog_name is None:
+        raise ConfigurationError(f"{players_path}：{field} 没有名字：在这里写 name，或给 models.{model_key} 加 name")
+    else:
+        name = catalog_name
+        label = f"{field} 的名字取自 models.{model_key}.name，"
+    if any(char.isspace() or char in "<>/" for char in name):
+        raise ConfigurationError(f"{players_path}：{label}不能含空白和 <、>、/：{name!r}")
+    if name in FIXED_TAGS:
+        raise ConfigurationError(f"{players_path}：{label}不能是 {'、'.join(FIXED_TAGS)}：{name!r}")
+    return name

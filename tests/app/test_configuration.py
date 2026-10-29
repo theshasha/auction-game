@@ -87,7 +87,7 @@ def test_invalid_structure(config_files, file_index, text, field):
 
 
 @pytest.mark.parametrize("field,value", [
-    ("model", "substitute"), ("predicted_win_rate", 101),
+    ("model", "missing"), ("predicted_win_rate", 101),
 ])
 def test_invalid_player_fields(config_files, field, value):
     players_path = config_files[1]
@@ -99,15 +99,88 @@ def test_invalid_player_fields(config_files, field, value):
 
 
 def test_unknown_player_field_rejected(config_files):
-    rewrite(config_files[1], lambda data: data["players"][0].update(name="重复维护名字"))
-    with pytest.raises(ConfigurationError, match="不支持字段.*name"):
+    rewrite(config_files[1], lambda data: data["players"][0].update(nickname="昵称"))
+    with pytest.raises(ConfigurationError, match="不支持字段.*nickname"):
         load_configuration(*config_files)
 
 
-def test_duplicate_names(config_files):
-    rewrite(config_files[2], lambda data: data["models"]["second"].update(name="甲"))
-    with pytest.raises(ConfigurationError, match=r"players\[1\].*名字重复"):
+def test_lineup_name_replaces_catalog_name_and_keeps_identity(config_files):
+    _, original = load_configuration(*config_files)
+    rewrite(config_files[1], lambda data: data["players"][0].update(name="小红"))
+    _, renamed = load_configuration(*config_files)
+    _, testing = load_configuration(*config_files, test_model=True)
+    assert [player["name"] for player in renamed] == [player["name"] for player in testing] == ["小红", "乙"]
+    assert [player["identity_model"] for player in renamed] == [player["identity_model"] for player in original]
+
+
+def test_same_model_plays_twice_with_separate_names(config_files):
+    def add_twin(data):
+        data["players"][0]["name"] = "甲一"
+        data["players"].append({**data["players"][0], "name": "甲二"})
+
+    rewrite(config_files[1], add_twin)
+    _, players = load_configuration(*config_files)
+    assert [(player["name"], player["model_key"]) for player in players] == [
+        ("甲一", "first"), ("乙", "second"), ("甲二", "first")]
+
+
+def test_catalog_entry_without_name_needs_lineup_name(config_files):
+    players_path = config_files[1]
+    rewrite(players_path, lambda data: data["players"][1].update(model="substitute"))
+    with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
+    assert f"{players_path}：players[1] 没有名字：在这里写 name，或给 models.substitute 加 name" == str(exc.value)
+    rewrite(players_path, lambda data: data["players"][1].update(name="丙"))
+    _, players = load_configuration(*config_files)
+    assert (players[1]["name"], players[1]["model_key"]) == ("丙", "substitute")
+
+
+@pytest.mark.parametrize("name,reason", [
+    ("", "必须是非空字符串"),
+    (7, "必须是非空字符串"),
+    ("小 红", "不能含空白和 <、>、/：'小 红'"),
+    ("小　红", "不能含空白和 <、>、/"),
+    ("小\n红", "不能含空白和 <、>、/"),
+    ("<小红>", "不能含空白和 <、>、/：'<小红>'"),
+    ("甲/乙", "不能含空白和 <、>、/：'甲/乙'"),
+    ("strategy", "不能是 strategy、decision、speech：'strategy'"),
+    ("decision", "不能是 strategy、decision、speech：'decision'"),
+    ("speech", "不能是 strategy、decision、speech：'speech'"),
+])
+def test_invalid_lineup_names(config_files, name, reason):
+    players_path = config_files[1]
+    rewrite(players_path, lambda data: data["players"][0].update(name=name))
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value).startswith(f"{players_path}：players[0].name {reason}")
+
+
+def test_catalog_name_is_checked_only_when_used(config_files):
+    _, players_path, models_path = config_files
+
+    def rename(data):
+        data["models"]["second"]["name"] = "乙 二"
+        data["models"]["substitute"]["name"] = "<替身>"
+
+    rewrite(models_path, rename)
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value) == f"{players_path}：players[1] 的名字取自 models.second.name，不能含空白和 <、>、/：'乙 二'"
+    rewrite(players_path, lambda data: data["players"][1].update(name="乙二"))
+    _, players = load_configuration(*config_files)
+    assert [player["name"] for player in players] == ["甲", "乙二"]
+
+
+@pytest.mark.parametrize("file_index,change", [
+    (2, lambda data: data["models"]["second"].update(name="甲")),
+    (1, lambda data: data["players"][1].update(name="甲")),
+], ids=["catalog", "lineup"])
+def test_duplicate_names(config_files, file_index, change):
+    players_path = config_files[1]
+    rewrite(config_files[file_index], change)
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value) == f"{players_path}：players[1] 名字重复：'甲'；同一个模型放多名玩家时，给每人写 name"
 
 
 def test_invalid_catalog_protocol(config_files):

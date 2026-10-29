@@ -1,4 +1,4 @@
-# model 引用 models.yaml 目录键，角色名取自该目录条目。
+# model 引用 models.yaml 目录键。name 可以不写，不写时用该目录条目的角色名；同一个模型放多名玩家时，给每人写 name。
 # 人设只约束公开发言口吻，不含策略指令；预测夺冠率是虚构公开信息。
 players:
   - model: gpt_astra

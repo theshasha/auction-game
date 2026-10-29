@@ -13,7 +13,9 @@ TASK_FORMATS = {
               '<speech>\n其他玩家都能看到的公开发言。\n</speech>',
 }
 TASK_FORMATS["plan"] = TASK_FORMATS["bid"]
-_MARKER = re.compile(r"^[ \t]*(</?(?:strategy|decision|speech)>)[ \t]*\r?$", re.MULTILINE)
+# 读取阵容时，玩家名也不能和这些标签相同，原因见 docs/letters.md 的"名字"。
+FIXED_TAGS = ("strategy", "decision", "speech")
+_MARKER = re.compile(rf"^[ \t]*(</?(?:{'|'.join(FIXED_TAGS)})>)[ \t]*\r?$", re.MULTILINE)
 
 
 class OutputFormatError(ValueError):
