@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+import re
 import pytest
 
 from pydantic_ai.exceptions import ModelAPIError
@@ -14,7 +15,7 @@ from auction_game.cli.offline_demo import generate_demo
 from auction_game.ai import prompts
 from auction_game.game.game_rules import GameSettings
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.factories import task_entries
+from tests.support.factories import task_entries, text_reply
 
 
 def super_uses(day):
@@ -103,22 +104,39 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
         text = "".join(part.content for message in audit if message.kind == "response" for part in message.parts)
         result = entry["result"]
-        if entry["task"] in ("bid", "plan"):
-            decision = json.dumps({"bid": result["bid"], "super_bid": result["super_bid"]}, ensure_ascii=False)
-            assert text == f"<strategy>\n{result['strategy']}\n</strategy>\n<decision>\n{decision}\n</decision>"
-        elif entry["task"] == "speech":
-            assert text == f"<strategy>\n{result['strategy']}\n</strategy>\n<speech>\n{result['speech']}\n</speech>"
-        elif entry["task"] == "memory":
-            assert set(result) == {"memory"} and text == result["memory"]
+        assert text == text_reply(result)
+        if entry["task"] == "memory":
+            assert set(result) == {"memory"}
             assert entry["history_reset"] == f"【累计私有记忆，仅自己可见】\n{result['memory']}"
-        else:
-            assert text == result
         if entry["task"] == "plan":
             match_index = 1 if entry["phase"] == "opening_plan" else int(entry["phase"].split("_")[1]) + 1
             actual = matches[match_index - 1]["match"]["days"][0]["players"][0]
             assert actual["player"] == names[0] and result["bid"] == actual["bid"]
     markdown = paths.player(1, readable=True).read_text(encoding="utf-8")
     assert markdown.count("## 系统提示") == 1 and markdown.count("【你的身份】") == 1
+
+    # 假模型每次能写信都写给下一位；没人写信的轮次不进 letters.md。
+    letter_titles = ["开局发言"]
+    for number in range(1, len(matches) + 1):
+        letter_titles.append(f"第 {number} 局策略规划（含首日出价）")
+        letter_titles += [f"第 {number} 局第 {day} 天出价" for day in range(2, game.max_days + 1)]
+        if number < len(matches):
+            letter_titles.append(f"第 {number} 局局末发言")
+    sections = paths.letters.read_text(encoding="utf-8").split("\n## ")[1:]
+    assert [section.split("\n", 1)[0] for section in sections] == letter_titles
+    ring = [(sender, names[(number + 1) % len(names)]) for number, sender in enumerate(names)]
+    assert all(re.findall(r"【(\S+) → (\S+)】", section) == ring for section in sections)
+    assert "[私信](letters.md)" in (run_dir / "README.md").read_text(encoding="utf-8")
+    # 甲写给乙：开局发言的信在乙规划时收到，最后一天出价的信在乙发表最终感言时收到。
+    first_letter = entries[0]["result"]["letters"][0]["text"]
+    last_bid = [entry for entry in entries if entry["task"] == "bid"][-1]
+    assert last_bid["context"] == f"第 {len(matches)} 局第 {game.max_days} 天"
+    last_letter = last_bid["result"]["letters"][0]["text"]
+    receiver = {entry["phase"]: entry for entry in task_entries(paths.player(2))}
+    for phase, letter in (("opening_plan", first_letter), ("final_speech", last_letter)):
+        prompt = [part["content"] for message in receiver[phase]["messages"]
+                  for part in message["parts"] if part["part_kind"] == "user-prompt"][-1]
+        assert f"以下是其他玩家写给你的私信：\n\n【甲】{letter}\n\n" in prompt
 
     stats = analyze.collect_player_stats(matches)
     assert stats["auction_score_matrix"][names[0]] == [payload["match"]["auction_scores"][names[0]]

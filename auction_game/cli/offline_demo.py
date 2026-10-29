@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import argparse
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import re
 
 from pydantic_ai.models import override_allow_model_requests
 from pydantic_ai.models.function import FunctionModel
@@ -16,6 +14,7 @@ from pydantic_ai.models.function import FunctionModel
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.controller import Controller
 from auction_game.ai.agent_tasks import Task, TaskRunner
+from auction_game.ai.text_output import LetterNames
 from auction_game.game.game_rules import GameSettings
 from auction_game.runners import make_task_runners, play_ai
 from auction_game.reporting.run_output import make_run_dir
@@ -24,15 +23,14 @@ from auction_game.game.rules import sync_root_rules
 
 @dataclass(frozen=True)
 class OfflineTask:
+    """交给假模型的当前任务；letters 是可写信的名单，不能写信时为 None。"""
+
     task: Task
     game: GameSettings
     coins: int
-    match_index: int | None = None
-    day: int | None = None
-
-
-# FunctionModel 拿不到 Agent 的 deps，由任务入口转交给假模型。
-_current_task: ContextVar[OfflineTask] = ContextVar("offline_task")
+    match_index: int
+    day: int
+    letters: LetterNames | None
 
 
 def demo_submission(game, index, player_count, match_index, day, coins):
@@ -64,21 +62,25 @@ def demo_submission(game, index, player_count, match_index, day, coins):
 
 
 class OfflineTaskRunner(TaskRunner):
-    """从出价和规划提示里读出局和天，连同余额交给假模型。"""
+    """把当前任务交给这名玩家的假模型：FunctionModel 拿不到 Agent 的 deps。
+
+    局和天按任务顺序推算：每局的规划给出第 1 天的出价，之后每次出价请求是下一天。
+    离线演示遇到失败就退出、不补跑，所以每个任务只数一次。
+    """
+
+    def __init__(self, factory: DemoFactory):
+        super().__init__(factory)
+        self.factory = factory
+        self.match_index = self.day = 0
 
     def __call__(self, task, prompt, history, *, game, coins=0, letters=None, brief_format=False):
-        match_index = day = None
-        if task in ("bid", "plan"):
-            position = re.search(r"第 (\d+) 局第 (\d+) 天", prompt)
-            if position is None:
-                raise ValueError(f"离线报价找不到局和天：{prompt[:80]}")
-            match_index, day = int(position[1]), int(position[2])
-        token = _current_task.set(OfflineTask(task, game, coins, match_index, day))
-        try:
-            return super().__call__(task, prompt, history, game=game, coins=coins,
-                                    letters=letters, brief_format=brief_format)
-        finally:
-            _current_task.reset(token)
+        if task == "plan":
+            self.match_index, self.day = self.match_index + 1, 1
+        elif task == "bid":
+            self.day += 1
+        self.factory.current = OfflineTask(task, game, coins, self.match_index, self.day, letters)
+        return super().__call__(task, prompt, history, game=game, coins=coins,
+                                letters=letters, brief_format=brief_format)
 
 
 class OfflineController(Controller):
@@ -102,10 +104,20 @@ class DemoFactory:
     closed: int = 0
     calls: int = 0
     signals: None = None  # 离线控制器不交互，没有暂停和取消
+    current: OfflineTask | None = None  # 由这名玩家的任务入口在每个任务开始前设置
+    letters_written: int = 0
+
+    def _letter(self, letters: LetterNames | None) -> str:
+        """能写信时写 1 封给配置里的下一位，最后一位写给第一位；编号便于在日志里对上送达。"""
+        if letters is None:
+            return ""
+        self.letters_written += 1
+        to = letters.recipients[self.index % len(letters.recipients)]
+        return f"\n<{to}>\n模拟私信：我是{self.name}，这是我写的第 {self.letters_written} 封信。\n</{to}>"
 
     async def stream(self, messages, info):
         self.calls += 1
-        current = _current_task.get()
+        current = self.current
         task = current.task
         if task in ("bid", "plan"):
             bid, super_bid = demo_submission(current.game, self.index, self.player_count,
@@ -116,14 +128,15 @@ class DemoFactory:
             else:
                 strategy += "本次不提交超级出价，结果以公开结算为准。"
             decision = json.dumps({"bid": bid, "super_bid": super_bid}, ensure_ascii=False)
-            yield f"<strategy>\n{strategy}\n</strategy>\n<decision>\n{decision}\n</decision>"
+            yield (f"<strategy>\n{strategy}\n</strategy>\n<decision>\n{decision}\n</decision>"
+                   + self._letter(current.letters))
         elif task == "memory":
             yield (f"我是{self.name}。本局已经结束，局末公开发言已收到。"
                    "拍卖得分与超级命中分分别核对；下一局金币重置，按新局实际余额检查报价。")
         elif task == "speech":
             speech = f"我是{self.name}。我会根据公开结果谨慎使用金币。"
             yield ("<strategy>\n模拟私有策略：公开表达谨慎态度，不透露具体出价。\n</strategy>\n"
-                   f"<speech>\n{speech}\n</speech>")
+                   f"<speech>\n{speech}\n</speech>" + self._letter(current.letters))
         elif task == "summary":
             yield f"模拟观众总结：我是{self.name}，本场按离线脚本完成比赛。拍卖得分与超级命中分以实际结算为准。"
         else:
