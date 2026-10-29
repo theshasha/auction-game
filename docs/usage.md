@@ -33,19 +33,15 @@ python -m auction_game.cli.sync_models --input "path/to/api.json" --write  # 用
 
 ```bash
 python -m auction_game.cli.offline_demo  # 假模型完整赛，无需密钥
-python main.py --seed 42                # Bot 比赛，固定种子
-python main.py --benchmark 50           # Bot 对照，两组各 50 场，不写日志
 ```
 
 离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空和加赛。`--test-model` 改用测试模型的配置和测试赛参数，`--output 目录` 指定输出位置。
 
-benchmark 的第一组全是随机 Bot；第二组是一个策略玩家对五个随机 Bot，策略玩家每天出 `min(出价上限, 当前余额)`，不用超级出价。报告里策略玩家和随机对手的平均分都取自第二组。
-
 **以下命令调用真实服务，可能收费：**
 
 ```bash
-python main.py --ai --test-model
-python main.py --ai
+python main.py --test-model
+python main.py
 ```
 
 `--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。比赛参数改用 `game.yaml` 里 `test_model_overrides` 覆盖后的值，用来缩短局数和天数；离线赛的 `--test-model` 同样生效。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容。
@@ -71,7 +67,7 @@ AI 比赛默认单步：回车执行下一轮任务（如一轮出价或发言�
 
 ## 阅读场次
 
-每场写在 `logs/<时间>_<ai|ai-test|bot|offline>/`，先打开里面的 `README.md`。
+每场写在 `logs/<时间>_<ai|ai-test|offline>/`，先打开里面的 `README.md`。
 
 - `RULES.md`：本场规则。
 - `speeches.md`：公开发言和观众总结。
@@ -85,7 +81,7 @@ AI 比赛默认单步：回车执行下一轮任务（如一轮出价或发言�
 
 ```bash
 python -m auction_game.reporting.analyze                    # 最新的 ai 或 ai-test 场次
-python -m auction_game.reporting.analyze "logs/场次目录"   # 指定场次，Bot 和离线赛要这样指定
+python -m auction_game.reporting.analyze "logs/场次目录"   # 指定场次，离线赛要这样指定
 ```
 
 各项指标的口径见[统计说明](analyze.md)。

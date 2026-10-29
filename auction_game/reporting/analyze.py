@@ -26,7 +26,7 @@ def find_latest_ai_run() -> Path:
     candidates = [path for path in (LOG_DIR.iterdir() if LOG_DIR.exists() else ())
                   if RUN_DIR_PATTERN.match(path.name) and any((path / "data" / "matches").glob("*.json"))]
     if not candidates:
-        sys.exit("logs/ 下没有已完成至少一局的真实 AI 场次（ai 或 ai-test）；Bot 与离线模拟赛请显式指定目录")
+        sys.exit("logs/ 下没有已完成至少一局的真实 AI 场次（ai 或 ai-test）；离线模拟赛请显式指定目录")
     return max(candidates, key=lambda path: (path.name[:15], int(path.name.rsplit('_', 1)[1])
                                            if path.name.rsplit('_', 1)[1].isdigit() else 1))
 
@@ -240,13 +240,9 @@ def analyze(run_dir: Path) -> None:
     print(f"运行类型：{RUN_TYPES[snapshot['run_type']]}")
     if snapshot["run_type"] == "offline":
         print("离线假模型结果：实际执行为假模型，无真实模型调用")
-    elif snapshot["run_type"] == "bot":
-        print("Bot 策略结果：实际执行为本地程序")
     else:
         print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
     for pc in snapshot["players"]:
-        if "execution_model" not in pc:
-            continue
         execution_label = "配置模型" if snapshot["run_type"] == "offline" else "实际"
         print(f"  {pc['name']}：身份 {pc['identity_model']['model']} → {execution_label} "
               f"{pc['execution_model']['protocol']} / {pc['execution_model']['model']}")
@@ -336,7 +332,7 @@ def analyze(run_dir: Path) -> None:
     print("特殊情况")
     print(f"出 0 共 {zero_bids} 笔（含流局日和超级出价），其中 0 价获胜 {zero_bid_wins} 次")
 
-    # Bot 不调用模型，离线赛的用量是假模型估算的。
+    # 离线赛的用量是假模型估算的。
     if snapshot["run_type"] in ("ai", "ai-test"):
         print()
         print_usage(collect_usage(run_dir, snapshot["players"]))

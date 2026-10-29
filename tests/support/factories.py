@@ -3,6 +3,7 @@
 from copy import deepcopy
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import Callable, Optional
 import json
 
 from pydantic_ai.models.function import FunctionModel
@@ -12,7 +13,7 @@ from auction_game.ai.ai_player import AIPlayer
 from auction_game.game.engine import compute_standings, run_match, settle_day
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, Observation
-from auction_game.game.players import ScriptedPlayer
+from auction_game.game.players import Player
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 TEST_GAME = GameSettings(
@@ -91,6 +92,26 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
 
 
 # ---------- 引擎场景：策略只依赖 obs.day 和 obs.my_name，全员可共用 ----------
+
+class ScriptedPlayer(Player):
+    """按给定函数出价：strategy(obs) 返回正常出价，可选的 super_strategy(obs) 返回超级出价或 None。"""
+
+    def __init__(
+        self,
+        name: str,
+        strategy: Callable[[Observation], int],
+        super_strategy: Optional[Callable[[Observation], Optional[int]]] = None,
+    ):
+        super().__init__(name)
+        self.strategy = strategy
+        self.super_strategy = super_strategy
+
+    def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
+        super_bid = None
+        if self.super_strategy is not None:
+            super_bid = self.super_strategy(obs)
+        return self.strategy(obs), super_bid
+
 
 def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=None,
                   game=TEST_GAME):

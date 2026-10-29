@@ -1,8 +1,6 @@
-"""加载比赛配置、组装 Bot/AI 玩家并启动个人赛。"""
+"""加载比赛配置、组装 AI 玩家并启动个人赛。"""
 
 from __future__ import annotations
-
-import random
 
 from auction_game.ai.ai_player import AIPlayer
 from auction_game.ai.ai_speech import AISpeechDirector
@@ -15,28 +13,9 @@ from auction_game.controller import (
 )
 from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
 from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.game.players import BOT_NAMES, RandomBot
 from auction_game.game.rules import render_rules, sync_root_rules
 from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_day_result, print_final_result
 from auction_game.game.tournament import run_tournament
-
-
-def run_bots(seed) -> int:
-    try:
-        game = load_game_settings()
-        sync_root_rules(game)
-    except ConfigurationError as exc:
-        print(f"[配置错误] {exc}")
-        return 1
-    rng = random.Random(seed)
-    players = [RandomBot(name, random.Random(rng.random())) for name in BOT_NAMES]
-    run_dir = make_run_dir("bot")
-    initialize_run(run_dir, {"run_type": "bot", "mode": "regular", "game": game.to_dict(),
-                            "players": [{"name": p.name} for p in players]},
-                   render_rules(game, [p.name for p in players]))
-    result = run_tournament(players, game, on_match_end=make_publish(run_dir), on_day_end=print_day_result)
-    print_final_result(result)
-    return 0
 
 
 def make_task_runners(config, player_configs, model_factory, runner=TaskRunner, signals=None) -> dict:
@@ -73,7 +52,7 @@ def run_ai(test_model: bool = False) -> int:
         print(f"测试模型：{test_key} / {config['models'][test_key]['model']}（全员使用，调用真实服务，可能收费）")
         print("角色身份与独立历史保持不变。")
     else:
-        print("常规阵容：")
+        print("常规阵容（调用真实服务，可能收费）：")
         for pc in player_configs:
             print(f"  {pc['name']}：{pc['model']}")
     warned = {pc["model_key"]: pc for pc in player_configs if pc["capabilities"]["output_fallback_reason"]}

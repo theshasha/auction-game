@@ -76,8 +76,6 @@ def write_readme(paths, standings=None):
     config = paths.read_config()
     if config["run_type"] == "offline":
         model_note = "全员使用假模型，无真实调用。"
-    elif config["run_type"] == "bot":
-        model_note = "全员使用本地 Bot，无模型调用。"
     elif config["mode"] == "test_model":
         model_note = "全员调用测试模型，角色身份不变。"
     else:

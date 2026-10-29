@@ -207,7 +207,7 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
         assert "测试模型：substitute / test-model-c（全员使用，调用真实服务，可能收费）" in output
         assert output.count("[预算提醒] 测试模型：") == 1
     else:
-        assert "常规阵容：" in output and "甲：test-model-a" in output and "乙：test-model-b" in output
+        assert "常规阵容（调用真实服务，可能收费）：" in output and "甲：test-model-a" in output and "乙：test-model-b" in output
         assert output.count("[预算提醒]") == 2
     assert f"暂用 {DEFAULT_MAX_TOKENS} tokens" in output
     assert "python -m auction_game.cli.sync_models --write" in output

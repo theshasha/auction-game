@@ -9,10 +9,9 @@ import pytest
 
 from auction_game.ai import prompts
 from auction_game.game.rules import render_rules
-from auction_game.game.players import ScriptedPlayer
 from auction_game.game.tournament import run_tournament
 from auction_game.reporting.run_output import initialize_run, make_publish, print_day_result, print_final_result
-from tests.support.factories import NAMES, TEST_GAME, bids_by_day, make_standings, run_scenario
+from tests.support.factories import NAMES, TEST_GAME, ScriptedPlayer, bids_by_day, make_standings, run_scenario
 
 
 def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(capsys):
@@ -73,7 +72,6 @@ def test_final_result_counts_actual_regular_matches_and_reports_scores(capsys, t
 
 @pytest.mark.parametrize("run_type,mode,expected", [
     ("offline", "test_model", "全员使用假模型，无真实调用。"),
-    ("bot", "regular", "全员使用本地 Bot，无模型调用。"),
     ("ai-test", "test_model", "全员调用测试模型，角色身份不变。"),
     ("ai", "regular", "各玩家使用配置中的模型。"),
 ])
@@ -94,7 +92,7 @@ def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):
     players = [ScriptedPlayer(name, lambda obs: obs.match_index) for name in NAMES]
     paths = initialize_run(
         tmp_path / "run",
-        {"run_type": "bot", "mode": "regular", "game": game.to_dict(),
+        {"run_type": "offline", "mode": "regular", "game": game.to_dict(),
          "players": [{"name": name} for name in NAMES]},
         render_rules(game, NAMES),
     )
@@ -127,7 +125,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     expected = deepcopy({"match": log.to_dict(), "standings_after_match": [asdict(e) for e in standings]})
     paths = initialize_run(
         tmp_path / "run",
-        {"run_type": "bot", "mode": "regular", "game": game.to_dict(),
+        {"run_type": "offline", "mode": "regular", "game": game.to_dict(),
          "players": [{"name": name} for name in NAMES]},
         render_rules(game, NAMES),
     )

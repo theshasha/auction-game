@@ -7,7 +7,6 @@
 ```bash
 python -m pip install -r requirements.txt
 python -m auction_game.cli.offline_demo  # 假模型完整赛，无需密钥
-python main.py --seed 42                # Bot 比赛
 ```
 
 运行后打开 `logs/<场次目录>/README.md` 查看结果。
@@ -17,8 +16,8 @@ python main.py --seed 42                # Bot 比赛
 按[使用说明](docs/usage.md#准备配置)配置模型和 `.env` 密钥，先跑一场全员使用测试模型的完整比赛，确认结果后再跑常规阵容：
 
 ```bash
-python main.py --ai --test-model
-python main.py --ai
+python main.py --test-model
+python main.py
 ```
 
 **这两条命令都会调用真实服务，可能收费。**

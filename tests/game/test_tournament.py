@@ -3,8 +3,7 @@
 from dataclasses import replace
 from copy import deepcopy
 
-from tests.support.factories import TEST_GAME
-from auction_game.game.players import ScriptedPlayer
+from tests.support.factories import TEST_GAME, ScriptedPlayer
 from auction_game.game.tournament import first_place_tied, run_tournament
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
@@ -316,7 +315,7 @@ def test_daily_callback_reports_cumulative_scores_and_settled_coin_snapshots(cap
         (entry.player, entry.rank, entry.total_score) for entry in result.final_standings
     ]
 
-    # 展示回调不改变玩家观察，未注入展示的流程（包括 benchmark）保持静默。
+    # 展示回调不改变玩家观察，未注入展示的流程保持静默。
     without_report = []
     silent_result = run_tournament(make_bid_players(table, without_report), game)
     assert observations == without_report

@@ -9,7 +9,6 @@ import yaml
 from auction_game import configuration
 from auction_game.game import rules
 from auction_game import runners
-from auction_game.game import benchmark
 from auction_game.cli import offline_demo
 from tests.support.factories import TEST_GAME
 
@@ -113,10 +112,8 @@ def test_max_bid_below_example_bids_is_configuration_error(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("entry,kwargs,module,boundary", [
-    (runners.run_bots, {"seed": 1}, runners, "make_run_dir"),
     (runners.run_ai, {}, runners, "make_model_factory"),
     (runners.run_ai, {"test_model": True}, runners, "make_model_factory"),
-    (benchmark.run_benchmark, {"count": 1}, benchmark, "run_tournament"),
     (offline_demo.generate_demo, {}, offline_demo, "make_run_dir"),
     (offline_demo.generate_demo, {"test_model": True}, offline_demo, "make_run_dir"),
 ])

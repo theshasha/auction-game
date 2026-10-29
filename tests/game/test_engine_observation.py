@@ -4,13 +4,13 @@ from dataclasses import replace
 
 from tests.support.factories import (
     TEST_GAME,
+    ScriptedPlayer,
     constant_strategies,
     run_one_match,
     run_scenario,
     super_by_day,
 )
 from auction_game.game.engine import compute_standings, run_match
-from auction_game.game.players import ScriptedPlayer
 
 
 class TestDayHistoryObservation:

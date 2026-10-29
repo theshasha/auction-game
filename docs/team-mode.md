@@ -61,7 +61,7 @@
 
 ## 入口和日志
 
-- 命令是 `python main.py --ai --team`，加 `--test-model` 时全员用测试模型。假模型完整赛是 `python -m auction_game.cli.offline_demo --team`。
+- 命令是 `python main.py --team`，加 `--test-model` 时全员用测试模型。假模型完整赛是 `python -m auction_game.cli.offline_demo --team`。
 - 场次类型是 `team`、`team-test` 和 `team-offline`，分别对应个人赛的 `ai`、`ai-test` 和 `offline`。
 - 文件布局和个人赛相同。`players/` 按 `teams.yaml` 的顺序编号，前 3 个是第一个阵营；场次 README 按阵营分组列出私人对话。
 

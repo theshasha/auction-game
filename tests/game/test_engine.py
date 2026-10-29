@@ -3,22 +3,20 @@
 基准参数见 TEST_GAME：每局 6 天，每天奖池 4 分，超级出价成本 2、悬赏 3。
 """
 
-import random
 from dataclasses import replace
 
 import pytest
 
 from tests.support.factories import (
     TEST_GAME,
+    ScriptedPlayer,
     constant_by_name,
     constant_strategies,
-    make_obs,
     run_one_match,
     run_scenario,
 )
 from auction_game.game.engine import run_match, settle_day
 from auction_game.game.game_rules import GameSettings
-from auction_game.game.players import RandomBot, ScriptedPlayer
 from auction_game.configuration import load_game_settings
 
 
@@ -200,24 +198,6 @@ class TestConfiguredMatch:
         assert log.days[0].is_void and log.days[-1].is_void
         assert log.auction_scores == {"甲": pool, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
         assert log.scores == {"甲": pool, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
-
-    def test_random_bot_uses_observed_limit_and_super_cost(self):
-        game = GameSettings(
-            initial_coins=11, daily_salary=2, daily_pool=(2, 3, 4), max_bid=9,
-            super_cost=4, super_bounty=6, super_hit_score=2,
-            regular_matches=2, max_playoffs=1,
-        )
-        obs = make_obs(coins=11, game=game)
-        bot = RandomBot("甲", random.Random(42), super_chance=1)
-        submissions = [bot.decide_bid(obs) for _ in range(100)]
-
-        assert any(bid == 9 or super_bid == 9 for bid, super_bid in submissions)
-        for bid, super_bid in submissions:
-            assert 0 <= bid <= 9
-            if super_bid is not None:
-                assert 0 <= super_bid <= 9
-                assert super_bid != bid
-                assert bid + 4 <= 11
 
     def test_three_players_custom_economy_and_unequal_daily_pool(self):
         game = GameSettings(

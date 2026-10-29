@@ -24,7 +24,7 @@
 ## 按任务查代码
 
 - 启动：`main.py` 只做参数解析和模式分派。默认路径在 `auction_game/paths.py`，配置由 `auction_game/configuration.py` 解析，输出预算和推理档位由 `auction_game/model_capabilities.py` 从能力快照得出，比赛由 `auction_game/runners.py` 组装。
-- 游戏规则、结算、Bot 和比赛流程：`auction_game/game/`。
+- 游戏规则、结算和比赛流程：`auction_game/game/`。
 - 模型调用、提示、对话历史和发言：修改前读 `auction_game/ai/AGENTS.md`。
 - 日志和统计：修改前读 `auction_game/reporting/AGENTS.md`。统计口径见 `docs/analyze.md`。
 - 用户命令和日志说明：`docs/usage.md`。独立工具在 `auction_game/cli/`，用 `python -m` 运行。

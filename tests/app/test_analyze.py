@@ -178,7 +178,7 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "改变当日结果：1 天" in output
     assert "含正常报价及超级数值" in output
     assert "获胜价平均" in output
-    assert "模型用量" not in output  # Bot 场次没有模型调用
+    assert "模型用量" not in output  # 离线赛的用量是假模型估算的，不输出
 
 
 @pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed,collision_hits,"
@@ -271,20 +271,18 @@ def test_super_result_days_do_not_simulate_future():
     assert stats["super_changed_days"] == 0
 
 
-def write_matches(run_dir, matches, *, run_type="bot", players=None):
+def write_matches(run_dir, matches, *, run_type="offline", players=None):
     first = matches[0]["match"]
     roster = deepcopy(players) if players is not None else [{"name": name} for name in first["auction_scores"]]
-    if run_type != "bot":
-        for player in roster:
-            player.setdefault("identity_model", {"model": "synthetic-identity"})
-            player.setdefault("execution_model", {"protocol": "chat", "model": "synthetic-execution"})
+    for player in roster:
+        player.setdefault("identity_model", {"model": "synthetic-identity"})
+        player.setdefault("execution_model", {"protocol": "chat", "model": "synthetic-execution"})
     paths = initialize_run(run_dir, {"run_type": run_type,
                                      "mode": "test_model" if run_type == "ai-test" else "regular",
                                      "game": first["game"], "players": roster}, "test rules")
-    if run_type != "bot":
-        # 模型玩家创建时就写下系统提示，每人都有任务日志。
-        for pc in paths.read_config()["players"]:
-            player_log(run_dir, pc).system_prompt("test system prompt")
+    # 模型玩家创建时就写下系统提示，每人都有任务日志。
+    for pc in paths.read_config()["players"]:
+        player_log(run_dir, pc).system_prompt("test system prompt")
     auction_scores_history = {name: [] for name in first["auction_scores"]}
     scores_history = {name: [] for name in first["scores"]}
     for payload in sorted(matches, key=lambda payload: payload["match"]["match_index"]):
@@ -374,8 +372,7 @@ def test_default_analysis_selects_latest_real_ai(tmp_path, monkeypatch, latest_t
     write_matches(tmp_path / f"20261016_110000_{older_type}", make_matches(), run_type=older_type)
     latest = tmp_path / f"20261016_120000_{latest_type}"
     write_matches(latest, make_matches(), run_type=latest_type)
-    for run_type in ("bot", "offline"):
-        write_matches(tmp_path / f"20261016_130000_{run_type}", make_matches(), run_type=run_type)
+    write_matches(tmp_path / "20261016_130000_offline", make_matches())
     (tmp_path / "20261016_140000_ai").mkdir()  # 还没有完成的局
     write_matches(tmp_path / "archive_20261016_160000_ai", make_matches(), run_type="ai")
     assert find_latest_ai_run() == latest
@@ -403,16 +400,15 @@ def test_default_cli_keeps_test_run_type_and_actual_models(tmp_path, monkeypatch
     assert "甲：身份 identity-1 → 实际 responses / actual-test-model" in output
 
 
-def test_default_analysis_rejects_only_bot_and_offline(tmp_path, monkeypatch):
+def test_default_analysis_rejects_only_offline(tmp_path, monkeypatch):
     monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
-    for run_type in ("bot", "offline"):
-        write_matches(tmp_path / f"20261016_120000_{run_type}", make_matches(), run_type=run_type)
+    write_matches(tmp_path / "20261016_120000_offline", make_matches())
     with pytest.raises(SystemExit, match="没有.*ai 或 ai-test"):
         find_latest_ai_run()
 
 
 def test_cli_reports_run_without_matches(tmp_path, monkeypatch):
-    initialize_run(tmp_path, {"run_type": "bot", "mode": "regular", "game": ANALYZE_GAME.to_dict(),
+    initialize_run(tmp_path, {"run_type": "offline", "mode": "regular", "game": ANALYZE_GAME.to_dict(),
                               "players": [{"name": "甲"}, {"name": "乙"}]}, "test rules")
     monkeypatch.setattr("sys.argv", ["analyze", str(tmp_path)])
     with pytest.raises(SystemExit, match="没有 data/matches"):

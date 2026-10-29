@@ -4,8 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-RUN_TYPES = {"ai": "常规真实 AI", "ai-test": "测试模型真实 AI（收费）",
-             "bot": "Bot 策略程序", "offline": "离线模拟"}
+RUN_TYPES = {"ai": "常规真实 AI", "ai-test": "测试模型真实 AI（收费）", "offline": "离线模拟"}
 
 
 @dataclass(frozen=True)
