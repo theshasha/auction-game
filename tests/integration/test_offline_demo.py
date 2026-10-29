@@ -50,6 +50,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     output_dir, factories = generate_demo(run_dir, test_model=True)
     assert output_dir == run_dir
     paths = RunPaths(run_dir)
+    report = paths.matches_report.read_text(encoding="utf-8")
 
     # 阶段：每局首日流局且超级出价落空，次日两笔超级命中；正赛打平后加赛一局。
     matches = analyze.load_match_logs(run_dir)
@@ -67,7 +68,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
             totals[name] += match["scores"][name]
         if number == game.regular_matches:
             assert totals[names[0]] == totals[names[1]] == max(totals.values())
-        assert paths.match(number, readable=True).exists()
+        assert f"## 第 {number} 局（{'加赛' if match['is_playoff'] else '正赛'}）" in report
     assert totals[names[0]] > max(totals[name] for name in names[1:])
     expected_calls = 2 + len(matches) * (game.max_days - 1) + 3 * (len(matches) - 1) + 2
     assert all(f.opened == f.closed == f.calls == expected_calls for f in factories)

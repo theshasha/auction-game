@@ -20,16 +20,19 @@ class RunPaths:
     def config(self):
         return self.data / "run_config.json"
 
-    def match(self, index, *, readable=False):
-        base = self.root if readable else self.data
-        return base / "matches" / f"{index:03d}{'.md' if readable else '.json'}"
+    @property
+    def matches_report(self):
+        return self.root / "matches.md"
+
+    def match(self, index):
+        return self.data / "matches" / f"{index:03d}.json"
 
     def player(self, number, *, readable=False):
         base = self.root if readable else self.data
         return base / "players" / f"{number:03d}{'.md' if readable else '.jsonl'}"
 
     def prepare(self):
-        for directory in (self.data / "matches", self.data / "players", self.root / "matches", self.root / "players"):
+        for directory in (self.data / "matches", self.data / "players", self.root / "players"):
             directory.mkdir(parents=True, exist_ok=True)
 
     def read_config(self):

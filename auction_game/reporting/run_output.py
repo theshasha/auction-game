@@ -32,7 +32,7 @@ def make_run_dir(mode: str) -> Path:
 
 
 def make_publish(log_dir: Path):
-    """将完整出价和累计排名写入 JSON/Markdown 文件，终端只提示阅读位置。"""
+    """每局结束时写入该局的完整结算 JSON，并把出价表和累计排名追加到 matches.md，终端只提示阅读位置。"""
 
     paths = RunPaths(log_dir)
 
@@ -46,14 +46,14 @@ def make_publish(log_dir: Path):
         )
         kind = "加赛" if log.is_playoff else "正赛"
         text = (
-            f"===== 第 {log.match_index} 局（{kind}）=====\n"
-            "[本场规则](../RULES.md)\n\n"
+            f"\n## 第 {log.match_index} 局（{kind}）\n\n"
             f"{prompts.render_match_log(log)}\n\n"
             f"截至本局的累计排名：\n\n{prompts.render_standings(standings)}\n"
         )
-        paths.match(log.match_index, readable=True).write_text(text, encoding="utf-8")
+        with paths.matches_report.open("a", encoding="utf-8") as file:
+            file.write(text)
         write_readme(paths, standings)
-        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {paths.match(log.match_index, readable=True)}")
+        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {paths.matches_report}")
 
     return publish
 
@@ -67,6 +67,7 @@ def initialize_run(run_dir, snapshot, rules):
     paths.prepare()
     paths.config.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (run_dir / "RULES.md").write_text(rules, encoding="utf-8")
+    paths.matches_report.write_text("# 逐局结果\n\n[本场规则](RULES.md)\n", encoding="utf-8")
     write_readme(paths)
     return paths
 
@@ -87,10 +88,9 @@ def write_readme(paths, standings=None):
              "本场配置见 [配置快照](data/run_config.json)，统计以此为准。"]
     if (paths.root / "speeches.md").exists():
         lines.append("[公开发言](speeches.md)")
+    lines.append("[逐局结果](matches.md)")
     if standings is not None:
         lines.extend(["## 截至当前的结果", prompts.render_standings(standings)])
-    lines.append("## 逐局结果")
-    lines.extend(f"- [第 {int(path.stem)} 局](matches/{path.name})" for path in sorted((paths.root / "matches").glob("*.md")))
     private = [pc for pc in config["players"] if paths.player(pc["number"], readable=True).exists()]
     if private:
         lines.append("## 私人对话（含私有策略，仅供赛后阅读）")

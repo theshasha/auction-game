@@ -88,6 +88,28 @@ def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected)
     assert expected in (paths.root / "README.md").read_text(encoding="utf-8")
 
 
+def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):
+    game = replace(TEST_GAME, daily_pool=(1, 2), regular_matches=2, max_playoffs=1)
+    # 每局全员出同一个价，天天撞车流局，正赛后并列，加赛一局到上限。
+    players = [ScriptedPlayer(name, lambda obs: obs.match_index) for name in NAMES]
+    paths = initialize_run(
+        tmp_path / "run",
+        {"run_type": "bot", "mode": "regular", "game": game.to_dict(),
+         "players": [{"name": name} for name in NAMES]},
+        render_rules(game, NAMES),
+    )
+    result = run_tournament(players, game, on_match_end=make_publish(paths.root))
+
+    sections = paths.matches_report.read_text(encoding="utf-8").split("\n## ")[1:]
+    assert [section.split("\n", 1)[0] for section in sections] == [
+        "第 1 局（正赛）", "第 2 局（正赛）", "第 3 局（加赛）"]
+    for section, log in zip(sections, result.match_logs):
+        assert prompts.render_match_log(log) in section
+    assert sections[-1].endswith(
+        f"截至本局的累计排名：\n\n{prompts.render_standings(result.final_standings)}\n")
+    assert "[逐局结果](matches.md)" in (paths.root / "README.md").read_text(encoding="utf-8")
+
+
 def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     game = replace(TEST_GAME, initial_coins=20, max_bid=9, super_bounty=5, daily_pool=(1, 2, 3))
     log = run_scenario(
@@ -111,9 +133,9 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     )
     make_publish(paths.root)(log, standings)
 
-    report = paths.match(1, readable=True).read_text(encoding="utf-8")
-    assert "[本场规则](../RULES.md)" in report
-    assert (paths.match(1, readable=True).parent / "../RULES.md").resolve() == paths.root / "RULES.md"
+    report = paths.matches_report.read_text(encoding="utf-8")
+    assert "[本场规则](RULES.md)" in report
+    assert (paths.matches_report.parent / "RULES.md").is_file()
     assert "奖池和得分的单位为分，正常出价的单位为金币。\n\n| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分 |" in report
     assert "4（撞车） | 4（撞车）；超级出价 3（落空） | 9（获胜） | 2（退款）；超级出价 4（命中）" in report
     assert report.count("| 流局（奖池作废） | 0、1、2 |") == 2
