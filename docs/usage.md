@@ -35,7 +35,7 @@ python -m auction_game.cli.sync_models --input "path/to/api.json" --write  # 用
 python -m auction_game.cli.offline_demo  # 假模型完整赛，无需密钥
 ```
 
-离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空和加赛。`--test-model` 改用测试模型的配置和测试赛参数，`--output 目录` 指定输出位置。
+离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空、加赛和私信；假玩家每次能写信时给配置里的下一位写一封。`--test-model` 改用测试模型的配置和测试赛参数，`--output 目录` 指定输出位置。
 
 **以下命令调用真实服务，可能收费：**
 
@@ -73,7 +73,7 @@ AI 比赛默认单步：回车执行下一轮任务（如一轮出价或发言�
 - `speeches.md`：公开发言和观众总结。
 - `letters.md`：私信，按写信的环节分节，有人写信的环节结束后追加。
 - `matches.md`：逐局出价表和累计排名，每局结束时追加。
-- `players/`：每名玩家的私人对话。开头是系统提示，之后每节是当次新增的输入和最终结果；局末整理记忆后，对话从系统提示和新记忆重新开始。补跑用同一份输入重新请求，看不到失败的那次；按 `q` 时进行中的任务记为"已取消"。
+- `players/`：每名玩家的私人对话。开头是系统提示，之后每节是当次新增的输入和最终结果，收到的私信在输入里，写出的私信在结果的"私信"一节；局末整理记忆后，对话从系统提示和新记忆重新开始。补跑用同一份输入重新请求，看不到失败的那次；按 `q` 时进行中的任务记为"已取消"。
 - `data/run_config.json`：本场实际使用的模型、输出预算、推理档位和提示开关。
 - `data/matches/`：完整结算数据。
 - `data/players/<编号>.jsonl`：任务记录，含模型原始回复、thinking 和完整错误。
@@ -101,6 +101,6 @@ python -m auction_game.cli.check_llm                      # 查常规阵容用�
 
 ## 常用调整
 
-- 提示开关：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测；`prompts.enable_personas` 关掉后，模型看不到人设。两项都关适合做公平对照，角色名仍带模型身份。`prompts.enable_writing_style` 开启时，`configs/writing_style.md` 的全文接在每位玩家系统提示的最后，约束所有输出的文风；文件缺失时启动报配置错误。
+- 提示开关：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测；`prompts.enable_personas` 关掉后，模型看不到人设。两项都关适合做公平对照。目录里的角色名带模型身份；要隐去时，在阵容里另写名字。`prompts.enable_writing_style` 开启时，`configs/writing_style.md` 的全文接在每位玩家系统提示的最后，约束所有输出的文风；文件缺失时启动报配置错误。
 - 并发：`llm.max_concurrency`，1 为串行。
 - 超时：`llm.timeout_seconds`，单次请求的秒数。
