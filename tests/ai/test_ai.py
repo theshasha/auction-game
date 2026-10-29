@@ -193,7 +193,7 @@ def test_bid_shows_received_letters_and_returns_written_ones(tmp_path):
     runner = fake_task_runner([{**bid_reply(2), "letters": [letter]}])
     player = make_player(runner, tmp_path)
     assert player.bid(make_ai_obs(day=2), {"Charlie": "我会狙 2"}) == ((2, None), [letter])
-    assert f"以下是其他玩家写给你的私信：\n\n【Charlie】我会狙 2\n\n{prompts.BID_HINT}" in request_text(runner, 0)
+    assert f"以下是其他玩家昨天出价时写给你的私信：\n\n【Charlie】我会狙 2\n\n{prompts.BID_HINT}" in request_text(runner, 0)
 
 
 def test_plan_returns_letters_and_day_one_bid_from_cache_has_none(tmp_path):

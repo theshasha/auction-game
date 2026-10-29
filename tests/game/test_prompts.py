@@ -101,23 +101,24 @@ def test_memory_request_lists_other_speeches_and_key_requirements(match_index):
 
 @pytest.mark.parametrize("kind", ["opening-plan", "bid", "match-end", "memory", "final"])
 def test_received_letters_sit_between_facts_and_task(kind):
-    """有信时只多出收信段；没有信时请求不变。"""
+    """有信时只多出收信段，标题写明信是在哪一环节写的；没有信时请求不变。"""
     log = make_log()
     standings = make_standings({"甲": [1], "乙": [0]})
     obs = make_obs(day=2, today_history=[make_day(1, [5, 4, 3, 2, 1, 0])])
-    build, fact, task = {
+    build, fact, written, task = {
         "opening-plan": (lambda received: prompts.opening_plan_request({"乙": "开局发言"}, TEST_GAME,
                                                                        received=received),
-                         "【乙】开局发言", "请结合他们的发言"),
-        "bid": (lambda received: prompts.bid_request(obs, received=received), "全员累计总分：", prompts.BID_HINT),
+                         "【乙】开局发言", "在开局发言时", "请结合他们的发言"),
+        "bid": (lambda received: prompts.bid_request(obs, received=received), "全员累计总分：", "昨天出价时",
+                prompts.BID_HINT),
         "match-end": (lambda received: prompts.match_end_speech_request(log, standings, received=received),
-                      prompts.render_standings(standings), "请向全体玩家发表你的局末发言"),
+                      prompts.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
         "memory": (lambda received: prompts.memory_request({"乙": "局末发言"}, 2, received=received),
-                   "【乙】局末发言", "请结合旧记忆"),
+                   "【乙】局末发言", "在局末发言时", "请结合旧记忆"),
         "final": (lambda received: prompts.final_speech_request(standings, log, received=received),
-                  prompts.render_standings(standings), "请向全体玩家发表你的最终感言"),
+                  prompts.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的最终感言"),
     }[kind]
-    block = "以下是其他玩家写给你的私信：\n\n【乙】第一封\n第二行\n\n【丙】第二封"
+    block = f"以下是其他玩家{written}写给你的私信：\n\n【乙】第一封\n第二行\n\n【丙】第二封"
     text = build({"乙": "第一封\n第二行", "丙": "第二封"})
     assert f"{block}\n\n{task}" in text
     assert text.index(fact) < text.index(block)

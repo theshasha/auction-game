@@ -17,7 +17,7 @@ TASK_FORMATS["plan"] = TASK_FORMATS["bid"]
 LETTER_FORMAT = "<收件人名字>\n只有收件人能看到的私信。\n</收件人名字>"
 MAX_LETTERS = 2
 # 第 2 天起的出价只附这一句，完整格式在本局规划请求里。
-BRIEF_BID_FORMAT = "请按本局规划时的格式提交：strategy 和 decision 两块，私信块可以不写。"
+BRIEF_BID_FORMAT = "请按本局规划时的格式提交：strategy 和 decision 两块，私信块可以不写，收件人下一次行动时才收到。"
 # 读取阵容时，玩家名也不能和这些标签相同，原因见 docs/letters.md 的"名字"。
 FIXED_TAGS = ("strategy", "decision", "speech")
 
@@ -44,7 +44,7 @@ def output_requirement(task: str, letters: LetterNames | None = None) -> str:
     if letters is None:
         return hint + TASK_FORMATS[task]
     hint += (f"私信块可以不写，最多 {MAX_LETTERS} 块。标签是收件人的名字，可以写给{'、'.join(letters.recipients)}，"
-             "每人最多 1 封，每封 200 字左右。\n")
+             "每人最多 1 封，每封 200 字左右。收件人下一次行动时才收到，影响不了对方这一次的出价或发言。\n")
     return f"{hint}{TASK_FORMATS[task]}\n{LETTER_FORMAT}"
 
 

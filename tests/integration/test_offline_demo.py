@@ -133,10 +133,11 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     assert last_bid["context"] == f"第 {len(matches)} 局第 {game.max_days} 天"
     last_letter = last_bid["result"]["letters"][0]["text"]
     receiver = {entry["phase"]: entry for entry in task_entries(paths.player(2))}
-    for phase, letter in (("opening_plan", first_letter), ("final_speech", last_letter)):
+    for phase, written, letter in (("opening_plan", "在开局发言时", first_letter),
+                                   ("final_speech", "在本局最后一天出价时", last_letter)):
         prompt = [part["content"] for message in receiver[phase]["messages"]
                   for part in message["parts"] if part["part_kind"] == "user-prompt"][-1]
-        assert f"以下是其他玩家写给你的私信：\n\n【甲】{letter}\n\n" in prompt
+        assert f"以下是其他玩家{written}写给你的私信：\n\n【甲】{letter}\n\n" in prompt
 
     stats = analyze.collect_player_stats(matches)
     assert stats["auction_score_matrix"][names[0]] == [payload["match"]["auction_scores"][names[0]]

@@ -281,15 +281,18 @@ def test_letters_arrive_in_recipients_next_request_only(tmp_path):
         director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in players])
     director.on_match_end([make_log(game=game)], make_standings({p.name: [0] for p in players}))
     # 请求依次是开局发言、规划、第 2 天和第 3 天出价、局末发言、整理记忆、下一局规划；第 1 天出价取规划缓存。
-    received = {("Bravo", 1): "开局信", ("Bravo", 2): "规划信", ("Charlie", 3): "次日信",
-                ("Bravo", 4): "末日信", ("Bravo", 5): "局末信"}
+    # 收信段标题写明信是在哪一环节写的；规划请求同时交了第 1 天的出价。
+    received = {("Bravo", 1): ("开局信", "在开局发言时"), ("Bravo", 2): ("规划信", "昨天出价时"),
+                ("Charlie", 3): ("次日信", "昨天出价时"), ("Bravo", 4): ("末日信", "在本局最后一天出价时"),
+                ("Bravo", 5): ("局末信", "在局末发言时")}
     assert [len(p.task_runner.calls) for p in players] == [7, 7, 7]
     for player in players:
         for index in range(7):
             request = request_text(player.task_runner, index)
-            expected = [received[player.name, index]] if (player.name, index) in received else []
-            assert [text for text in texts if text in request] == expected
-            assert all(f"以下是其他玩家写给你的私信：\n\n【Alpha】{text}" in request for text in expected)
+            text, written = received.get((player.name, index), (None, None))
+            assert [letter for letter in texts if letter in request] == ([text] if text else [])
+            if text:
+                assert f"以下是其他玩家{written}写给你的私信：\n\n【Alpha】{text}" in request
     # 只有写了信的轮次有一节，节标题是写信的那一轮。
     assert director.paths.letters.read_text(encoding="utf-8") == (
         "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
@@ -326,5 +329,6 @@ def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path
         director.on_match_end([log], standings)
     speech_request = request_text(bravo.task_runner, days + 1)
     assert ("最终感言" if final else "局末发言") in speech_request
-    assert "【Alpha】最后一封" in speech_request
+    # 一天一局时这封是规划时写的，规划请求交的就是最后一天的出价。
+    assert "以下是其他玩家在本局最后一天出价时写给你的私信：\n\n【Alpha】最后一封" in speech_request
     assert all("最后一封" not in request_text(bravo.task_runner, index) for index in range(days + 1))
