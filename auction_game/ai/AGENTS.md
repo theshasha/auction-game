@@ -4,7 +4,7 @@
 
 - 提示文字在 `prompts.py`，文本格式与解析在 `text_output.py`，出价校验和 Agent 组装在 `agent_tasks.py`。
 - 任务执行在 `agent_execution.py`，协议和网络请求在 `llm_client.py`。
-- 玩家对话历史在 `ai_player.py`，发言、记忆和规划的顺序由 `ai_speech.py` 控制。
+- 玩家对话历史在 `ai_player.py`，发言、出价、记忆和规划的轮次以及私信送达由 `ai_director.py` 控制。
 
 ## 原则
 

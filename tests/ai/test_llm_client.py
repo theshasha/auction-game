@@ -224,11 +224,11 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
     h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}), reply(),
                            reply(text=long_summary)])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    assert player.plan_strategy("plan", "opening_plan") is None
+    assert player.plan_strategy("plan", "opening_plan") == []
     assert player.decide_bid(make_ai_obs()) == (2, None)
     assert len(h.requests) == 1
     assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
-    assert player.give_speech("speak", "final_speech") == "public"
+    assert player.give_speech("speak", "final_speech") == ("public", [])
     player.plan_strategy("next plan", "match_1_plan")
     before = deepcopy(player.messages)
     assert player.final_summary("original summary request and other players' speeches") == long_summary

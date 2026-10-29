@@ -1,4 +1,4 @@
-"""发言导演、公开与私有边界、规划缓存及观众总结。"""
+"""各轮编排、私信送达、公开与私有边界、规划缓存及观众总结。"""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -8,9 +8,11 @@ from types import SimpleNamespace
 import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-from auction_game.ai import ai_speech
+from auction_game.ai import ai_director
 from auction_game.ai.agent_execution import OutputFailedError
-from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, speech_reply, text_reply, task_entries
+from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log, make_obs,
+                                     make_player, make_standings, request_text, speech_reply, text_reply,
+                                     task_entries)
 from auction_game.game.game_rules import GameSettings
 
 
@@ -28,10 +30,11 @@ class RecordingPlayer:
 
     def give_speech(self, text, phase, context):
         self.calls.append((phase, text))
-        return f"发言{self.name}"
+        return f"发言{self.name}", []
 
     def plan_strategy(self, text, phase, context):
         self.calls.append((phase, text))
+        return []
 
     def save_memory(self, text, phase, context):
         self.calls.append((phase, text))
@@ -46,10 +49,10 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
         regular_matches=2, max_playoffs=0,
     )
     players = [RecordingPlayer(name) for name in ("甲", "乙")]
-    director = ai_speech.AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None),
-                                          tmp_path, game=game)
+    director = ai_director.AIDirector(players, Controller(mode="continuous", announce=lambda _: None),
+                                      tmp_path, game=game)
 
-    def opening_plan_request(others, actual_game):
+    def opening_plan_request(others, actual_game, *, received):
         assert actual_game is game
         return f"规划 {others}"
 
@@ -57,11 +60,13 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
         assert actual_game is game
         return f"规划 {[log.match_index for log in logs]}"
 
-    monkeypatch.setattr(ai_speech.prompts, "opening_speech_request", lambda: "开局")
-    monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", opening_plan_request)
-    monkeypatch.setattr(ai_speech.prompts, "next_match_plan_request", next_match_plan_request)
-    monkeypatch.setattr(ai_speech.prompts, "match_end_speech_request", lambda log, standings: f"局末 {log.match_index}")
-    monkeypatch.setattr(ai_speech.prompts, "memory_request", lambda others, index: f"记忆 {others} {index}")
+    monkeypatch.setattr(ai_director.prompts, "opening_speech_request", lambda: "开局")
+    monkeypatch.setattr(ai_director.prompts, "opening_plan_request", opening_plan_request)
+    monkeypatch.setattr(ai_director.prompts, "next_match_plan_request", next_match_plan_request)
+    monkeypatch.setattr(ai_director.prompts, "match_end_speech_request",
+                        lambda log, standings, *, received: f"局末 {log.match_index}")
+    monkeypatch.setattr(ai_director.prompts, "memory_request",
+                        lambda others, index, *, received: f"记忆 {others} {index}")
     director.on_opening()
     director.on_match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
     assert players[0].calls == [
@@ -86,9 +91,10 @@ def test_director_orders_speeches_by_seat_not_completion(monkeypatch, tmp_path):
             return speech
 
     players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
-    director = ai_speech.AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None),
-                                          tmp_path, game=TEST_GAME)
-    monkeypatch.setattr(ai_speech.prompts, "opening_plan_request", lambda others, game: f"规划 {list(others)}")
+    director = ai_director.AIDirector(players, Controller(mode="continuous", announce=lambda _: None),
+                                      tmp_path, game=TEST_GAME)
+    monkeypatch.setattr(ai_director.prompts, "opening_plan_request",
+                        lambda others, game, *, received: f"规划 {list(others)}")
     director.on_opening()
     public_log = director.speeches_log.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
@@ -99,7 +105,7 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     speech = '第一段说"6 真香"。\n\n第二段。' + "很" * 600
     runner = fake_task_runner([speech_reply(speech)])
     player = make_player(runner, tmp_path)
-    assert player.give_speech("请发言", "opening_speech") == speech
+    assert player.give_speech("请发言", "opening_speech") == (speech, [])
     assert len(runner.calls) == 1
     entry = task_entries(player.log.path)[-1]
     assert entry["result"] == {**speech_reply(speech), "letters": []}
@@ -112,7 +118,7 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
 def test_speech_schema_failure_gets_one_correction(invalid, tmp_path):
     runner = fake_task_runner([invalid, speech_reply("补上的发言")])
     player = make_player(runner, tmp_path)
-    assert player.give_speech("请发言", "opening_speech") == "补上的发言"
+    assert player.give_speech("请发言", "opening_speech") == ("补上的发言", [])
     assert len(runner.calls) == 2
 
 
@@ -205,18 +211,18 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
     game = replace(TEST_GAME, initial_coins=13, daily_pool=(2, 1, 3), max_bid=9,
                    super_cost=1, super_hit_score=2, regular_matches=1)
     a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6), bid_reply(1)]), tmp_path / "a", game=game)
-    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), tmp_path / "b", game=game)
-    b.name = "Bravo"
-    director = ai_speech.AISpeechDirector([a, b], Controller(mode="continuous", announce=lambda _: None),
-                                        tmp_path, game=a.game)
+    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), tmp_path / "b",
+                    game=game, name="Bravo")
+    director = ai_director.AIDirector([a, b], Controller(mode="continuous", announce=lambda _: None),
+                                      tmp_path, game=a.game)
     director.on_opening()
-    request = a.task_runner.calls[-1][-1].parts[-1].content
+    request = request_text(a.task_runner, -1)
     assert "public-B" in request and "烟雾弹" not in request
     public_log = director.speeches_log.read_text(encoding="utf-8")
     assert "public-A" in public_log and "烟雾弹" not in public_log
     for player, planned, fallback in ((a, (2, 6), (1, None)), (b, (3, 6), (0, None))):
         assert len(player.task_runner.calls) == 2
-        plan_input = player.task_runner.calls[-1][-1].parts[-1].content
+        plan_input = request_text(player.task_runner, -1)
         for fact in ("你有 13 枚金币", "今日奖池为 2 分",
                      "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
                      "如果每天都命中，每人最多还能获得 6 命中分"):
@@ -234,9 +240,77 @@ def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
     from auction_game.ai.text_output import output_requirement
 
     player = make_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path)
-    director = ai_speech.AISpeechDirector([player], Controller(mode="continuous", announce=lambda _: None),
-                                          tmp_path, game=TEST_GAME)
-    monkeypatch.setattr(ai_speech.prompts, "final_speech_request", lambda standings, log: "请发表最终感言")
-    monkeypatch.setattr(ai_speech.prompts, "final_summary_request", lambda others: "请总结")
+    director = ai_director.AIDirector([player], Controller(mode="continuous", announce=lambda _: None),
+                                      tmp_path, game=TEST_GAME)
+    monkeypatch.setattr(ai_director.prompts, "final_speech_request",
+                        lambda standings, log, *, received: "请发表最终感言")
+    monkeypatch.setattr(ai_director.prompts, "final_summary_request", lambda others: "请总结")
     director.on_final([], None)
-    assert player.task_runner.calls[0][-1].parts[-1].content == "请发表最终感言\n\n" + output_requirement("speech")
+    assert request_text(player.task_runner, 0) == "请发表最终感言\n\n" + output_requirement("speech")
+
+
+def to_bravo(reply, text, to="Bravo"):
+    return {**reply, "letters": [{"to": to, "text": text}]}
+
+
+def test_letters_arrive_in_recipients_next_request_only(tmp_path):
+    from auction_game.controller import Controller
+
+    game = replace(TEST_GAME, daily_pool=(4, 4, 4), regular_matches=2)
+    texts = ["开局信", "规划信", "次日信", "末日信", "局末信"]
+    # 第 2 天改写给 Charlie：Bravo 第 3 天什么也收不到，之前的信不会再送一次。
+    alpha = make_player(fake_task_runner([
+        to_bravo(speech_reply("A"), "开局信"), to_bravo(bid_reply(1), "规划信"),
+        to_bravo(bid_reply(1), "次日信", to="Charlie"), to_bravo(bid_reply(1), "末日信"),
+        to_bravo(speech_reply("A"), "局末信"), {"memory": "记忆"}, bid_reply(1),
+    ]), tmp_path, game=game, name="Alpha")
+    bravo, charlie = (make_player(fake_task_runner([
+        speech_reply(name), bid_reply(1), bid_reply(1), bid_reply(1), speech_reply(name), {"memory": "记忆"},
+        bid_reply(1),
+    ]), tmp_path, game=game, name=name) for name in ("Bravo", "Charlie"))
+    players = [alpha, bravo, charlie]
+    director = ai_director.AIDirector(players, Controller(mode="continuous", announce=lambda _: None),
+                                      tmp_path, game=game)
+    director.on_opening()
+    for day in (1, 2, 3):
+        director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in players])
+    director.on_match_end([make_log(game=game)], make_standings({p.name: [0] for p in players}))
+    # 请求依次是开局发言、规划、第 2 天和第 3 天出价、局末发言、整理记忆、下一局规划；第 1 天出价取规划缓存。
+    received = {("Bravo", 1): "开局信", ("Bravo", 2): "规划信", ("Charlie", 3): "次日信",
+                ("Bravo", 4): "末日信", ("Bravo", 5): "局末信"}
+    assert [len(p.task_runner.calls) for p in players] == [7, 7, 7]
+    for player in players:
+        for index in range(7):
+            request = request_text(player.task_runner, index)
+            expected = [received[player.name, index]] if (player.name, index) in received else []
+            assert [text for text in texts if text in request] == expected
+            assert all(f"以下是其他玩家写给你的私信：\n\n【Alpha】{text}" in request for text in expected)
+
+
+@pytest.mark.parametrize("days, final", [(1, False), (1, True), (2, True)],
+                         ids=["single-day-match-end", "single-day-final", "last-day-final"])
+def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path):
+    from auction_game.controller import Controller
+
+    game = replace(TEST_GAME, daily_pool=(4,) * days, regular_matches=2)
+    # 规划和第 2 天起的出价各一次请求，最后一次写信；一天一局时就是规划。
+    bids = [bid_reply(1)] * (days - 1) + [to_bravo(bid_reply(1), "最后一封")]
+    ending = ["总结"] if final else [{"memory": "记忆"}, bid_reply(1)]
+    alpha = make_player(fake_task_runner([speech_reply("A"), *bids, speech_reply("A"), *ending]),
+                        tmp_path, game=game, name="Alpha")
+    bravo = make_player(fake_task_runner([speech_reply("B"), *[bid_reply(1)] * days, speech_reply("B"), *ending]),
+                        tmp_path, game=game, name="Bravo")
+    director = ai_director.AIDirector([alpha, bravo], Controller(mode="continuous", announce=lambda _: None),
+                                      tmp_path, game=game)
+    director.on_opening()
+    for day in range(1, days + 1):
+        director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in (alpha, bravo)])
+    log, standings = make_log(game=game), make_standings({"Alpha": [0], "Bravo": [0]})
+    if final:
+        director.on_final(standings, log)
+    else:
+        director.on_match_end([log], standings)
+    speech_request = request_text(bravo.task_runner, days + 1)
+    assert ("最终感言" if final else "局末发言") in speech_request
+    assert "【Alpha】最后一封" in speech_request
+    assert all("最后一封" not in request_text(bravo.task_runner, index) for index in range(days + 1))

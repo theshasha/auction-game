@@ -54,6 +54,16 @@ def opening_speech_request() -> str:
     return "比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。"
 
 
+def _quoted(title: str, texts: dict[str, str]) -> str:
+    """其他玩家的发言或私信：标题之后每人一段，以【名字】开头。"""
+    return "\n\n".join([title, *(f"【{name}】{text}" for name, text in texts.items())])
+
+
+def _received_letters(received: dict[str, str] | None) -> list[str]:
+    """收到的私信接在事实信息之后、任务提示之前；没有信时不出现。received 是写信人到正文。"""
+    return [_quoted("以下是其他玩家写给你的私信：", received)] if received else []
+
+
 def _remaining_scores_info(game: GameSettings, match_index: int, day: int, today_pool: int) -> str:
     """最后一局正赛和加赛显示剩余分数。"""
     if match_index < game.regular_matches:
@@ -83,14 +93,15 @@ def _day1_constant_info(game: GameSettings, match_index: int = 1) -> str:
     )
 
 
-def opening_plan_request(others_speeches: dict[str, str], game: GameSettings) -> str:
-    return (
-        "以下是其他玩家的开局发言：\n"
-        + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
-        + "\n请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
+def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
+                         received: dict[str, str] | None = None) -> str:
+    return "\n\n".join([
+        _quoted("以下是其他玩家的开局发言：", others_speeches),
+        *_received_letters(received),
+        "请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
         + _day1_constant_info(game)
-        + "\n\n全员累计总分：全员 0 分。"
-    )
+        + "\n\n全员累计总分：全员 0 分。",
+    ])
 
 
 def _my_last_day_line(obs: Observation) -> str:
@@ -138,7 +149,7 @@ def _yesterday_bids_table(obs: Observation) -> str:
     return "\n".join(lines)
 
 
-def bid_request(obs: Observation) -> str:
+def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> str:
     # 余额已经包含当天工资，注明这一点，避免重复计算。
     status_notes = []
     if obs.day >= 2:
@@ -154,8 +165,9 @@ def bid_request(obs: Observation) -> str:
         status_line += "\n\n本局最后一天，结束后金币清零。"
     status_line += "\n\n" + _total_scores_line(obs.standings)
     status_line += _remaining_scores_info(obs.game, obs.match_index, obs.day, obs.today_pool)
+    task = "\n\n".join([*_received_letters(received), BID_HINT])
     if not obs.today_history:
-        return f"当前是第 {obs.match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{BID_HINT}"
+        return f"当前是第 {obs.match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{task}"
 
     yesterday = obs.today_history[-1]
     if yesterday.is_void:
@@ -176,7 +188,7 @@ def bid_request(obs: Observation) -> str:
         _my_last_day_line(obs), "",
         status_line,
     ]
-    return "\n".join(lines) + "\n\n" + BID_HINT
+    return "\n".join(lines) + "\n\n" + task
 
 
 def render_match_log(log: MatchLog) -> str:
@@ -242,7 +254,8 @@ def _match_title(log: MatchLog) -> str:
     return f"第 {log.match_index} 局（{'加赛局' if log.is_playoff else '正赛局'}）"
 
 
-def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry]) -> str:
+def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], *,
+                             received: dict[str, str] | None = None) -> str:
     """只在还有下一局时调用。"""
     lines = [
         f"{_match_title(log)}结束。",
@@ -252,25 +265,31 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry]) -> 
     # 正赛打完后还有下一局，说明第一名并列，进入加赛。
     if log.match_index >= log.game.regular_matches:
         lines.append("第一名总分并列，全员进入加赛。")
+    lines.extend(_received_letters(received))
     lines.append("请向全体玩家发表你的局末发言（不超过 300 字）。")
     return "\n\n".join(lines)
 
 
-def memory_request(others_speeches: dict[str, str], match_index: int) -> str:
-    """补充其他玩家的发言；本人的发言已在对话中，整理记忆后才清空对话。第 1 局结束时还没有旧记忆。"""
+def memory_request(others_speeches: dict[str, str], match_index: int, *,
+                   received: dict[str, str] | None = None) -> str:
+    """补充其他玩家的发言；本人的发言已在对话中，整理记忆后才清空对话。第 1 局结束时还没有旧记忆。
+
+    本局出价时收到的信也在对话里，所以没有收到信时也提私信。
+    """
     has_old_memory = match_index > 1
-    return (
-        "以下是其他玩家在本局结束后的公开发言：\n\n"
-        + "\n\n".join(f"【{name}】{text}" for name, text in others_speeches.items())
-        + f"\n\n请结合{'旧记忆、' if has_old_memory else ''}本局经历和公开发言，整理一份只有自己能看的笔记。"
-        + ("它会完整替换旧记忆；" if has_old_memory else "")
-        + "下一局你看不到之前各局的原始对话和公开发言，要继续用的信息都写在这里。\n\n"
+    task = (
+        f"请结合{'旧记忆、' if has_old_memory else ''}本局经历、公开发言和私信，整理你的记忆，只有你自己能看到。"
+        + ("新记忆会完整替换旧记忆；" if has_old_memory else "")
+        + "下一局你看不到之前各局的原始对话、公开发言和私信，要继续用的信息都写在这里。\n\n"
         "- 记下对手的出价倾向和自己要做的调整，每条都要能直接用于下一局的出价。\n"
+        "- 私信里谈好的约定和得到的消息，下一局还用得上的也记下来。\n"
         + ("- 保留仍然有用的旧经验，改掉被本局推翻的判断。\n" if has_old_memory else "")
         + "- 只写结论，不写例子和出价记录。\n"
         "- 规则、最新成绩和之前各局的出价日志会另行提供，无需抄写。\n\n"
         "全文不超过 1000 字。"
     )
+    return "\n\n".join([_quoted("以下是其他玩家在本局结束后的公开发言：", others_speeches),
+                        *_received_letters(received), task])
 
 
 def next_match_plan_request(past_logs: list[MatchLog], standings: list[StandingsEntry], game: GameSettings) -> str:
@@ -289,24 +308,23 @@ def next_match_plan_request(past_logs: list[MatchLog], standings: list[Standings
         playoff_note
         + f"之前各局的完整出价日志：\n\n{logs_text}\n\n"
         f"截至当前的最新累计成绩：\n\n{render_standings(standings)}\n\n"
-        f"请结合之前保存的私人笔记，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
+        f"请结合之前整理的记忆，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)
     )
 
 
-def final_speech_request(standings: list[StandingsEntry], log: MatchLog) -> str:
+def final_speech_request(standings: list[StandingsEntry], log: MatchLog, *,
+                         received: dict[str, str] | None = None) -> str:
     """请求最终感言，并提供最后一局的出价日志；之前各局的日志已在本局规划请求中给出。"""
-    return (
-        f"{_match_title(log)}结束，这也是最后一局。\n\n本局完整出价日志：\n\n"
-        f"{render_match_log(log)}\n\n"
-        f"比赛全部结束。最终排名与分数明细：\n\n{render_standings(standings)}\n\n"
-        "请向全体玩家发表你的最终感言。"
-    )
+    return "\n\n".join([
+        f"{_match_title(log)}结束，这也是最后一局。",
+        f"本局完整出价日志：\n\n{render_match_log(log)}",
+        f"比赛全部结束。最终排名与分数明细：\n\n{render_standings(standings)}",
+        *_received_letters(received),
+        "请向全体玩家发表你的最终感言。",
+    ])
 
 
 def final_summary_request(others_speeches: dict[str, str]) -> str:
-    return (
-        "以下是其他玩家的最终感言：\n"
-        + "\n".join(f"【{name}】{text}\n" for name, text in others_speeches.items())
-        + "\n最后，请写一段只给观众看的总结发言，用第一人称，直接写正文。"
-    )
+    return "\n\n".join([_quoted("以下是其他玩家的最终感言：", others_speeches),
+                        "最后，请写一段只给观众看的总结发言，用第一人称，直接写正文。"])

@@ -1,4 +1,4 @@
-"""提示词文案：system 提示词、局末结果、记忆、加赛预告、规划与首日出价合并。
+"""提示词文案：system 提示词、局末结果、记忆、收到的私信、加赛预告、规划与首日出价合并。
 每日出价消息见 test_prompts_bid_request.py；表格渲染见 test_prompts_render.py；
 规则文本见 test_prompts_rules.py。"""
 
@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from auction_game.ai import prompts
-from tests.support.factories import NAMES, TEST_GAME, make_log, make_logs, make_standings
+from tests.support.factories import NAMES, TEST_GAME, make_day, make_log, make_logs, make_obs, make_standings
 
 
 class TestSystemPrompt:
@@ -81,8 +81,7 @@ class TestSpeechFields:
 
     def test_final_summary_is_private_and_includes_speeches(self):
         text = prompts.final_summary_request({"甲": "感言A", "乙": "感言B"})
-        assert "【甲】感言A" in text
-        assert "【乙】感言B" in text
+        assert text.startswith("以下是其他玩家的最终感言：\n\n【甲】感言A\n\n【乙】感言B\n\n最后")
         assert "只给观众看的总结发言" in text
         assert "用第一人称" in text
 
@@ -91,11 +90,39 @@ class TestSpeechFields:
 def test_memory_request_lists_other_speeches_and_key_requirements(match_index):
     text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"}, match_index)
     assert "公开发言：\n\n【乙】公开信号\n\n【丙】另一条公开信号\n\n请结合" in text
-    for required in ("只写结论", "不超过 1000 字"):
+    # 没有收到信也提私信：本局出价时收到的信在对话里。
+    for required in ("公开发言和私信，整理你的记忆", "看不到之前各局的原始对话、公开发言和私信",
+                     "私信里谈好的约定和得到的消息", "只写结论", "不超过 1000 字"):
         assert required in text
     # 第 1 局结束时还没有旧记忆，之后每局都要在旧记忆上更新。
-    for old_memory in ("结合旧记忆", "完整替换旧记忆", "保留仍然有用的旧经验", "改掉被本局推翻的判断"):
+    for old_memory in ("结合旧记忆", "新记忆会完整替换旧记忆", "保留仍然有用的旧经验", "改掉被本局推翻的判断"):
         assert (old_memory in text) is (match_index > 1)
+
+
+@pytest.mark.parametrize("kind", ["opening-plan", "bid", "match-end", "memory", "final"])
+def test_received_letters_sit_between_facts_and_task(kind):
+    """有信时只多出收信段；没有信时请求不变。"""
+    log = make_log()
+    standings = make_standings({"甲": [1], "乙": [0]})
+    obs = make_obs(day=2, today_history=[make_day(1, [5, 4, 3, 2, 1, 0])])
+    build, fact, task = {
+        "opening-plan": (lambda received: prompts.opening_plan_request({"乙": "开局发言"}, TEST_GAME,
+                                                                       received=received),
+                         "【乙】开局发言", "请结合他们的发言"),
+        "bid": (lambda received: prompts.bid_request(obs, received=received), "全员累计总分：", prompts.BID_HINT),
+        "match-end": (lambda received: prompts.match_end_speech_request(log, standings, received=received),
+                      prompts.render_standings(standings), "请向全体玩家发表你的局末发言"),
+        "memory": (lambda received: prompts.memory_request({"乙": "局末发言"}, 2, received=received),
+                   "【乙】局末发言", "请结合旧记忆"),
+        "final": (lambda received: prompts.final_speech_request(standings, log, received=received),
+                  prompts.render_standings(standings), "请向全体玩家发表你的最终感言"),
+    }[kind]
+    block = "以下是其他玩家写给你的私信：\n\n【乙】第一封\n第二行\n\n【丙】第二封"
+    text = build({"乙": "第一封\n第二行", "丙": "第二封"})
+    assert f"{block}\n\n{task}" in text
+    assert text.index(fact) < text.index(block)
+    assert text.replace(f"{block}\n\n", "") == build(None) == build({})
+    assert "写给你的私信" not in build(None)
 
 
 class TestPlayoffNotice:
@@ -176,7 +203,7 @@ class TestPlanBidMerge:
             assert "【甲】发言A" in text and "【乙】发言B" in text
             assert text.count("全员累计总分：全员 0 分。") == 1
         else:
-            assert "局末发言" not in text and "之前保存的私人笔记" in text
+            assert "局末发言" not in text and "之前整理的记忆" in text
             assert "| 排名 | 玩家 | 总分 | 第1局 | 拍卖分 |" in text
             assert "| 1 | 乙 | 11 | 11 | 1 |" in text
             assert "| 2 | 甲 | 10 | 10 | 2 |" in text

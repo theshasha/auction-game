@@ -2,8 +2,7 @@
 
 import yaml
 
-from auction_game import runners
-from auction_game.ai import ai_speech
+from auction_game.ai import ai_director
 from auction_game.cli import offline_demo
 from auction_game.configuration import load_configuration
 from auction_game.controller import run_parallel_round
@@ -23,15 +22,12 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
     ))
     controllers = {"bid": set(), "speech": set()}
 
-    def collect(kind):
-        def run(tasks, controller, label):
-            assert controller.max_concurrency == 1
-            controllers[kind].add(id(controller))
-            return run_parallel_round(tasks, controller, label)
-        return run
+    def run(tasks, controller, label):
+        assert controller.max_concurrency == 1
+        controllers["bid" if label.endswith("出价") else "speech"].add(id(controller))
+        return run_parallel_round(tasks, controller, label)
 
-    monkeypatch.setattr(runners, "run_parallel_round", collect("bid"))
-    monkeypatch.setattr(ai_speech, "run_parallel_round", collect("speech"))
+    monkeypatch.setattr(ai_director, "run_parallel_round", run)
     run_dir = tmp_path / "offline"
     offline_demo.generate_demo(run_dir, test_model=True)
     assert len(controllers["bid"]) == len(controllers["speech"]) == 1

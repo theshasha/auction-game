@@ -11,10 +11,10 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from auction_game.ai import prompts
 from auction_game.ai.agent_execution import OutputFailedError
 from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.ai.ai_speech import AISpeechDirector
+from auction_game.ai.ai_director import AIDirector
 from auction_game.controller import Controller
 from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log, make_logs,
-                                     make_player, make_standings, speech_reply, task_entries)
+                                     make_player, make_standings, request_text, speech_reply, task_entries)
 from tests.support.wire import Harness, PROTOCOLS, reply
 
 
@@ -192,11 +192,9 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             assert "public-" + ("Bravo" if name == "Alpha" else "Alpha") in prompt
             assert "private-" not in text
             return {"memory": "private-" + name}
-        p = make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6),
-                                         bid_reply(0)]), tmp_path / name, game=game)
-        p.name = name
-        players.append(p)
-    director = AISpeechDirector(players, Controller(mode="continuous", announce=lambda _: None), tmp_path, game=players[0].game)
+        players.append(make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6),
+                                                     bid_reply(0)]), tmp_path / name, game=game, name=name))
+    director = AIDirector(players, Controller(mode="continuous", announce=lambda _: None), tmp_path, game=players[0].game)
     # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。下一局是加赛时两人总分并列。
     next_is_playoff = match_index >= game.regular_matches
     standings = make_standings({"Alpha": [2] * match_index, "Bravo": [1] * match_index},
@@ -210,7 +208,7 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
         assert "private-" + ("Bravo" if p.name == "Alpha" else "Alpha") not in text
         assert "public-Alpha" not in text and "public-Bravo" not in text
         assert len(p.task_runner.calls) == 3
-        plan_input = p.task_runner.calls[-1][-1].parts[-1].content
+        plan_input = request_text(p.task_runner, -1)
         for entry in standings:
             row = next(line for line in plan_input.splitlines() if f"| {entry.player} |" in line)
             assert row.split(" | ")[:3] == [f"| {entry.rank}", entry.player, str(entry.total_score)]

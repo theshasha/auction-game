@@ -17,7 +17,7 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     speech = "我的原话 <原样>！"
     prompt = '\n输入 <details> & </pre> "引号"\n```json\n{"x": 1}\n```\n' + "长行" * 500 + '\n最后一行\n'
     player = make_player(fake_task_runner([{"strategy": strategy, "speech": speech}]), tmp_path)
-    assert player.give_speech(prompt, "opening_speech") == speech
+    assert player.give_speech(prompt, "opening_speech") == (speech, [])
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "## 开局发言" in markdown
     letters = LetterNames("Alpha", tuple(ALL_NAMES[1:]))

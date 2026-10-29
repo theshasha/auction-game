@@ -10,15 +10,10 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPrompt
 from auction_game.ai.agent_execution import OutputFailedError
 from auction_game.ai.text_output import BRIEF_BID_FORMAT, LetterNames, output_requirement
 from tests.support.factories import (ALL_NAMES, TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player,
-                                     speech_reply, text_reply, task_entries)
+                                     request_text, speech_reply, text_reply, task_entries)
 from auction_game.ai import prompts
 
 LETTERS = LetterNames("Alpha", tuple(ALL_NAMES[1:]))
-
-
-def request_text(runner, index):
-    """第 index 次请求里本次新发的用户提示。"""
-    return runner.calls[index][-1].parts[-1].content
 
 
 def retry_text(runner, index):
@@ -87,7 +82,7 @@ def test_custom_game_and_realtime_balance_use_shared_rules(tmp_path):
     game = replace(TEST_GAME, initial_coins=4, max_bid=9, super_cost=3)
     runner = fake_task_runner([bid_reply(5), bid_reply(1, 9), bid_reply(8, 9), bid_reply(7, 9)])
     player = make_player(runner, tmp_path, game=game)
-    assert player.plan_strategy(prompts.opening_plan_request({}, game), "opening_plan") is None
+    assert player.plan_strategy(prompts.opening_plan_request({}, game), "opening_plan") == []
     assert player.decide_bid(make_ai_obs(coins=4, game=game)) == (1, 9)
     assert player.decide_bid(make_ai_obs(day=2, coins=10, game=game)) == (7, 9)
     assert len(runner.calls) == 4
@@ -183,11 +178,28 @@ def test_speech_letters_are_parsed_and_final_speech_cannot_write_letters(tmp_pat
     runner = fake_task_runner([{**speech_reply("开局"), "letters": [letter]},
                                {**speech_reply("感言"), "letters": [letter]}, speech_reply("感言")])
     player = make_player(runner, tmp_path)
-    assert player.give_speech("请发言", "opening_speech") == "开局"
-    assert player.give_speech("请发表感言", "final_speech", letters=False) == "感言"
+    assert player.give_speech("请发言", "opening_speech") == ("开局", [letter])
+    assert player.give_speech("请发表感言", "final_speech", letters=False) == ("感言", [])
     assert request_text(runner, 0) == "请发言\n\n" + output_requirement("speech", LETTERS)
     assert request_text(runner, 1) == "请发表感言\n\n" + output_requirement("speech")
     assert retry_text(runner, 2).startswith("协议块外只允许空白，请直接提交两块正文。\n")
     opening, final = task_entries(player.log.path)
     assert opening["result"]["letters"] == [letter]
     assert final["result"]["letters"] == []
+
+
+def test_bid_shows_received_letters_and_returns_written_ones(tmp_path):
+    letter = {"to": "Bravo", "text": "明天我出 3"}
+    runner = fake_task_runner([{**bid_reply(2), "letters": [letter]}])
+    player = make_player(runner, tmp_path)
+    assert player.bid(make_ai_obs(day=2), {"Charlie": "我会狙 2"}) == ((2, None), [letter])
+    assert f"以下是其他玩家写给你的私信：\n\n【Charlie】我会狙 2\n\n{prompts.BID_HINT}" in request_text(runner, 0)
+
+
+def test_plan_returns_letters_and_day_one_bid_from_cache_has_none(tmp_path):
+    letter = {"to": "Bravo", "text": "规划时写的"}
+    runner = fake_task_runner([{**bid_reply(1, 3), "letters": [letter]}])
+    player = make_player(runner, tmp_path)
+    assert player.plan_strategy("请规划", "opening_plan") == [letter]
+    assert player.bid(make_ai_obs(), {}) == ((1, 3), [])
+    assert len(runner.calls) == 1

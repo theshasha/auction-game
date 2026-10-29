@@ -108,27 +108,38 @@ class AIPlayer(Player):
                 self.messages.extend(projection)
         return result.output
 
-    def decide_bid(self, obs: Observation) -> tuple[int, int | None]:
+    def bid(self, obs: Observation, received: dict[str, str]) -> tuple[tuple[int, int | None], list[dict]]:
+        """返回 ((正常出价, 超级出价), 写的信)；received 是收到的信，写信人到正文。
+
+        第 1 天有本局规划的缓存时直接用它，不发请求，所以也不收信、不写信。
+        """
         if obs.day == 1 and self._pending_day1_bid is not None:
             submission = self._pending_day1_bid
             self._pending_day1_bid = None
-            return submission
+            return submission, []
         # 本局规划请求里有完整格式，整理记忆前一直留在对话里，第 2 天起只附一句提示。
-        output = self._task("bid", prompts.bid_request(obs), "bid",
+        output = self._task("bid", prompts.bid_request(obs, received=received), "bid",
                             f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
                             letters=self.letter_names, brief_format=obs.day >= 2)
-        return output["bid"], output["super_bid"]
+        return (output["bid"], output["super_bid"]), output["letters"]
 
-    def give_speech(self, user_text: str, phase: str, context: str = "", *, letters: bool = True) -> str:
-        """只返回公开发言，私有策略只留在自己的对话历史和日志里。最终感言不能写信。"""
-        return self._task("speech", user_text, phase, context,
-                          letters=self.letter_names if letters else None)["speech"]
+    def decide_bid(self, obs: Observation) -> tuple[int, int | None]:
+        """引擎接口；比赛中的出价经编排层调用 bid，才能收信和写信。"""
+        return self.bid(obs, {})[0]
 
-    def plan_strategy(self, user_text: str, phase: str, context: str = "") -> None:
-        """成功替换首日缓存；失败保留调用前历史与缓存。"""
+    def give_speech(self, user_text: str, phase: str, context: str = "", *,
+                    letters: bool = True) -> tuple[str, list[dict]]:
+        """返回公开发言和写的信，私有策略只留在自己的对话历史和日志里。最终感言不能写信。"""
+        output = self._task("speech", user_text, phase, context,
+                            letters=self.letter_names if letters else None)
+        return output["speech"], output["letters"]
+
+    def plan_strategy(self, user_text: str, phase: str, context: str = "") -> list[dict]:
+        """返回写的信。成功替换首日缓存；失败保留调用前历史与缓存。"""
         output = self._task("plan", user_text, phase, context, coins=self.game.initial_coins,
                             letters=self.letter_names)
         self._pending_day1_bid = output["bid"], output["super_bid"]
+        return output["letters"]
 
     def save_memory(self, user_text: str, phase: str, context: str = "") -> None:
         """全部公开发言公布后整理；日志成功才替换记忆并清空历局对话。"""

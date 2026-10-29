@@ -8,19 +8,21 @@ from dataclasses import replace
 
 import pytest
 
-from auction_game.ai.ai_player import AIPlayer
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import TextPart
 from tests.support.factories import (
-    ALL_NAMES,
     TEST_GAME,
-    TEST_PREDICTIONS,
     bid_reply,
     fake_task_runner,
     text_reply,
     make_ai_obs,
+    make_obs,
+    make_player,
+    request_text,
+    speech_reply,
     task_entries,
 )
+from auction_game.ai.ai_director import AIDirector
 from auction_game.controller import Controller, RoundTask, TournamentAborted, run_parallel_round
 from auction_game import controller as controller_module
 from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
@@ -53,11 +55,6 @@ def running(controller, fn, *release_events):
             raise error
 
 
-def make_named_player(name, task_runner, tmp_path):
-    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES, task_runner, game=TEST_GAME,
-                    log_path=tmp_path / f"{name}.jsonl", readable_path=tmp_path / f"{name}.md")
-
-
 @pytest.mark.parametrize("failure", [False, True], ids=["paused-success", "failed-task"])
 @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
 def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, capsys, failure, command, tmp_path):
@@ -74,10 +71,10 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         controller.offer_command("p")
         return bid_reply(2)
 
-    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1, 2)]), tmp_path)
-    bravo = make_named_player("Bravo", fake_task_runner(
+    alpha = make_player(fake_task_runner([bid_reply(1, 2)]), tmp_path, name="Alpha")
+    bravo = make_player(fake_task_runner(
         [ModelAPIError("offline", "unavailable"), bid_reply(2)] if failure else [pause_and_reply],
-    ), tmp_path)
+    ), tmp_path, name="Bravo")
     for player in (alpha, bravo):
         player.game = game
     alpha.plan_strategy("首日规划", "opening_plan")
@@ -139,9 +136,9 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
             gate.set()
 
     controller = Controller(mode="continuous", announce=announce)
-    alpha = make_named_player("Alpha", fake_task_runner([bid_reply(1), {"memory": "alpha cumulative"}]), tmp_path)
-    bravo = make_named_player("Bravo", fake_task_runner([bid_reply(2), ModelAPIError("offline", "unavailable"),
-                                                        {"memory": "bravo cumulative"}]), tmp_path)
+    alpha = make_player(fake_task_runner([bid_reply(1), {"memory": "alpha cumulative"}]), tmp_path, name="Alpha")
+    bravo = make_player(fake_task_runner([bid_reply(2), ModelAPIError("offline", "unavailable"),
+                                          {"memory": "bravo cumulative"}]), tmp_path, name="Bravo")
     players = [alpha, bravo]
     for player in players:
         player.plan_strategy("prior match context", "opening_plan")
@@ -163,6 +160,64 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
             assert alpha.checkpoint() == successful and bravo.memory == "bravo cumulative"
             assert len(alpha.task_runner.calls) == 2 and len(bravo.task_runner.calls) == 3
             assert alpha._pending_day1_bid is None and bravo._pending_day1_bid is None
+
+
+OPENING_LETTER = {"to": "Alpha", "text": "开局信"}
+PLAN_LETTER = {"to": "Alpha", "text": "规划信"}
+
+
+def test_rerun_sees_round_start_letters_and_new_letters_wait_for_next_round(tmp_path):
+    gate = threading.Event()
+    controller = Controller(mode="continuous",
+                            announce=lambda text: gate.set() if text.startswith("[单步]") else None)
+    alpha = make_player(fake_task_runner([speech_reply("A"), ModelAPIError("offline", "unavailable"),
+                                          bid_reply(1), bid_reply(2)]), tmp_path, name="Alpha")
+    bravo = make_player(fake_task_runner([{**speech_reply("B"), "letters": [OPENING_LETTER]},
+                                          {**bid_reply(1), "letters": [PLAN_LETTER]}, bid_reply(2)]),
+                        tmp_path, name="Bravo")
+    director = AIDirector([alpha, bravo], controller, tmp_path, game=TEST_GAME)
+
+    def play():
+        director.on_opening()
+        for day in (1, 2):
+            director.collect_bids([(p, make_obs(my_name=p.name, day=day)) for p in (alpha, bravo)])
+
+    with running(controller, play) as (thread, outcome):
+        assert gate.wait(timeout=5)  # Alpha 的规划失败，Bravo 的规划已成功
+        controller.offer_command("c")
+        thread.join(timeout=5)
+        assert "result" in outcome
+    # Alpha 的请求依次是开局发言、失败的规划、补跑的规划、第 2 天出价。
+    for index in (1, 2):
+        assert "【Bravo】开局信" in request_text(alpha.task_runner, index)
+        assert "规划信" not in request_text(alpha.task_runner, index)
+    assert "【Bravo】规划信" in request_text(alpha.task_runner, 3)
+    assert "开局信" not in request_text(alpha.task_runner, 3)
+
+
+@pytest.mark.parametrize("paused", [False, True], ids=["partial-success", "all-success-paused"])
+def test_quit_leaves_mailbox_as_at_round_start(paused, tmp_path):
+    gate = threading.Event()
+    controller = Controller(mode="continuous",
+                            announce=lambda text: gate.set() if text.startswith("[单步]") else None)
+
+    def pause_and_plan(messages):
+        controller.offer_command("p")
+        return bid_reply(1)
+
+    alpha = make_player(fake_task_runner(
+        [speech_reply("A"), pause_and_plan if paused else ModelAPIError("offline", "unavailable")],
+    ), tmp_path, name="Alpha")
+    bravo = make_player(fake_task_runner([{**speech_reply("B"), "letters": [OPENING_LETTER]},
+                                          {**bid_reply(1), "letters": [PLAN_LETTER]}]), tmp_path, name="Bravo")
+    director = AIDirector([alpha, bravo], controller, tmp_path, game=TEST_GAME)
+    with running(controller, director.on_opening) as (thread, outcome):
+        assert gate.wait(timeout=5)  # 规划轮已收集完，等用户确认
+        assert len(bravo.task_runner.calls) == 2
+        controller.offer_command("q")
+        thread.join(timeout=5)
+        assert isinstance(outcome.get("error"), TournamentAborted)
+    assert director.mailbox == {"Alpha": {"Bravo": "开局信"}}
 
 
 class TestController:
@@ -532,7 +587,7 @@ class TestParallelRound:
         controller = Controller(mode="continuous", announce=lambda _: None)
         h = Harness("chat", ["hang"])
         runner = TaskRunner(replace(h.factory, signals=controller.signals))
-        player = make_named_player("Alpha", runner, tmp_path)
+        player = make_player(runner, tmp_path, name="Alpha")
         before = player.checkpoint()
         tasks = [RoundTask("Alpha", lambda: player.decide_bid(make_ai_obs(day=2)), player)]
         with running(controller, lambda: run_parallel_round(tasks, controller, "出价")) as (thread, outcome):
@@ -630,7 +685,7 @@ class TestParallelRound:
             announce=announce,
         )
         task_runner = fake_task_runner([bid_reply(2, 6)])
-        player = make_named_player("Alpha", task_runner, tmp_path)
+        player = make_player(task_runner, tmp_path, name="Alpha")
         player.plan_strategy("请规划", "opening_plan")
         checkpoint = player.checkpoint()
         history = deepcopy(player.messages)
@@ -690,9 +745,9 @@ class TestParallelRound:
 
         controller = Controller(mode="continuous", announce=announce)
         alpha_chat = fake_task_runner([bid_reply(1)])
-        alpha = make_named_player("Alpha", alpha_chat, tmp_path)
+        alpha = make_player(alpha_chat, tmp_path, name="Alpha")
         bravo_chat = fake_task_runner([*failures, bid_reply(2)])
-        bravo = make_named_player("Bravo", bravo_chat, tmp_path)
+        bravo = make_player(bravo_chat, tmp_path, name="Bravo")
         tasks = [
             RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
             RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
@@ -729,7 +784,7 @@ class TestParallelRound:
         controller = Controller(mode="continuous", announce=announce)
         alpha_collected = threading.Event()
         alpha_chat = fake_task_runner([bid_reply(1)])
-        alpha = make_named_player("Alpha", alpha_chat, tmp_path)
+        alpha = make_player(alpha_chat, tmp_path, name="Alpha")
 
         original_as_completed = controller_module.as_completed
 
@@ -752,7 +807,7 @@ class TestParallelRound:
             assert release_bravo.wait(timeout=5)
             return bid_reply(2)
 
-        bravo = make_named_player("Bravo", fake_task_runner([bravo_chat, bravo_chat]), tmp_path)
+        bravo = make_player(fake_task_runner([bravo_chat, bravo_chat]), tmp_path, name="Bravo")
         checkpoints = [p.checkpoint() for p in (alpha, bravo)]
         tasks = [
             RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),

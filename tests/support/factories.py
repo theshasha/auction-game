@@ -200,6 +200,11 @@ def fake_task_runner(script):
     return runner
 
 
+def request_text(runner, index):
+    """fake_task_runner 第 index 次请求里本次新发的用户提示。"""
+    return runner.calls[index][-1].parts[-1].content
+
+
 def text_reply(data):
     """将测试字段写成模型文本；保留非法字段供生产解析器检查。letters 写成私信块，不进 decision。"""
     if isinstance(data, str):
@@ -216,10 +221,11 @@ def text_reply(data):
             f"{json.dumps(decision, ensure_ascii=False)}\n</decision>{letters}")
 
 
-def make_player(task_runner, tmp_path, game=TEST_GAME):
-    return AIPlayer("Alpha", "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
-                    task_runner, game=game, log_path=tmp_path / "ai_Alpha.jsonl",
-                    readable_path=tmp_path / "ai_Alpha.md")
+def make_player(task_runner, tmp_path, game=TEST_GAME, name="Alpha"):
+    """名单是 ALL_NAMES，name 要在其中。"""
+    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
+                    task_runner, game=game, log_path=tmp_path / f"ai_{name}.jsonl",
+                    readable_path=tmp_path / f"ai_{name}.md")
 
 
 def task_entries(path):

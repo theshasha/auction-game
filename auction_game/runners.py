@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
+from auction_game.ai.ai_director import AIDirector
 from auction_game.ai.ai_player import AIPlayer
-from auction_game.ai.ai_speech import AISpeechDirector
 from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, load_configuration, load_game_settings
-from auction_game.controller import (
-    Controller,
-    RoundTask,
-    TournamentAborted,
-    run_parallel_round,
-)
+from auction_game.controller import Controller, TournamentAborted
 from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.game.rules import render_rules, sync_root_rules
@@ -113,21 +108,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
         controller.start_stdin_reader()
         print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=退出比赛")
 
-    def bid_collector(observations):
-        sample_obs = observations[0][1]  # 同一轮内所有玩家的局/天相同
-        label = f"第 {sample_obs.match_index} 局第 {sample_obs.day} 天出价"
-        tasks = [
-            RoundTask(
-                key=player.name,
-                participant=player,
-                fn=lambda player=player, obs=obs: player.decide_bid(obs),
-            )
-            for player, obs in observations
-        ]
-        results = run_parallel_round(tasks, controller, label=label)
-        return [results[player.name] for player, _ in observations]
-
-    director = AISpeechDirector(players, controller, run_dir, game=game)
+    director = AIDirector(players, controller, run_dir, game=game)
     try:
         result = run_tournament(
             players,
@@ -135,7 +116,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
             on_match_end=make_publish(run_dir),
             on_day_end=print_day_result,
             director=director,
-            bid_collector=bid_collector,
+            bid_collector=director.collect_bids,
         )
     except TournamentAborted:
         print("\n已退出比赛。")
