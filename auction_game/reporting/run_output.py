@@ -84,8 +84,10 @@ def write_readme(paths, standings=None):
              model_note,
              "[本场规则](RULES.md)",
              "本场配置见 [配置快照](data/run_config.json)，统计以此为准。"]
-    if (paths.root / "speeches.md").exists():
+    if paths.speeches.exists():
         lines.append("[公开发言](speeches.md)")
+    if paths.letters.exists():
+        lines.append("[私信](letters.md)")
     lines.append("[逐局结果](matches.md)")
     if standings is not None:
         lines.extend(["## 截至当前的结果", prompts.render_standings(standings)])

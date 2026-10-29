@@ -76,19 +76,22 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
     assert players[1].calls[1] == ("opening_plan", "规划 {'甲': '发言甲'}")
 
 
-def test_director_orders_speeches_by_seat_not_completion(monkeypatch, tmp_path):
+def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch, tmp_path):
     from auction_game.controller import Controller
 
     last_done = threading.Event()
+    letters = {"乙": [{"to": "甲", "text": "乙的信"}],
+               "甲": [{"to": "丙", "text": "甲的第一封"}, {"to": "乙", "text": "甲的第二封"}],
+               "丙": [{"to": "甲", "text": "丙的信"}]}
 
     class OrderedPlayer(RecordingPlayer):
         def give_speech(self, text, phase, context):
             if self.name == "乙":
                 assert last_done.wait(timeout=5)
-            speech = super().give_speech(text, phase, context)
+            speech, _ = super().give_speech(text, phase, context)
             if self.name == "丙":
                 last_done.set()
-            return speech
+            return speech, letters[self.name]
 
     players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
     director = ai_director.AIDirector(players, Controller(mode="continuous", announce=lambda _: None),
@@ -96,9 +99,11 @@ def test_director_orders_speeches_by_seat_not_completion(monkeypatch, tmp_path):
     monkeypatch.setattr(ai_director.prompts, "opening_plan_request",
                         lambda others, game, *, received: f"规划 {list(others)}")
     director.on_opening()
-    public_log = director.speeches_log.read_text(encoding="utf-8")
+    public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
     assert players[1].calls[-1] == ("opening_plan", "规划 ['乙', '丙']")
+    assert director.paths.letters.read_text(encoding="utf-8").endswith(
+        "\n## 开局发言\n\n【乙 → 甲】乙的信\n\n【甲 → 丙】甲的第一封\n\n【甲 → 乙】甲的第二封\n\n【丙 → 甲】丙的信\n")
 
 
 def test_only_public_speech_returned_without_hard_truncation(tmp_path):
@@ -218,7 +223,7 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
     director.on_opening()
     request = request_text(a.task_runner, -1)
     assert "public-B" in request and "烟雾弹" not in request
-    public_log = director.speeches_log.read_text(encoding="utf-8")
+    public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert "public-A" in public_log and "烟雾弹" not in public_log
     for player, planned, fallback in ((a, (2, 6), (1, None)), (b, (3, 6), (0, None))):
         assert len(player.task_runner.calls) == 2
@@ -285,6 +290,15 @@ def test_letters_arrive_in_recipients_next_request_only(tmp_path):
             expected = [received[player.name, index]] if (player.name, index) in received else []
             assert [text for text in texts if text in request] == expected
             assert all(f"以下是其他玩家写给你的私信：\n\n【Alpha】{text}" in request for text in expected)
+    # 只有写了信的轮次有一节，节标题是写信的那一轮。
+    assert director.paths.letters.read_text(encoding="utf-8") == (
+        "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
+        "\n## 开局发言\n\n【Alpha → Bravo】开局信\n"
+        "\n## 第 1 局策略规划（含首日出价）\n\n【Alpha → Bravo】规划信\n"
+        "\n## 第 1 局第 2 天出价\n\n【Alpha → Charlie】次日信\n"
+        "\n## 第 1 局第 3 天出价\n\n【Alpha → Bravo】末日信\n"
+        "\n## 第 1 局局末发言\n\n【Alpha → Bravo】局末信\n"
+    )
 
 
 @pytest.mark.parametrize("days, final", [(1, False), (1, True), (2, True)],

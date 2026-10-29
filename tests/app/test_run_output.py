@@ -10,7 +10,8 @@ import pytest
 from auction_game.ai import prompts
 from auction_game.game.rules import render_rules
 from auction_game.game.tournament import run_tournament
-from auction_game.reporting.run_output import initialize_run, make_publish, print_day_result, print_final_result
+from auction_game.reporting.run_output import (initialize_run, make_publish, print_day_result, print_final_result,
+                                               write_readme)
 from tests.support.factories import NAMES, TEST_GAME, ScriptedPlayer, bids_by_day, make_standings, run_scenario
 
 
@@ -84,6 +85,22 @@ def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected)
         render_rules(TEST_GAME, NAMES),
     )
     assert expected in (paths.root / "README.md").read_text(encoding="utf-8")
+
+
+def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):
+    paths = initialize_run(
+        tmp_path / "run",
+        {"run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(),
+         "players": [{"name": name} for name in NAMES]},
+        render_rules(TEST_GAME, NAMES),
+    )
+    readme = paths.root / "README.md"
+    assert "speeches.md" not in readme.read_text(encoding="utf-8")
+    assert "letters.md" not in readme.read_text(encoding="utf-8")
+    paths.speeches.write_text("发言", encoding="utf-8")
+    paths.letters.write_text("私信", encoding="utf-8")
+    write_readme(paths)
+    assert "[公开发言](speeches.md)\n\n[私信](letters.md)\n\n[逐局结果](matches.md)" in readme.read_text(encoding="utf-8")
 
 
 def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):

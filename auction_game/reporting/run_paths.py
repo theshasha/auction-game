@@ -23,6 +23,14 @@ class RunPaths:
     def matches_report(self):
         return self.root / "matches.md"
 
+    @property
+    def speeches(self):
+        return self.root / "speeches.md"
+
+    @property
+    def letters(self):
+        return self.root / "letters.md"
+
     def match(self, index):
         return self.data / "matches" / f"{index:03d}.json"
 

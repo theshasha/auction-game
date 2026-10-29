@@ -193,6 +193,7 @@ def test_rerun_sees_round_start_letters_and_new_letters_wait_for_next_round(tmp_
         assert "规划信" not in request_text(alpha.task_runner, index)
     assert "【Bravo】规划信" in request_text(alpha.task_runner, 3)
     assert "开局信" not in request_text(alpha.task_runner, 3)
+    assert director.paths.letters.read_text(encoding="utf-8").count("【Bravo → Alpha】规划信") == 1
 
 
 @pytest.mark.parametrize("paused", [False, True], ids=["partial-success", "all-success-paused"])
@@ -218,6 +219,8 @@ def test_quit_leaves_mailbox_as_at_round_start(paused, tmp_path):
         thread.join(timeout=5)
         assert isinstance(outcome.get("error"), TournamentAborted)
     assert director.mailbox == {"Alpha": {"Bravo": "开局信"}}
+    letters = director.paths.letters.read_text(encoding="utf-8")
+    assert "开局信" in letters and "规划信" not in letters
 
 
 class TestController:

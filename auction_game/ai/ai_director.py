@@ -10,6 +10,15 @@ from auction_game.ai.ai_player import AIPlayer
 from auction_game.controller import Controller, RoundTask, run_parallel_round
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
+from auction_game.reporting.run_paths import RunPaths
+
+# 节标题是写信的环节，说明送达时机，免得读成收信的时候。
+LETTERS_HEADER = "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
+
+
+def _append(path: Path, text: str) -> None:
+    with path.open("a", encoding="utf-8") as file:
+        file.write(text)
 
 
 class AIDirector:
@@ -18,22 +27,30 @@ class AIDirector:
     def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path, *, game: GameSettings):
         self.players = players
         self.controller = controller
-        self.speeches_log = log_dir / "speeches.md"
+        self.paths = RunPaths(log_dir)
         self.game = game
         # 待送达的信：收件人到 {写信人: 正文}，写信人按配置顺序。
         self.mailbox: dict[str, dict[str, str]] = {}
 
     def _record(self, text: str) -> None:
-        with self.speeches_log.open("a", encoding="utf-8") as file:
-            file.write(text + "\n")
+        _append(self.paths.speeches, text + "\n")
         print(text)
+
+    def _record_letters(self, label: str, written: dict[str, list[dict]]) -> None:
+        """有人写信时追加一节，写信人按配置顺序；第一次有信时创建文件。终端不打印。"""
+        letters = [f"【{sender} → {letter['to']}】{letter['text']}"
+                   for sender, sent in written.items() for letter in sent]
+        if not letters:
+            return
+        text = f"\n## {label}\n\n" + "\n\n".join(letters) + "\n"
+        _append(self.paths.letters, text if self.paths.letters.exists() else LETTERS_HEADER + text)
 
     def _run_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], tuple[Any, list[dict]]],
                    *, deliver: bool = True) -> dict[str, Any]:
         """全员执行 run(玩家, 收到的信)，run 返回 (结果, 写的信)；按配置中的玩家顺序返回结果。
 
-        label 也是失败日志的轮次说明。收到的信在轮开始前取出，补跑时不变。run_parallel_round
-        只在整轮成功并确认后返回，这时才用这一轮写的信替换邮箱，所以退出时邮箱仍是轮开始时的状态。
+        label 也是失败日志和 letters.md 的节标题。收到的信在轮开始前取出，补跑时不变。run_parallel_round
+        只在整轮成功并确认后返回，这时才记下这一轮写的信、再用它们替换邮箱，所以退出时邮箱仍是轮开始时的状态。
         deliver 为假的轮次不发请求，不收信也不写信，邮箱原样留到下一轮。
         """
         inbox = self.mailbox if deliver else {}
@@ -42,10 +59,12 @@ class AIDirector:
                  for player in self.players]
         results = run_parallel_round(tasks, self.controller, label=label)
         if deliver:
+            written = {player.name: results[player.name][1] for player in self.players}
+            self._record_letters(label, written)
             mailbox: dict[str, dict[str, str]] = {}
-            for player in self.players:
-                for letter in results[player.name][1]:
-                    mailbox.setdefault(letter["to"], {})[player.name] = letter["text"]
+            for sender, sent in written.items():
+                for letter in sent:
+                    mailbox.setdefault(letter["to"], {})[sender] = letter["text"]
             self.mailbox = mailbox
         return {player.name: results[player.name][0] for player in self.players}
 
