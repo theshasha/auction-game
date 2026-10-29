@@ -30,7 +30,7 @@ def build_system_prompt(
 ) -> str:
     """保留规则与身份，按独立开关加入人设和全员公开的赛前预测，写作要求放在最后。
 
-    人设只影响公开发言的口吻；分析出价和规划策略时仍需认真思考。
+    人设只影响发言和私信的口吻；分析出价和规划策略时仍需认真思考。
     predictions 是 players.yaml 中的虚构数字，不是模型的真实表现统计。
     """
     others = "、".join(n for n in all_names if n != name)

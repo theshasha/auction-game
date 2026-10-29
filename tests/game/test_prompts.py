@@ -21,7 +21,7 @@ class TestSystemPrompt:
         assert "傲娇大小姐：自称本小姐。" in system
         # 人设只影响说话方式，思考要求保持认真
         assert "不要被人设的说话方式影响你的思考" in system
-        assert "发言中的承诺不强制履行" in system
+        assert "发言和私信中的承诺都不强制履行" in system
 
     def test_predictions_public_to_everyone(self):
         predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
