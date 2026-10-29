@@ -201,17 +201,19 @@ def fake_task_runner(script):
 
 
 def text_reply(data):
-    """将测试字段写成模型文本；保留非法字段供生产解析器检查。"""
+    """将测试字段写成模型文本；保留非法字段供生产解析器检查。letters 写成私信块，不进 decision。"""
     if isinstance(data, str):
         return data
     if "memory" in data:
         return data["memory"]
     strategy = data.get("strategy", "")
+    letters = "".join(f"\n<{letter['to']}>\n{letter['text']}\n</{letter['to']}>"
+                      for letter in data.get("letters", []))
     if "speech" in data:
-        return f"<strategy>\n{strategy}\n</strategy>\n<speech>\n{data['speech']}\n</speech>"
-    decision = {key: value for key, value in data.items() if key != "strategy"}
+        return f"<strategy>\n{strategy}\n</strategy>\n<speech>\n{data['speech']}\n</speech>{letters}"
+    decision = {key: value for key, value in data.items() if key not in ("strategy", "letters")}
     return (f"<strategy>\n{strategy}\n</strategy>\n<decision>\n"
-            f"{json.dumps(decision, ensure_ascii=False)}\n</decision>")
+            f"{json.dumps(decision, ensure_ascii=False)}\n</decision>{letters}")
 
 
 def make_player(task_runner, tmp_path, game=TEST_GAME):

@@ -66,7 +66,7 @@ class AISpeechDirector:
     def on_final(self, standings: list[StandingsEntry], log: MatchLog) -> None:
         label = "最终感言"
         speeches = self._run_round(label, lambda p: p.give_speech(
-            prompts.final_speech_request(standings, log), "final_speech", label))
+            prompts.final_speech_request(standings, log), "final_speech", label, letters=False))
         self._publish_speeches(label, speeches)
         summary_label = "观众总结（仅观众可见）"
         summaries = self._run_round(summary_label, lambda p: p.final_summary(

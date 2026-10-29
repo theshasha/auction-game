@@ -12,7 +12,8 @@ from pydantic_ai.usage import UsageLimits
 from auction_game.ai.agent_execution import AgentExecutor, ExecutionResult
 from auction_game.game.game_rules import GameSettings, validate_submission
 from auction_game.ai.llm_client import ModelFactory
-from auction_game.ai.text_output import OutputFormatError, output_requirement, parse_text_output
+from auction_game.ai.text_output import (BRIEF_BID_FORMAT, LetterNames, OutputFormatError, output_requirement,
+                                         parse_text_output)
 
 Task = Literal["bid", "plan", "speech", "memory", "summary"]
 
@@ -38,15 +39,19 @@ def render_task_result(result: dict | str) -> list[str]:
         super_bid = result["super_bid"]
         lines.append(f"### 提交出价\n\n正常出价 {result['bid']}；超级出价 "
                      f"{super_bid if super_bid is not None else '未使用'}")
+    if result.get("letters"):
+        lines.append("### 私信\n\n" + "\n\n".join(f"写给 {letter['to']}：{letter['text']}"
+                                                  for letter in result["letters"]))
     return lines
 
 
-def make_agent(model, task: Task):
+def make_agent(model, task: Task, letters: LetterNames | None = None):
+    """letters 是这个任务可以写信的名单，不传表示不能写信。"""
     def parse(text: str) -> dict | str:
         try:
-            return parse_text_output(task, text)
+            return parse_text_output(task, text, letters)
         except OutputFormatError as exc:
-            raise ModelRetry(f"{exc}\n{output_requirement(task)}") from exc
+            raise ModelRetry(f"{exc}\n{output_requirement(task, letters)}") from exc
 
     agent = Agent(model, output_type=TextOutput(parse), deps_type=AuctionDeps, retries=1)
 
@@ -68,7 +73,10 @@ class TaskRunner:
         self.executor = AgentExecutor(factory)
 
     def __call__(self, task: Task, prompt: str, history: list[ModelMessage], *,
-                 game: GameSettings, coins: int = 0) -> ExecutionResult:
+                 game: GameSettings, coins: int = 0, letters: LetterNames | None = None,
+                 brief_format: bool = False) -> ExecutionResult:
+        """brief_format 只用于第 2 天起的出价：提示后只接一句格式提示，纠错时仍给完整格式。"""
+        requirement = BRIEF_BID_FORMAT if brief_format else output_requirement(task, letters)
         # retries=1 是纠错次数；request_limit 另外限定整个任务最多两次请求。
-        return self.executor(make_agent(None, task), f"{prompt}\n\n{output_requirement(task)}", history,
+        return self.executor(make_agent(None, task, letters), f"{prompt}\n\n{requirement}", history,
                              deps=AuctionDeps(game, coins), usage_limits=UsageLimits(request_limit=2))

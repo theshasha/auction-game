@@ -6,9 +6,9 @@ import pytest
 
 from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
 from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.ai.text_output import output_requirement
+from auction_game.ai.text_output import LetterNames, output_requirement
 from auction_game.reporting.agent_log import AgentLog, render_markdown_entry
-from tests.support.factories import bid_reply, fake_task_runner, make_ai_obs, make_player, task_entries
+from tests.support.factories import ALL_NAMES, bid_reply, fake_task_runner, make_ai_obs, make_player, task_entries
 from tests.support.wire import Harness, reply
 
 
@@ -20,10 +20,11 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
     assert player.give_speech(prompt, "opening_speech") == speech
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "## 开局发言" in markdown
-    assert "### 输入原文\n\n" + prompt + "\n\n" + output_requirement("speech") in markdown
+    letters = LetterNames("Alpha", tuple(ALL_NAMES[1:]))
+    assert "### 输入原文\n\n" + prompt + "\n\n" + output_requirement("speech", letters) in markdown
     assert markdown.count(strategy) == markdown.count(speech) == 1
     entry = task_entries(player.log.path)[-1]
-    assert entry["result"] == {"strategy": strategy, "speech": speech}
+    assert entry["result"] == {"strategy": strategy, "speech": speech, "letters": []}
     response = [part for msg in entry["messages"] if msg["kind"] == "response" for part in msg["parts"]]
     assert len(response) == 1 and response[0]["part_kind"] == "text"
     assert response[0]["content"] == f"<strategy>\n{strategy}\n</strategy>\n<speech>\n{speech}\n</speech>"
@@ -172,3 +173,14 @@ def test_input_markdown_preserves_indentation():
     entry = {"phase": "bid", "status": "success", "messages": [
         {"parts": [{"part_kind": "user-prompt", "content": content}]}]}
     assert "### 输入原文\n\n" + content in render_markdown_entry(entry, "第1局第1天每日出价")
+
+
+def test_private_log_lists_letters_after_result(tmp_path):
+    letters = [{"to": "Bravo", "text": "第一行\n第二行"}, {"to": "Charlie", "text": "另一封"}]
+    player = make_player(fake_task_runner([{**bid_reply(1), "letters": letters}, bid_reply(2)]), tmp_path)
+    player.decide_bid(make_ai_obs(day=2))
+    player.decide_bid(make_ai_obs(day=3))
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
+    assert ("### 提交出价\n\n正常出价 1；超级出价 未使用\n\n"
+            "### 私信\n\n写给 Bravo：第一行\n第二行\n\n写给 Charlie：另一封\n\n---") in markdown
+    assert markdown.count("### 私信") == 1

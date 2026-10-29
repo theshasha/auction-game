@@ -18,7 +18,7 @@ def test_real_sdk_stream_contract(protocol):
         data = dict(GOOD, super_bid=0)
         async with Harness(protocol, [reply(data)]) as h:
             result = await run(make_agent(h.model), coins=4)
-            assert result.output == data
+            assert result.output == {**data, "letters": []}
             assert len(h.requests) == 1
             request, body = h.requests[0]
             assert request.url.path == {"chat": "/v1/chat/completions", "responses": "/v1/responses",

@@ -14,6 +14,7 @@ from auction_game.ai import prompts
 from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
 from auction_game.reporting.agent_log import AgentLog
 from auction_game.ai.agent_tasks import TaskRunner
+from auction_game.ai.text_output import LetterNames
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import Observation
 from auction_game.game.players import Player
@@ -61,6 +62,7 @@ class AIPlayer(Player):
         self.review_messages = list(self.messages)
         self.memory = ""
         self.task_runner = task_runner
+        self.letter_names = LetterNames(name, tuple(other for other in all_names if other != name))
         self.log = AgentLog(name, log_path, readable_path=readable_path)
         self.log.system_prompt(system_prompt)
         self._pending_day1_bid: tuple[int, int | None] | None = None
@@ -74,13 +76,15 @@ class AIPlayer(Player):
         self.messages = list(messages)
         self.review_messages = list(review)
 
-    def _task(self, task, prompt, phase, context="", *, coins=0, commit=True, reset=False):
+    def _task(self, task, prompt, phase, context="", *, coins=0, commit=True, reset=False,
+              letters=None, brief_format=False):
         entry = {"phase": phase, "task": task, "context": context}
         if not commit:
             entry["history_note"] = "这次请求带的是从开局到现在的全部对话，不受局末记忆重置影响；结果不写回对话历史。"
         history = self.messages if commit else self.review_messages
         try:
-            result = self.task_runner(task, prompt, history, game=self.game, coins=coins)
+            result = self.task_runner(task, prompt, history, game=self.game, coins=coins,
+                                      letters=letters, brief_format=brief_format)
         except CallFailedError as exc:
             self.log.failure(entry, exc)
             raise
@@ -109,17 +113,21 @@ class AIPlayer(Player):
             submission = self._pending_day1_bid
             self._pending_day1_bid = None
             return submission
+        # 本局规划请求里有完整格式，整理记忆前一直留在对话里，第 2 天起只附一句提示。
         output = self._task("bid", prompts.bid_request(obs), "bid",
-                            f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins)
+                            f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
+                            letters=self.letter_names, brief_format=obs.day >= 2)
         return output["bid"], output["super_bid"]
 
-    def give_speech(self, user_text: str, phase: str, context: str = "") -> str:
-        """只返回公开发言，私有策略只留在自己的对话历史和日志里。"""
-        return self._task("speech", user_text, phase, context)["speech"]
+    def give_speech(self, user_text: str, phase: str, context: str = "", *, letters: bool = True) -> str:
+        """只返回公开发言，私有策略只留在自己的对话历史和日志里。最终感言不能写信。"""
+        return self._task("speech", user_text, phase, context,
+                          letters=self.letter_names if letters else None)["speech"]
 
     def plan_strategy(self, user_text: str, phase: str, context: str = "") -> None:
         """成功替换首日缓存；失败保留调用前历史与缓存。"""
-        output = self._task("plan", user_text, phase, context, coins=self.game.initial_coins)
+        output = self._task("plan", user_text, phase, context, coins=self.game.initial_coins,
+                            letters=self.letter_names)
         self._pending_day1_bid = output["bid"], output["super_bid"]
 
     def save_memory(self, user_text: str, phase: str, context: str = "") -> None:

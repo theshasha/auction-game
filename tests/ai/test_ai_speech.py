@@ -102,7 +102,7 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     assert player.give_speech("请发言", "opening_speech") == speech
     assert len(runner.calls) == 1
     entry = task_entries(player.log.path)[-1]
-    assert entry["result"] == speech_reply(speech)
+    assert entry["result"] == {**speech_reply(speech), "letters": []}
     assert "烟雾弹" in ModelMessagesTypeAdapter.dump_json(player.messages).decode()
     md = player.log.readable_path.read_text(encoding="utf-8")
     assert speech in md and "私有策略" in md
@@ -227,3 +227,16 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
         assert len(player.task_runner.calls) == 2
         assert player.decide_bid(obs) == fallback
         assert len(player.task_runner.calls) == 3
+
+
+def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
+    from auction_game.controller import Controller
+    from auction_game.ai.text_output import output_requirement
+
+    player = make_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path)
+    director = ai_speech.AISpeechDirector([player], Controller(mode="continuous", announce=lambda _: None),
+                                          tmp_path, game=TEST_GAME)
+    monkeypatch.setattr(ai_speech.prompts, "final_speech_request", lambda standings, log: "请发表最终感言")
+    monkeypatch.setattr(ai_speech.prompts, "final_summary_request", lambda others: "请总结")
+    director.on_final([], None)
+    assert player.task_runner.calls[0][-1].parts[-1].content == "请发表最终感言\n\n" + output_requirement("speech")

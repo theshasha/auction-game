@@ -8,8 +8,22 @@ import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPromptPart, SystemPromptPart
 
 from auction_game.ai.agent_execution import OutputFailedError
-from tests.support.factories import TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player, text_reply, task_entries
+from auction_game.ai.text_output import BRIEF_BID_FORMAT, LetterNames, output_requirement
+from tests.support.factories import (ALL_NAMES, TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player,
+                                     speech_reply, text_reply, task_entries)
 from auction_game.ai import prompts
+
+LETTERS = LetterNames("Alpha", tuple(ALL_NAMES[1:]))
+
+
+def request_text(runner, index):
+    """第 index 次请求里本次新发的用户提示。"""
+    return runner.calls[index][-1].parts[-1].content
+
+
+def retry_text(runner, index):
+    return next(part.content for message in runner.calls[index] for part in message.parts
+                if isinstance(part, RetryPromptPart))
 
 
 @pytest.mark.parametrize("enable_predictions", [False, True])
@@ -95,7 +109,7 @@ def test_business_history_and_original_audit_survive_rollback(tmp_path):
     parts = [p for m in player.messages for p in m.parts]
     assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
     entries = task_entries(player.log.path)
-    assert entries[0]["result"] == bid_reply(1)
+    assert entries[0]["result"] == {**bid_reply(1), "letters": []}
     audit = ModelMessagesTypeAdapter.validate_python(entries[0]["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [text_reply(bid_reply(1))]
     assert "我的私有分析" in ModelMessagesTypeAdapter.dump_json(middle).decode()
@@ -143,3 +157,37 @@ def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, m
         entries = task_entries(player.log.path)
         assert len(entries) == 2
         assert entries[-1]["status"] == ("success" if valid_output else "failed")
+
+
+def test_plan_has_full_format_and_bids_from_day_two_get_one_line(tmp_path):
+    runner = fake_task_runner([bid_reply(1), bid_reply(1), bid_reply(1)])
+    player = make_player(runner, tmp_path)
+    player.decide_bid(make_ai_obs(day=1))  # 没有规划缓存时第 1 天也发请求
+    player.plan_strategy("请规划", "opening_plan")
+    player.decide_bid(make_ai_obs(day=2))
+    assert request_text(runner, 0).endswith("\n\n" + output_requirement("bid", LETTERS))
+    assert request_text(runner, 1) == "请规划\n\n" + output_requirement("plan", LETTERS)
+    assert request_text(runner, 2).endswith("\n\n" + BRIEF_BID_FORMAT)
+
+
+def test_format_error_after_one_line_prompt_gets_full_format(tmp_path):
+    runner = fake_task_runner(["随手写的出价", bid_reply(1)])
+    player = make_player(runner, tmp_path)
+    assert player.decide_bid(make_ai_obs(day=2)) == (1, None)
+    assert retry_text(runner, 1) == ("必须先依次提交 strategy 与 decision 两块，标签各占一行且各出现一次，私信块放在最后。\n"
+                                     + output_requirement("bid", LETTERS))
+
+
+def test_speech_letters_are_parsed_and_final_speech_cannot_write_letters(tmp_path):
+    letter = {"to": "Bravo", "text": "只给你看"}
+    runner = fake_task_runner([{**speech_reply("开局"), "letters": [letter]},
+                               {**speech_reply("感言"), "letters": [letter]}, speech_reply("感言")])
+    player = make_player(runner, tmp_path)
+    assert player.give_speech("请发言", "opening_speech") == "开局"
+    assert player.give_speech("请发表感言", "final_speech", letters=False) == "感言"
+    assert request_text(runner, 0) == "请发言\n\n" + output_requirement("speech", LETTERS)
+    assert request_text(runner, 1) == "请发表感言\n\n" + output_requirement("speech")
+    assert retry_text(runner, 2).startswith("协议块外只允许空白，请直接提交两块正文。\n")
+    opening, final = task_entries(player.log.path)
+    assert opening["result"]["letters"] == [letter]
+    assert final["result"]["letters"] == []

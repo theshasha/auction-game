@@ -66,7 +66,7 @@ def demo_submission(game, index, player_count, match_index, day, coins):
 class OfflineTaskRunner(TaskRunner):
     """从出价和规划提示里读出局和天，连同余额交给假模型。"""
 
-    def __call__(self, task, prompt, history, *, game, coins=0):
+    def __call__(self, task, prompt, history, *, game, coins=0, letters=None, brief_format=False):
         match_index = day = None
         if task in ("bid", "plan"):
             position = re.search(r"第 (\d+) 局第 (\d+) 天", prompt)
@@ -75,7 +75,8 @@ class OfflineTaskRunner(TaskRunner):
             match_index, day = int(position[1]), int(position[2])
         token = _current_task.set(OfflineTask(task, game, coins, match_index, day))
         try:
-            return super().__call__(task, prompt, history, game=game, coins=coins)
+            return super().__call__(task, prompt, history, game=game, coins=coins,
+                                    letters=letters, brief_format=brief_format)
         finally:
             _current_task.reset(token)
 
