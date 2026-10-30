@@ -10,9 +10,9 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.ai import ai_director
 from auction_game.ai.agent_execution import OutputFailedError
-from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log, make_obs,
-                                     make_player, make_standings, request_text, speech_reply, text_reply,
-                                     task_entries)
+from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
+                                     make_log, make_obs, make_player, make_standings, request_text, speech_reply,
+                                     text_reply, task_entries)
 from auction_game.game.game_rules import GameSettings
 
 
@@ -41,16 +41,13 @@ class RecordingPlayer:
 
 
 def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp_path):
-    from auction_game.controller import Controller
-
     game = GameSettings(
         initial_coins=13, daily_salary=4, daily_pool=(2, 1, 3), max_bid=9,
         super_cost=1, super_bounty=5, super_hit_score=2,
         regular_matches=2, max_playoffs=0,
     )
     players = [RecordingPlayer(name) for name in ("甲", "乙")]
-    director = ai_director.AIDirector(players, Controller(mode="continuous", announce=lambda _: None),
-                                      tmp_path, game=game)
+    director = ai_director.AIDirector(players, continuous_controller(), tmp_path, game=game)
 
     def opening_plan_request(others, actual_game, *, received):
         assert actual_game is game
@@ -77,8 +74,6 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
 
 
 def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch, tmp_path):
-    from auction_game.controller import Controller
-
     last_done = threading.Event()
     letters = {"乙": [{"to": "甲", "text": "乙的信"}],
                "甲": [{"to": "丙", "text": "甲的第一封"}, {"to": "乙", "text": "甲的第二封"}],
@@ -94,14 +89,13 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
             return speech, letters[self.name]
 
     players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
-    director = ai_director.AIDirector(players, Controller(mode="continuous", announce=lambda _: None),
-                                      tmp_path, game=TEST_GAME)
+    director = ai_director.AIDirector(players, continuous_controller(), tmp_path, game=TEST_GAME)
     monkeypatch.setattr(ai_director.prompts, "opening_plan_request",
-                        lambda others, game, *, received: f"规划 {list(others)}")
+                        lambda others, game, *, received: f"规划 {list(others)} 收信 {list(received)}")
     director.on_opening()
     public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
-    assert players[1].calls[-1] == ("opening_plan", "规划 ['乙', '丙']")
+    assert players[1].calls[-1] == ("opening_plan", "规划 ['乙', '丙'] 收信 ['乙', '丙']")
     assert director.paths.letters.read_text(encoding="utf-8").endswith(
         "\n## 开局发言\n\n【乙 → 甲】乙的信\n\n【甲 → 丙】甲的第一封\n\n【甲 → 乙】甲的第二封\n\n【丙 → 甲】丙的信\n")
 
@@ -212,14 +206,12 @@ def test_rollback_new_plan_removes_new_cache(tmp_path):
 
 
 def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(tmp_path):
-    from auction_game.controller import Controller
     game = replace(TEST_GAME, initial_coins=13, daily_pool=(2, 1, 3), max_bid=9,
                    super_cost=1, super_hit_score=2, regular_matches=1)
     a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6), bid_reply(1)]), tmp_path / "a", game=game)
     b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), tmp_path / "b",
                     game=game, name="Bravo")
-    director = ai_director.AIDirector([a, b], Controller(mode="continuous", announce=lambda _: None),
-                                      tmp_path, game=a.game)
+    director = ai_director.AIDirector([a, b], continuous_controller(), tmp_path, game=a.game)
     director.on_opening()
     request = request_text(a.task_runner, -1)
     assert "public-B" in request and "烟雾弹" not in request
@@ -241,12 +233,10 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
 
 
 def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
-    from auction_game.controller import Controller
     from auction_game.ai.text_output import output_requirement
 
     player = make_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path)
-    director = ai_director.AIDirector([player], Controller(mode="continuous", announce=lambda _: None),
-                                      tmp_path, game=TEST_GAME)
+    director = ai_director.AIDirector([player], continuous_controller(), tmp_path, game=TEST_GAME)
     monkeypatch.setattr(ai_director.prompts, "final_speech_request",
                         lambda standings, log, *, received: "请发表最终感言")
     monkeypatch.setattr(ai_director.prompts, "final_summary_request", lambda others: "请总结")
@@ -258,9 +248,7 @@ def to_bravo(reply, text, to="Bravo"):
     return {**reply, "letters": [{"to": to, "text": text}]}
 
 
-def test_letters_arrive_in_recipients_next_request_only(tmp_path):
-    from auction_game.controller import Controller
-
+def test_letters_arrive_in_recipients_next_request_only(capsys, tmp_path):
     game = replace(TEST_GAME, daily_pool=(4, 4, 4), regular_matches=2)
     texts = ["开局信", "规划信", "次日信", "末日信", "局末信"]
     # 第 2 天改写给 Charlie：Bravo 第 3 天什么也收不到，之前的信不会再送一次。
@@ -274,8 +262,7 @@ def test_letters_arrive_in_recipients_next_request_only(tmp_path):
         bid_reply(1),
     ]), tmp_path, game=game, name=name) for name in ("Bravo", "Charlie"))
     players = [alpha, bravo, charlie]
-    director = ai_director.AIDirector(players, Controller(mode="continuous", announce=lambda _: None),
-                                      tmp_path, game=game)
+    director = ai_director.AIDirector(players, continuous_controller(), tmp_path, game=game)
     director.on_opening()
     for day in (1, 2, 3):
         director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in players])
@@ -302,13 +289,14 @@ def test_letters_arrive_in_recipients_next_request_only(tmp_path):
         "\n## 第 1 局第 3 天出价\n\n【Alpha → Bravo】末日信\n"
         "\n## 第 1 局局末发言\n\n【Alpha → Bravo】局末信\n"
     )
+    # 终端只打印公开发言。
+    terminal = capsys.readouterr().out
+    assert "【Alpha】A" in terminal and not [text for text in texts if text in terminal]
 
 
 @pytest.mark.parametrize("days, final", [(1, False), (1, True), (2, True)],
                          ids=["single-day-match-end", "single-day-final", "last-day-final"])
 def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path):
-    from auction_game.controller import Controller
-
     game = replace(TEST_GAME, daily_pool=(4,) * days, regular_matches=2)
     # 规划和第 2 天起的出价各一次请求，最后一次写信；一天一局时就是规划。
     bids = [bid_reply(1)] * (days - 1) + [to_bravo(bid_reply(1), "最后一封")]
@@ -317,8 +305,7 @@ def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path
                         tmp_path, game=game, name="Alpha")
     bravo = make_player(fake_task_runner([speech_reply("B"), *[bid_reply(1)] * days, speech_reply("B"), *ending]),
                         tmp_path, game=game, name="Bravo")
-    director = ai_director.AIDirector([alpha, bravo], Controller(mode="continuous", announce=lambda _: None),
-                                      tmp_path, game=game)
+    director = ai_director.AIDirector([alpha, bravo], continuous_controller(), tmp_path, game=game)
     director.on_opening()
     for day in range(1, days + 1):
         director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in (alpha, bravo)])

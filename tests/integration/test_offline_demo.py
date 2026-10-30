@@ -126,7 +126,10 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     assert [section.split("\n", 1)[0] for section in sections] == letter_titles
     ring = [(sender, names[(number + 1) % len(names)]) for number, sender in enumerate(names)]
     assert all(re.findall(r"【(\S+) → (\S+)】", section) == ring for section in sections)
-    assert "[私信](letters.md)" in (run_dir / "README.md").read_text(encoding="utf-8")
+    readme = (run_dir / "README.md").read_text(encoding="utf-8")
+    assert "[私信](letters.md)" in readme
+    # README 的链接都指向场次里实际写出的文件。
+    assert all((run_dir / link).exists() for link in re.findall(r"\]\(([^)]+)\)", readme))
     # 甲写给乙：开局发言的信在乙规划时收到，最后一天出价的信在乙发表最终感言时收到。
     first_letter = entries[0]["result"]["letters"][0]["text"]
     last_bid = [entry for entry in entries if entry["task"] == "bid"][-1]

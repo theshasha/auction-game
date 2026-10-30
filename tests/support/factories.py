@@ -10,6 +10,7 @@ from pydantic_ai.models.function import FunctionModel
 from auction_game.ai.agent_tasks import TaskRunner
 
 from auction_game.ai.ai_player import AIPlayer
+from auction_game.controller import Controller
 from auction_game.game.engine import compute_standings, run_match, settle_day
 from auction_game.game.game_rules import GameSettings
 from auction_game.game.models import MatchLog, Observation
@@ -226,6 +227,19 @@ def make_player(task_runner, tmp_path, game=TEST_GAME, name="Alpha"):
     return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
                     task_runner, game=game, log_path=tmp_path / f"ai_{name}.jsonl",
                     readable_path=tmp_path / f"ai_{name}.md")
+
+
+def continuous_controller():
+    """连续模式的控制器。控制器要等用户按键时直接让测试失败，报错里带上失败公告；
+    否则任务失败后一直等确认，测试卡住。"""
+    messages = []
+
+    def announce(text):
+        messages.append(text)
+        if text.startswith("[单步]"):
+            raise AssertionError("\n".join(messages))
+
+    return Controller(mode="continuous", announce=announce)
 
 
 def task_entries(path):

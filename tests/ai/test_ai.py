@@ -163,6 +163,8 @@ def test_plan_has_full_format_and_bids_from_day_two_get_one_line(tmp_path):
     assert request_text(runner, 0).endswith("\n\n" + output_requirement("bid", LETTERS))
     assert request_text(runner, 1) == "请规划\n\n" + output_requirement("plan", LETTERS)
     assert request_text(runner, 2).endswith("\n\n" + BRIEF_BID_FORMAT)
+    # 只附一句时也写明送达时机。
+    assert "收件人下一次行动时才收到" in request_text(runner, 2)
 
 
 def test_format_error_after_one_line_prompt_gets_full_format(tmp_path):

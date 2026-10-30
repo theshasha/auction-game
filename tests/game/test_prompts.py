@@ -99,10 +99,11 @@ def test_memory_request_lists_other_speeches_and_key_requirements(match_index):
         assert (old_memory in text) is (match_index > 1)
 
 
-@pytest.mark.parametrize("kind", ["opening-plan", "bid", "match-end", "memory", "final"])
+@pytest.mark.parametrize("kind", ["opening-plan", "bid", "match-end", "playoff-match-end", "memory", "final"])
 def test_received_letters_sit_between_facts_and_task(kind):
     """有信时只多出收信段，标题写明信是在哪一环节写的；没有信时请求不变。"""
     log = make_log()
+    playoff_log = make_log(match_index=TEST_GAME.regular_matches)
     standings = make_standings({"甲": [1], "乙": [0]})
     obs = make_obs(day=2, today_history=[make_day(1, [5, 4, 3, 2, 1, 0])])
     build, fact, written, task = {
@@ -113,6 +114,9 @@ def test_received_letters_sit_between_facts_and_task(kind):
                 prompts.BID_HINT),
         "match-end": (lambda received: prompts.match_end_speech_request(log, standings, received=received),
                       prompts.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
+        "playoff-match-end": (lambda received: prompts.match_end_speech_request(playoff_log, standings,
+                                                                                received=received),
+                              "第一名总分并列，全员进入加赛。", "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
         "memory": (lambda received: prompts.memory_request({"乙": "局末发言"}, 2, received=received),
                    "【乙】局末发言", "在局末发言时", "请结合旧记忆"),
         "final": (lambda received: prompts.final_speech_request(standings, log, received=received),

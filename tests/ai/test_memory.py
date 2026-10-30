@@ -12,9 +12,9 @@ from auction_game.ai import prompts
 from auction_game.ai.agent_execution import OutputFailedError
 from auction_game.ai.agent_tasks import TaskRunner
 from auction_game.ai.ai_director import AIDirector
-from auction_game.controller import Controller
-from tests.support.factories import (TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_log, make_logs,
-                                     make_player, make_standings, request_text, speech_reply, task_entries)
+from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
+                                     make_log, make_logs, make_player, make_standings, request_text, speech_reply,
+                                     task_entries)
 from tests.support.wire import Harness, PROTOCOLS, reply
 
 
@@ -194,7 +194,7 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             return {"memory": "private-" + name}
         players.append(make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6),
                                                      bid_reply(0)]), tmp_path / name, game=game, name=name))
-    director = AIDirector(players, Controller(mode="continuous", announce=lambda _: None), tmp_path, game=players[0].game)
+    director = AIDirector(players, continuous_controller(), tmp_path, game=players[0].game)
     # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。下一局是加赛时两人总分并列。
     next_is_playoff = match_index >= game.regular_matches
     standings = make_standings({"Alpha": [2] * match_index, "Bravo": [1] * match_index},
