@@ -150,16 +150,16 @@ class TestFixedSixDays:
         captured = {}
         run_scenario({}, capture=captured)
         seen = [
-            (obs.day, obs.today_pool, obs.my_coins, obs.my_match_auction_score, obs.my_total_auction_score)
+            (obs.day, obs.today_pool, obs.my_coins, obs.my_match_score)
             for obs in captured["甲"]
         ]
         assert seen == [
-            (1, 4, 7, 0, 0),
-            (2, 4, 10, 0, 0),
-            (3, 4, 13, 0, 0),
-            (4, 4, 16, 0, 0),
-            (5, 4, 19, 0, 0),
-            (6, 4, 22, 0, 0),
+            (1, 4, 7, 0),
+            (2, 4, 10, 0),
+            (3, 4, 13, 0),
+            (4, 4, 16, 0),
+            (5, 4, 19, 0),
+            (6, 4, 22, 0),
         ]
 
 
@@ -184,7 +184,6 @@ class TestConfiguredMatch:
         assert log.days[0].winner == "丙"
         assert log.auction_scores == {"甲": 0, "乙": 0, "丙": pool, "丁": 0, "戊": 0, "己": 0}
         assert log.scores == {"甲": 0, "乙": 0, "丙": score, "丁": 0, "戊": 0, "己": 0}
-        assert captured["丙"][1].my_match_auction_score == pool
         assert captured["丙"][1].my_match_score == score
 
     def test_production_void_discards_pool_each_day(self):
@@ -218,10 +217,7 @@ class TestConfiguredMatch:
             ScriptedPlayer(name, strategy, lambda obs: supers.get(obs.my_name, {}).get(obs.day))
             for name in names
         ]
-        log = run_match(
-            players, 1, False, {name: [] for name in names}, game,
-            scores_history={name: [] for name in names},
-        )
+        log = run_match(players, 1, False, [], game)
 
         assert len(log.days) == 3
         assert [day.pool for day in log.days] == [2, 3, 4]

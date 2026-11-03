@@ -250,7 +250,7 @@ class TestEngineScorePrompts:
         for name in NAMES:
             obs = captured[name][1]
             text = prompts.bid_request(obs)
-            assert obs.my_match_score == obs.my_total_score == log.scores[name]
+            assert obs.my_match_score == log.scores[name]
             assert hits in text
             assert f"本局得分：{log.scores[name]} 分。" in text
             total_line = next(line for line in text.splitlines() if line.startswith("全员累计总分："))

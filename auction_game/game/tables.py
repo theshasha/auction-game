@@ -16,7 +16,7 @@ def super_cells(result: PlayerDayResult) -> tuple[str, str]:
 
 
 def render_match_log(log: MatchLog) -> str:
-    """生成共用出价表：每日得分读取每天的结算，本局总分读取局末结果。"""
+    """生成共用出价表：每行是一天的结算，表后是本局各人的得分和拍卖分。"""
     summary = [
         "本局得分：" + "、".join(f"{name} {score} 分" for name, score in log.scores.items()),
         "本局拍卖分：" + "、".join(f"{name} {score} 分" for name, score in log.auction_scores.items()),

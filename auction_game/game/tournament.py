@@ -23,8 +23,11 @@ class SpeechDirector(Protocol):
 class TournamentResult:
     match_logs: list[MatchLog] = field(default_factory=list)
     final_standings: list[StandingsEntry] = field(default_factory=list)
-    playoff_count: int = 0
     playoff_cap_hit: bool = False  # 达到加赛上限仍并列，保留并列冠军
+
+    @property
+    def playoff_count(self) -> int:
+        return sum(log.is_playoff for log in self.match_logs)
 
 
 def first_place_tied(standings: list[StandingsEntry]) -> bool:
@@ -48,54 +51,44 @@ def run_tournament(
     bid_collector 和 on_day_end 转交给 engine.run_match。
     """
     result = TournamentResult()
-    auction_scores_history = {player.name: [] for player in players}
-    scores_history = {player.name: [] for player in players}
-    match_index = 0
+    names = [player.name for player in players]
+    logs = result.match_logs
 
     if director:
         director.on_opening()
 
     def play_one_match(is_playoff: bool) -> None:
-        nonlocal match_index
-        match_index += 1
         log = run_match(
             players,
-            match_index=match_index,
+            match_index=len(logs) + 1,
             is_playoff=is_playoff,
-            auction_scores_history=auction_scores_history,
-            scores_history=scores_history,
+            finished_logs=list(logs),
             game=game,
             bid_collector=bid_collector,
             on_day_end=on_day_end,
         )
-        for name, auction_score in log.auction_scores.items():
-            auction_scores_history[name].append(auction_score)
-        for name, score in log.scores.items():
-            scores_history[name].append(score)
-        result.match_logs.append(log)
-        standings = compute_standings(auction_scores_history, scores_history=scores_history)
+        logs.append(log)
+        standings = compute_standings(names, logs)
         if on_match_end:
             on_match_end(log, standings)
-        # 正赛打完后，第一名仍并列且没到加赛上限才有下一局；这时加赛局的 playoff_count 还没自增。
-        has_next_match = match_index < game.regular_matches or (
-            first_place_tied(standings)
-            and result.playoff_count + (1 if is_playoff else 0) < game.max_playoffs
+        # 正赛打完后，第一名仍并列且没到加赛上限才有下一局。
+        has_next_match = len(logs) < game.regular_matches or (
+            first_place_tied(standings) and result.playoff_count < game.max_playoffs
         )
         # 最后一局不做局末发言，它的出价日志随终局感言（on_final）发出。
         if director and has_next_match:
-            director.on_match_end(list(result.match_logs), standings)
+            director.on_match_end(list(logs), standings)
 
     for _ in range(game.regular_matches):
         play_one_match(is_playoff=False)
 
-    while first_place_tied(compute_standings(auction_scores_history, scores_history=scores_history)):
+    while first_place_tied(compute_standings(names, logs)):
         if result.playoff_count >= game.max_playoffs:
             result.playoff_cap_hit = True
             break
         play_one_match(is_playoff=True)
-        result.playoff_count += 1
 
-    result.final_standings = compute_standings(auction_scores_history, scores_history=scores_history)
+    result.final_standings = compute_standings(names, logs)
     if director:
-        director.on_final(result.final_standings, result.match_logs[-1])
+        director.on_final(result.final_standings, logs[-1])
     return result

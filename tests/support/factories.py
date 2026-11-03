@@ -13,7 +13,7 @@ from auction_game.agent.player import AIPlayer
 from auction_game.flow.controller import Controller
 from auction_game.game.engine import compute_standings, run_match, settle_day
 from auction_game.game.settings import GameSettings
-from auction_game.game.models import MatchLog, Observation
+from auction_game.game.models import DayResult, MatchLog, Observation, PlayerDayResult
 from auction_game.game.players import Player
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
@@ -38,18 +38,13 @@ def make_day(day, bids, pool=1, super_bids=None, game=TEST_GAME):
     return settle_day(day, pool, [(name, bid, super_bids.get(name)) for name, bid in zip(NAMES, bids)], game)
 
 
-def make_log(match_index=1, is_playoff=False, days=None, auction_scores=None, game=TEST_GAME, *,
-             scores=None, remaining_coins=None):
-    """局日志；分数和余额由调用方填写，默认全员 0。"""
-    players = auction_scores if auction_scores is not None else NAMES
+def make_log(match_index=1, is_playoff=False, days=None, game=TEST_GAME):
+    """局日志；分数和余额由天的结算算出，默认一天、甲以 5 获胜。"""
     return MatchLog(
         match_index=match_index,
         is_playoff=is_playoff,
         game=game,
         days=days if days is not None else [make_day(1, [5, 4, 3, 2, 1, 0], game=game)],
-        auction_scores=auction_scores if auction_scores is not None else {name: 0 for name in NAMES},
-        scores=scores if scores is not None else {name: 0 for name in players},
-        remaining_coins=remaining_coins if remaining_coins is not None else {name: 0 for name in players},
     )
 
 
@@ -58,11 +53,34 @@ def make_logs(count, game=TEST_GAME):
     return [make_log(match_index=index, game=game) for index in range(1, count + 1)]
 
 
+def scored_log(match_index, auction_scores, scores=None, game=TEST_GAME):
+    """分数给定的局日志，只用于排名：有拍卖分的玩家各赢一天，奖池等于他的拍卖分；
+    最后一天无人获胜，补上总分减拍卖分的命中分。scores 默认等于拍卖分。"""
+    scores = scores if scores is not None else auction_scores
+    names = list(auction_scores)
+
+    def day(number, pool, score_of, winner=None):
+        return DayResult(day=number, pool=pool, players=tuple(PlayerDayResult(
+            player=name, bid=0, super_bid=None, outcome="won" if name == winner else "refunded",
+            sniped=False, super_hit=False, coins_delta=0, score=score_of(name)) for name in names))
+
+    days = [day(number, auction_scores[winner], lambda name, winner=winner: auction_scores[name] * (name == winner),
+                winner)
+            for number, winner in enumerate((name for name in names if auction_scores[name]), 1)]
+    days.append(day(len(days) + 1, 1, lambda name: scores[name] - auction_scores[name]))
+    return MatchLog(match_index=match_index, is_playoff=False, game=game, days=days)
+
+
 def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None):
-    """通过生产路径排名；不给 scores_history 时总分只含拍卖分。"""
+    """通过生产路径排名；每名玩家的历史一样长，第 i 项是第 i 局。不给 scores_history 时总分只含拍卖分。"""
     if scores_history is None:
-        scores_history = {name: list(scores) for name, scores in auction_scores_history.items()}
-    return compute_standings(auction_scores_history, scores_history=scores_history)
+        scores_history = auction_scores_history
+    names = list(auction_scores_history)
+    match_count = len(next(iter(auction_scores_history.values())))
+    logs = [scored_log(index + 1, {name: auction_scores_history[name][index] for name in names},
+                       {name: scores_history[name][index] for name in names})
+            for index in range(match_count)]
+    return compute_standings(names, logs)
 
 
 def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, pool=1, coins=7,
@@ -77,10 +95,7 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
     return Observation(
         my_name=my_name,
         my_coins=coins,
-        my_match_auction_score=0,
-        my_total_auction_score=total_auction_score,
         my_match_score=match_score,
-        my_total_score=total_score,
         match_index=match_index,
         day=day,
         today_pool=pool,
@@ -121,11 +136,7 @@ def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=
     players = [
         ScriptedPlayer(name, strategies[name], super_strategies.get(name)) for name in NAMES
     ]
-    auction_scores_history = {name: [] for name in NAMES}
-    return run_match(
-        players, match_index, is_playoff, auction_scores_history, game,
-        scores_history={name: [] for name in NAMES},
-    )
+    return run_match(players, match_index, is_playoff, [], game)
 
 
 def constant_by_name(bids_by_name: dict):

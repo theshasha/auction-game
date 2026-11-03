@@ -66,9 +66,7 @@ class TestSpeechFields:
 
     @pytest.mark.parametrize("final", [False, True], ids=["match-end", "final"])
     def test_results_show_settled_scores_and_score_based_ranking(self, final):
-        auction_scores = {name: 3 if name == "甲" else 0 for name in NAMES}
-        scores = auction_scores.copy()
-        log = make_log(auction_scores=auction_scores, scores=scores)
+        log = make_log(days=[make_day(1, [5, 4, 3, 2, 1, 0], pool=3)])
         standings = make_standings({"甲": [2, 1], "乙": [1, 0]},
                                    scores_history={"甲": [8, 4], "乙": [12, 2]})
         text = (prompts.final_speech_request(standings, log) if final
@@ -151,8 +149,6 @@ class TestPlayoffNotice:
             make_log(
                 match_index=match_index, is_playoff=is_playoff,
                 game=replace(TEST_GAME, regular_matches=regular_matches),
-                auction_scores={name: 3 if name == "甲" else 0 for name in NAMES},
-                scores={name: 4 if name == "甲" else 0 for name in NAMES},
             ),
             make_standings(
                 {name: [int(name == "甲")] * match_index for name in NAMES},

@@ -73,24 +73,46 @@ class DayResult:
 
 @dataclass
 class MatchLog:
-    """一局的完整日志，局末向全体参赛者公开。"""
+    """一局的完整日志，局末向全体参赛者公开；得分和余额都由各天的结算算出。"""
 
     match_index: int             # 第几局（1 起；正赛结束后继续编号加赛）
     is_playoff: bool
     game: GameSettings
     days: list[DayResult] = field(default_factory=list)
-    auction_scores: dict[str, int] = field(default_factory=dict)  # 本局各人的拍卖分（含零分）
-    scores: dict[str, int] = field(default_factory=dict)  # 本局总分（含零分）
-    remaining_coins: dict[str, int] = field(default_factory=dict)  # 最近一天结算后的余额；局末即局末余额
+
+    def _totals(self, value) -> dict[str, int]:
+        """按参赛顺序累加每名玩家各天的 value(当天结算, 本人结算)；还没有结算的天时为空。"""
+        totals = {result.player: 0 for result in self.days[0].players} if self.days else {}
+        for day in self.days:
+            for result in day.players:
+                totals[result.player] += value(day, result)
+        return totals
+
+    @property
+    def scores(self) -> dict[str, int]:
+        """本局总分（含零分）。"""
+        return self._totals(lambda day, result: result.score)
+
+    @property
+    def auction_scores(self) -> dict[str, int]:
+        """本局各人的拍卖分（含零分）。"""
+        return self._totals(lambda day, result: day.auction_score if result.outcome == "won" else 0)
+
+    @property
+    def remaining_coins(self) -> dict[str, int]:
+        """最近一天结算后的余额，局末即局末余额；第 2 天起每天开始时发工资。"""
+        salary = self.game.daily_salary * (len(self.days) - 1)
+        return {name: self.game.initial_coins + salary + delta
+                for name, delta in self._totals(lambda day, result: result.coins_delta).items()}
 
     def to_dict(self) -> dict:
         return {
             "game": self.game.to_dict(),
             "match_index": self.match_index,
             "is_playoff": self.is_playoff,
-            "auction_scores": dict(self.auction_scores),
-            "scores": dict(self.scores),
-            "remaining_coins": dict(self.remaining_coins),
+            "auction_scores": self.auction_scores,
+            "scores": self.scores,
+            "remaining_coins": self.remaining_coins,
             "days": [day.to_dict() for day in self.days],
         }
 
@@ -100,11 +122,10 @@ class StandingsEntry:
     """按总分排名，拍卖分单独统计；同分保持并列。"""
 
     player: str
-    total_auction_score: int              # 含当前局的累计拍卖分
-    auction_scores_per_match: list[int]   # 已完成各局取得的拍卖分
+    total_score: int             # 含当前局已结算部分的累计分数
+    total_auction_score: int     # 含当前局已结算部分的累计拍卖分
+    scores_per_match: list[int]  # 仅含已完成各局分数
     rank: int = 0
-    total_score: int = 0         # 含当前局已结算部分的累计分数
-    scores_per_match: list[int] = field(default_factory=list)  # 仅含已完成各局分数
 
 
 @dataclass
@@ -113,8 +134,7 @@ class Observation:
 
     my_name: str
     my_coins: int
-    my_match_auction_score: int  # 本局已取得的拍卖分
-    my_total_auction_score: int  # 含本局在内的累计拍卖分
+    my_match_score: int          # 本局截至昨日的得分
     match_index: int             # 当前第几局（1 起；正赛结束后继续编号加赛）
     day: int                     # 当前第几天（1 起）
     today_pool: int              # 当天配置奖池
@@ -124,5 +144,3 @@ class Observation:
     # 全场每人金币余额（含自己，含当日工资）：规则四.1 规定第 2 天起每天
     # 开始时公布；第 1 天为 None（均为本场初始金币，无信息量，不渲染）。
     all_coins: Optional[dict[str, int]] = None
-    my_match_score: int = 0      # 本局截至昨日的得分
-    my_total_score: int = 0      # 全场截至昨日的累计分数

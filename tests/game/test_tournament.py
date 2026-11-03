@@ -74,10 +74,8 @@ class TestRegularSeasonOnly:
         assert all(obs.game is game for obs in seen)
         assert [obs.match_index for obs in first_days] == [1, 1, 1, 2, 2, 2]
         assert first_days[3].my_match_score == 0
-        assert first_days[3].my_total_score == 9
         assert first_days[3].standings[0].total_score == 9
         assert first_days[3].standings[0].scores_per_match == [9]
-        assert first_days[0].my_total_score == 0
         assert first_days[0].standings[0].total_score == 0
 
     def test_unique_first_place_no_playoff(self):
@@ -217,11 +215,10 @@ class TestDirectorMatchEnd:
             "甲": [2], "乙": [2], "丙": [0],
         }
         playoff_opening = [obs for obs in observations if obs.match_index == 2 and obs.day == 1]
-        assert {obs.my_name: obs.my_total_score for obs in playoff_opening} == {"甲": 2, "乙": 2, "丙": 0}
         assert all(obs.my_match_score == 0 and obs.my_coins == game.initial_coins for obs in playoff_opening)
         after_hit = next(obs for obs in observations if obs.match_index == 2
                          and obs.day == 2 and obs.my_name == "甲")
-        assert after_hit.my_match_score == 1 and after_hit.my_total_score == 3
+        assert after_hit.my_match_score == 1
         assert after_hit.standings[0].total_score == 3
         assert after_hit.standings[0].scores_per_match == [2]
         assert {entry.player: entry.total_score for entry in playoff_opening[0].standings} == {
@@ -350,7 +347,6 @@ class TestPublicationOnMatchEnd:
         # 局末公开排名含拍卖分明细，且反映该局结果
         first_entry = next(e for e in first_standings if e.player == "甲")
         assert first_entry.total_auction_score == 24
-        assert first_entry.auction_scores_per_match == [24]
         assert first_log.scores == {"甲": 24, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 0}
         assert first_entry.total_score == 24
         assert first_entry.scores_per_match == [24]
@@ -373,7 +369,6 @@ class TestPublicationOnMatchEnd:
         assert len(seen) == 6
         obs = seen[0]
         assert obs.my_match_score == 0
-        assert obs.my_total_score == 24
         leader = obs.standings[0]
         assert leader.player == "甲" and leader.total_auction_score == 24
         assert leader.total_score == 24 and leader.scores_per_match == [24]

@@ -8,6 +8,7 @@ from tests.support.factories import (
     constant_strategies,
     run_one_match,
     run_scenario,
+    scored_log,
     super_by_day,
 )
 from auction_game.game.engine import compute_standings, run_match
@@ -125,8 +126,7 @@ class TestScoreObservations:
     def test_live_scores_include_history_and_standings_snapshots_stay_fixed(self):
         game = replace(TEST_GAME, daily_pool=(5, 5, 5), super_hit_score=3)
         names = ["甲", "乙", "丙"]
-        auction_scores_history = {"甲": [3], "乙": [1], "丙": [0]}
-        scores_history = {"甲": [4], "乙": [6], "丙": [0]}
+        finished = [scored_log(1, {"甲": 3, "乙": 1, "丙": 0}, {"甲": 4, "乙": 6, "丙": 0}, game=game)]
         captured = {name: [] for name in names}
         bids = {"甲": [4, 0, 0], "乙": [2, 1, 0], "丙": [0, 0, 0]}
 
@@ -138,66 +138,48 @@ class TestScoreObservations:
             ScriptedPlayer(name, strategy, super_by_day({1: 4, 2: 0}) if name == "乙" else None)
             for name in names
         ]
-        log = run_match(
-            players, 2, False, auction_scores_history, game, scores_history=scores_history,
-        )
+        log = run_match(players, 2, False, finished, game)
         assert all(obs.match_index == 2 for observations in captured.values() for obs in observations)
         assert log.auction_scores == {"甲": 0, "乙": 10, "丙": 0}
         assert log.scores == {"甲": 0, "乙": 16, "丙": 0}
-        assert [(obs.my_match_score, obs.my_total_score) for obs in captured["乙"]] == [
-            (0, 6), (8, 14), (16, 22),
-        ]
-        assert [(obs.my_match_auction_score, obs.my_total_auction_score) for obs in captured["乙"]] == [
-            (0, 1), (5, 6), (10, 11),
-        ]
-        for day, expected_score in enumerate([6, 14, 22]):
+        assert [obs.my_match_score for obs in captured["乙"]] == [0, 8, 16]
+        for day, (expected_score, expected_auction_score) in enumerate([(6, 1), (14, 6), (22, 11)]):
             snapshot = captured["甲"][day].standings
             assert [(entry.player, entry.total_score) for entry in snapshot] == [
                 ("乙", expected_score), ("甲", 4), ("丙", 0),
             ]
+            assert snapshot[0].total_auction_score == expected_auction_score
             assert snapshot[0].scores_per_match == [6]
-            assert snapshot[0].auction_scores_per_match == [1]
-        assert auction_scores_history == {"甲": [3], "乙": [1], "丙": [0]}
-        assert scores_history == {"甲": [4], "乙": [6], "丙": [0]}
-        scores_history["乙"].append(99)
-        assert captured["甲"][0].standings[0].scores_per_match == [6]
 
 
 class TestComputeStandings:
     def test_tied_players_share_rank(self):
-        auction_scores_history = {
-            "甲": [2, 1], "乙": [1, 1], "丙": [1, 0],
-            "丁": [0, 1], "戊": [0, 0], "己": [0, 0],
-        }
-        scores_history = {
-            "甲": [8, 4], "乙": [4, 4], "丙": [4, 0],
-            "丁": [0, 4], "戊": [0, 0], "己": [0, 0],
-        }
-        standings = compute_standings(auction_scores_history, scores_history=scores_history)
-        ranks = {entry.player: entry.rank for entry in standings}
+        names = ["甲", "乙", "丙", "丁", "戊", "己"]
+        logs = [
+            scored_log(1, dict(zip(names, [2, 1, 1, 0, 0, 0])), dict(zip(names, [8, 4, 4, 0, 0, 0]))),
+            scored_log(2, dict(zip(names, [1, 1, 0, 1, 0, 0])), dict(zip(names, [4, 4, 0, 4, 0, 0]))),
+        ]
+        ranks = {entry.player: entry.rank for entry in compute_standings(names, logs)}
         assert ranks["甲"] == 1
         assert ranks["乙"] == 2
         assert ranks["丙"] == 3 and ranks["丁"] == 3  # 并列同名次
         assert ranks["戊"] == 5 and ranks["己"] == 5
 
     def test_current_match_scores_add_only_to_totals(self):
-        auction_scores_history = {name: [] for name in ["甲", "乙", "丙", "丁", "戊", "己"]} | {"甲": [1]}
-        scores_history = {name: [] for name in auction_scores_history} | {"甲": [4]}
-        standings = compute_standings(
-            auction_scores_history, scores_history=scores_history,
-            current_match_auction_scores={"甲": 2}, current_match_scores={"甲": 10},
-        )
-        entry = next(e for e in standings if e.player == "甲")
+        names = ["甲", "乙", "丙", "丁", "戊", "己"]
+        zero = dict.fromkeys(names, 0)
+        finished = [scored_log(1, {**zero, "甲": 1}, {**zero, "甲": 4})]
+        current = scored_log(2, {**zero, "甲": 2}, {**zero, "甲": 10})
+        entry = next(e for e in compute_standings(names, finished, current) if e.player == "甲")
         assert entry.total_auction_score == 3
-        assert entry.auction_scores_per_match == [1]
         assert entry.total_score == 14
         assert entry.scores_per_match == [4]
 
     def test_total_scores_reverse_auction_order_and_auction_scores_do_not_break_ties(self):
-        standings = compute_standings(
-            {"Charlie": [1], "Alpha": [3], "Bravo": [2], "Delta": [0]},
-            scores_history={"Charlie": [10], "Alpha": [9], "Bravo": [10], "Delta": [0]},
-        )
+        names = ["Charlie", "Alpha", "Bravo", "Delta"]
+        standings = compute_standings(names, [scored_log(
+            1, {"Charlie": 1, "Alpha": 3, "Bravo": 2, "Delta": 0},
+            {"Charlie": 10, "Alpha": 9, "Bravo": 10, "Delta": 0})])
         assert [(entry.player, entry.total_auction_score, entry.total_score, entry.rank) for entry in standings] == [
             ("Bravo", 2, 10, 1),
             ("Charlie", 1, 10, 1),

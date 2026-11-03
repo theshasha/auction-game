@@ -23,14 +23,13 @@ import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, RetryPromptPart, TextPart, UserPromptPart
 from pydantic_ai.usage import RequestUsage
 
-from tests.support.factories import TEST_GAME, make_day, make_log
+from tests.support.factories import TEST_GAME, make_day, make_log, make_standings
 
 from auction_game.llm.execution import CallFailedError, ExecutionResult
 from auction_game.agent.log import AgentLog
 from auction_game.reporting.analyze import analyze, collect_player_stats, find_latest_ai_run, load_match_logs, main
 from auction_game.reporting.run_output import initialize_run
 from auction_game.reporting.run_paths import RunPaths
-from auction_game.game.engine import compute_standings
 
 ANALYZE_GAME = replace(TEST_GAME, daily_pool=(1, 1))
 
@@ -40,11 +39,7 @@ def make_match_1() -> dict:
         make_day(1, [5, 4, 3, 2, 1, 0], super_bids={"乙": 5, "丙": 6}),
         make_day(2, [3, 3, 1, 2, 0, 6]),
     ]
-    auction_scores = {"甲": 0, "乙": 1, "丙": 0, "丁": 0, "戊": 0, "己": 1}
-    scores = {**auction_scores, "乙": 3}
-    remaining = {"甲": 2, "乙": 4, "丙": 8, "丁": 10, "戊": 10, "己": 4}
-    return make_log(match_index=1, days=days, auction_scores=auction_scores,
-                    scores=scores, remaining_coins=remaining, game=ANALYZE_GAME).to_dict()
+    return make_log(match_index=1, days=days, game=ANALYZE_GAME).to_dict()
 
 
 def make_match_2() -> dict:
@@ -52,10 +47,7 @@ def make_match_2() -> dict:
         make_day(1, [0, 3, 0, 2, 5, 4]),
         make_day(2, [0, 4, 1, 2, 3, 2]),
     ]
-    auction_scores = {"甲": 0, "乙": 1, "丙": 0, "丁": 0, "戊": 1, "己": 0}
-    remaining = {"甲": 10, "乙": 6, "丙": 10, "丁": 8, "戊": 5, "己": 8}
-    return make_log(match_index=2, days=days, auction_scores=auction_scores,
-                    scores=auction_scores, remaining_coins=remaining, game=ANALYZE_GAME).to_dict()
+    return make_log(match_index=2, days=days, game=ANALYZE_GAME).to_dict()
 
 
 def make_matches() -> list[dict]:
@@ -90,9 +82,7 @@ def test_score_matrices_and_top_match_counts():
 @pytest.mark.parametrize("all_void", [False, True])
 def test_solo_top_and_all_zero_tied_matches(all_void, tmp_path, capsys):
     days = [make_day(day, [2, 2] if all_void else [2, 1]) for day in (1, 2)]
-    points = {"甲": 0 if all_void else 2, "乙": 0}
-    match = make_log(days=days, auction_scores=points, scores=points,
-                     game=ANALYZE_GAME).to_dict()
+    match = make_log(days=days, game=ANALYZE_GAME).to_dict()
     rows = rows_by_name(collect_player_stats([{"match": match}]))
     assert rows["甲"]["solo_top_matches"] == (0 if all_void else 1)
     assert rows["乙"]["solo_top_matches"] == 0
@@ -205,13 +195,7 @@ def test_super_result_days_compare_all_supers_once_without_changing_logs(
     assert (days[0].winner, days[0].winning_bid, days[0].collision_values) == (winner, winning_bid, collisions)
     assert {result.player: result.super_hit for result in days[0].players if result.super_bid is not None} == {
         name: hit for name, (_, hit) in super_bids.items()}
-    names = [result.player for result in days[0].players]
-    auction_scores = {name: int(name == winner) for name in names}
-    # 每笔命中各得 2 分，含流局日。
-    scores = {name: auction_scores[name] + (2 if super_bids.get(name, (0, False))[1] else 0)
-              for name in names}
-    matches = [{"match": make_log(days=days, auction_scores=auction_scores,
-                                  scores=scores, game=ANALYZE_GAME).to_dict()}]
+    matches = [{"match": make_log(days=days, game=ANALYZE_GAME).to_dict()}]
     original = deepcopy(matches)
     stats = collect_player_stats(matches)
     assert stats["super_days"] == 1
@@ -244,9 +228,7 @@ def test_super_collision_hits_include_void_days(tmp_path, capsys):
         make_day(1, [0, 0, 3, 3], super_bids={"乙": 3, "丙": 0, "丁": 0}),
         make_day(2, [0, 0, 0, 0]),
     ]
-    matches = [{"match": make_log(days=days, auction_scores=dict.fromkeys(["甲", "乙", "丙", "丁"], 0),
-                                  scores={"甲": 0, "乙": 2, "丙": 2, "丁": 2},
-                                  game=ANALYZE_GAME).to_dict()}]
+    matches = [{"match": make_log(days=days, game=ANALYZE_GAME).to_dict()}]
     stats = collect_player_stats(matches)
     assert stats["super_collision_hits"] == 3  # 同一天、两个价位，按三笔使用分别计数。
     assert stats["super_changed_days"] == 0
@@ -264,8 +246,7 @@ def test_super_result_days_do_not_simulate_future():
         make_day(2, [0, 0, 3], game=game),
     ]
     # 移除首日超级出价后只重判首日，不重算次日余额或出价。
-    points = {"甲": 0, "乙": 1, "丙": 1}
-    log = make_log(days=days, auction_scores=points, scores=points, game=game).to_dict()
+    log = make_log(days=days, game=game).to_dict()
     stats = collect_player_stats([{"match": log}])
     assert stats["super_days"] == 1
     assert stats["super_changed_days"] == 0
@@ -286,11 +267,11 @@ def write_matches(run_dir, matches, *, run_type="offline", players=None):
     auction_scores_history = {name: [] for name in first["auction_scores"]}
     scores_history = {name: [] for name in first["scores"]}
     for payload in sorted(matches, key=lambda payload: payload["match"]["match_index"]):
-        # 用生产排名函数准备磁盘元数据；每日和每局分数始终由场景手写。
+        # 用生产排名函数准备磁盘元数据；各局分数取自场景的局日志。
         for name in auction_scores_history:
             auction_scores_history[name].append(payload["match"]["auction_scores"].get(name, 0))
             scores_history[name].append(payload["match"]["scores"].get(name, 0))
-        payload["standings_after_match"] = [asdict(entry) for entry in compute_standings(
+        payload["standings_after_match"] = [asdict(entry) for entry in make_standings(
             auction_scores_history, scores_history=scores_history)]
         paths.match(payload["match"]["match_index"]).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
@@ -423,10 +404,7 @@ def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, caps
         make_day(2, [2, 2, 0], pool=4, game=game),
         make_day(3, [9, 3, 1], pool=3, game=game),
     ]
-    log = make_log(match_index=3, is_playoff=True, game=game, days=days,
-                   auction_scores={"甲": 3, "乙": 2, "丙": 4},
-                   scores={"甲": 3, "乙": 4, "丙": 4},
-                   remaining_coins={"甲": 8, "乙": 23, "丙": 28}).to_dict()
+    log = make_log(match_index=3, is_playoff=True, game=game, days=days).to_dict()
     stats = collect_player_stats([{"match": log}])
     assert stats["match_labels"] == ["加赛第 1 局（总第 3 局）"]
     assert rows_by_name(stats)["丙"]["tied_top_matches"] == 1
@@ -472,9 +450,7 @@ def test_mean_bids_exclude_void_days(tmp_path, capsys):
         make_day(1, [2, 2, 2, 2, 2, 2]),
         make_day(2, [0, 3, 0, 2, 5, 4]),
     ]
-    points = {"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 1, "己": 0}
-    match = make_log(days=days, auction_scores=points, scores=points,
-                     game=ANALYZE_GAME).to_dict()
+    match = make_log(days=days, game=ANALYZE_GAME).to_dict()
     rows = rows_by_name(collect_player_stats([{"match": match}]))
     assert rows["甲"]["avg_bid"] == 0
     assert rows["乙"]["avg_bid"] == 3
@@ -494,9 +470,7 @@ def test_aggregate_zero_bids_include_super_but_player_zero_bids_only_normal(tmp_
         make_day(1, [0, 0, 1, 1, 0, 0], super_bids={"丙": 0}),
         make_day(2, [1, 0, 2, 3, 4, 5], super_bids={"甲": 0}),
     ]
-    match = make_log(days=days, auction_scores={"甲": 0, "乙": 0, "丙": 0, "丁": 0, "戊": 0, "己": 1},
-                     scores={"甲": 2, "乙": 0, "丙": 2, "丁": 0, "戊": 0, "己": 1},
-                     game=ANALYZE_GAME).to_dict()
+    match = make_log(days=days, game=ANALYZE_GAME).to_dict()
     rows = rows_by_name(collect_player_stats([{"match": match}]))
     assert rows["甲"]["zero_bids"] == 1  # 流局日正常 0 计入，两笔狙 0 的超级出价不计
     assert rows["乙"]["zero_bids"] == 2
@@ -511,8 +485,7 @@ def test_total_score_ranking_can_reverse_auction_score_ranking():
         make_day(1, [5, 4, 3], super_bids={"乙": 3}, game=game),
         make_day(2, [5, 1, 0], game=game),
     ]
-    match = make_log(days=days, auction_scores={"甲": 2, "乙": 0, "丙": 0},
-                     scores={"甲": 2, "乙": 3, "丙": 0}, game=game).to_dict()
+    match = make_log(days=days, game=game).to_dict()
     stats = collect_player_stats([{"match": match}])
     assert [row["name"] for row in stats["rows"]] == ["乙", "甲", "丙"]
     assert rows_by_name(stats)["乙"]["solo_top_matches"] == 1
