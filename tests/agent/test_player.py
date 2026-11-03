@@ -82,9 +82,8 @@ def test_custom_game_and_realtime_balance_use_shared_rules(tmp_path):
     game = replace(TEST_GAME, initial_coins=4, max_bid=9, super_cost=3)
     runner = fake_task_runner([bid_reply(5), bid_reply(1, 9), bid_reply(8, 9), bid_reply(7, 9)])
     player = make_player(runner, tmp_path, game=game)
-    assert player.plan_strategy(prompts.opening_plan_request({}, game), "opening_plan") == []
-    assert player.decide_bid(make_ai_obs(coins=4, game=game)) == (1, 9)
-    assert player.decide_bid(make_ai_obs(day=2, coins=10, game=game)) == (7, 9)
+    assert player.plan_strategy(prompts.opening_plan_request({}, game), "opening_plan") == ((1, 9), [])
+    assert player.decide_bid(make_ai_obs(coins=10, game=game)) == (7, 9)
     assert len(runner.calls) == 4
     assert "超过当前余额 4" in ModelMessagesTypeAdapter.dump_json(runner.calls[1]).decode()
     assert "合计超过当前余额 10" in ModelMessagesTypeAdapter.dump_json(runner.calls[3]).decode()
@@ -122,11 +121,11 @@ def test_program_errors_propagate_without_retry_or_state_change(tmp_path):
 
 
 @pytest.mark.parametrize("suffix,valid_output", [(".jsonl", True), (".md", False)])
-def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, monkeypatch, suffix, valid_output):
+def test_log_write_failure_propagates_and_preserves_history(tmp_path, monkeypatch, suffix, valid_output):
     runner = fake_task_runner([bid_reply(1), bid_reply(2) if valid_output else bid_reply("bad"), bid_reply("bad")])
     player = make_player(runner, tmp_path)
     player.plan_strategy("initial plan", "opening_plan")
-    before = deepcopy(player.messages), player._pending_day1_bid
+    before = deepcopy(player.messages)
     json_before = player.log.path.read_text(encoding="utf-8")
     md_before = player.log.readable_path.read_text(encoding="utf-8")
     original_open = Path.open
@@ -141,7 +140,7 @@ def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, m
     with pytest.raises(OSError) as caught:
         player.plan_strategy("replacement", "match_1_plan")
     assert caught.value is failure
-    assert (player.messages, player._pending_day1_bid) == before
+    assert player.messages == before
     assert len(runner.calls) == (2 if valid_output else 3)
     assert player.log.readable_path.read_text(encoding="utf-8") == md_before
     json_after = player.log.path.read_text(encoding="utf-8")
@@ -154,17 +153,15 @@ def test_log_write_failure_propagates_and_preserves_history_and_plan(tmp_path, m
         assert entries[-1]["status"] == ("success" if valid_output else "failed")
 
 
-def test_plan_has_full_format_and_bids_from_day_two_get_one_line(tmp_path):
-    runner = fake_task_runner([bid_reply(1), bid_reply(1), bid_reply(1)])
+def test_plan_has_full_format_and_bids_get_one_line(tmp_path):
+    runner = fake_task_runner([bid_reply(1), bid_reply(1)])
     player = make_player(runner, tmp_path)
-    player.decide_bid(make_ai_obs(day=1))  # 没有规划缓存时第 1 天也发请求
     player.plan_strategy("请规划", "opening_plan")
-    player.decide_bid(make_ai_obs(day=2))
-    assert request_text(runner, 0).endswith("\n\n" + output_requirement("bid", LETTERS))
-    assert request_text(runner, 1) == "请规划\n\n" + output_requirement("plan", LETTERS)
-    assert request_text(runner, 2).endswith("\n\n" + BRIEF_BID_FORMAT)
+    player.decide_bid(make_ai_obs())
+    assert request_text(runner, 0) == "请规划\n\n" + output_requirement("plan", LETTERS)
+    assert request_text(runner, 1).endswith("\n\n" + BRIEF_BID_FORMAT)
     # 只附一句时也写明送达时机。
-    assert "收件人下一次行动时才收到" in request_text(runner, 2)
+    assert "收件人下一次行动时才收到" in request_text(runner, 1)
 
 
 def test_format_error_after_one_line_prompt_gets_full_format(tmp_path):
@@ -198,10 +195,9 @@ def test_bid_shows_received_letters_and_returns_written_ones(tmp_path):
     assert f"以下是其他玩家昨天出价时写给你的私信：\n\n【Charlie】我会狙 2\n\n{prompts.BID_HINT}" in request_text(runner, 0)
 
 
-def test_plan_returns_letters_and_day_one_bid_from_cache_has_none(tmp_path):
+def test_plan_returns_day_one_bid_and_letters(tmp_path):
     letter = {"to": "Bravo", "text": "规划时写的"}
     runner = fake_task_runner([{**bid_reply(1, 3), "letters": [letter]}])
     player = make_player(runner, tmp_path)
-    assert player.plan_strategy("请规划", "opening_plan") == [letter]
-    assert player.bid(make_ai_obs(), {}) == ((1, 3), [])
+    assert player.plan_strategy("请规划", "opening_plan") == ((1, 3), [letter])
     assert len(runner.calls) == 1

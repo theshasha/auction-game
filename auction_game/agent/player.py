@@ -44,7 +44,7 @@ def completed_history(messages: list[ModelMessage]) -> list[ModelMessage]:
 
 
 class AIPlayer(Player):
-    """日志成功才提交；快照同时恢复当前上下文、全场回顾、记忆与缓存。"""
+    """日志成功才提交；快照同时恢复当前上下文、全场回顾和记忆。"""
 
     def __init__(self, name: str, persona_title: str, persona_text: str,
                  predictions: list[tuple[str, int]], all_names: list[str],
@@ -65,14 +65,13 @@ class AIPlayer(Player):
         self.letter_names = LetterNames(name, tuple(other for other in all_names if other != name))
         self.log = AgentLog(name, log_path, readable_path=readable_path)
         self.log.system_prompt(system_prompt)
-        self._pending_day1_bid: tuple[int, int | None] | None = None
 
     def checkpoint(self):
         """消息只追加或整体替换，浅拷贝列表就能恢复，包括局末重置。"""
-        return list(self.messages), list(self.review_messages), self.memory, self._pending_day1_bid
+        return list(self.messages), list(self.review_messages), self.memory
 
     def rollback(self, checkpoint) -> None:
-        messages, review, self.memory, self._pending_day1_bid = checkpoint
+        messages, review, self.memory = checkpoint
         self.messages = list(messages)
         self.review_messages = list(review)
 
@@ -103,7 +102,6 @@ class AIPlayer(Player):
             if reset:
                 self.memory = result.output["memory"]
                 self.messages = [self.messages[0], ModelRequest(parts=[UserPromptPart(memory_message)])]
-                self._pending_day1_bid = None
             else:
                 self.messages.extend(projection)
         return result.output
@@ -111,16 +109,12 @@ class AIPlayer(Player):
     def bid(self, obs: Observation, received: dict[str, str]) -> tuple[tuple[int, int | None], list[dict]]:
         """返回 ((正常出价, 超级出价), 写的信)；received 是收到的信，写信人到正文。
 
-        第 1 天有本局规划的缓存时直接用它，不发请求，所以也不收信、不写信。
+        出价请求从第 2 天起发出，第 1 天的出价由本局规划交出。
         """
-        if obs.day == 1 and self._pending_day1_bid is not None:
-            submission = self._pending_day1_bid
-            self._pending_day1_bid = None
-            return submission, []
-        # 本局规划请求里有完整格式，整理记忆前一直留在对话里，第 2 天起只附一句提示。
+        # 本局规划请求里有完整格式，整理记忆前一直留在对话里，出价请求只附一句提示。
         output = self._task("bid", prompts.bid_request(obs, received=received), "bid",
                             f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
-                            letters=self.letter_names, brief_format=obs.day >= 2)
+                            letters=self.letter_names, brief_format=True)
         return (output["bid"], output["super_bid"]), output["letters"]
 
     def decide_bid(self, obs: Observation) -> tuple[int, int | None]:
@@ -134,12 +128,11 @@ class AIPlayer(Player):
                             letters=self.letter_names if letters else None)
         return output["speech"], output["letters"]
 
-    def plan_strategy(self, user_text: str, phase: str, context: str = "") -> list[dict]:
-        """返回写的信。成功替换首日缓存；失败保留调用前历史与缓存。"""
+    def plan_strategy(self, user_text: str, phase: str, context: str = "") -> tuple[tuple[int, int | None], list[dict]]:
+        """返回 ((本局第 1 天的正常出价, 超级出价), 写的信)。"""
         output = self._task("plan", user_text, phase, context, coins=self.game.initial_coins,
                             letters=self.letter_names)
-        self._pending_day1_bid = output["bid"], output["super_bid"]
-        return output["letters"]
+        return (output["bid"], output["super_bid"]), output["letters"]
 
     def save_memory(self, user_text: str, phase: str, context: str = "") -> None:
         """全部公开发言公布后整理；日志成功才替换记忆并清空历局对话。"""

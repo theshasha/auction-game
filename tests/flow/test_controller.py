@@ -16,7 +16,6 @@ from tests.support.factories import (
     fake_task_runner,
     text_reply,
     make_ai_obs,
-    make_obs,
     make_player,
     request_text,
     speech_reply,
@@ -62,7 +61,8 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
     from auction_game.game.tournament import run_tournament
     from auction_game.reporting.run_output import print_day_result
 
-    game = replace(TEST_GAME, daily_pool=(3,), super_hit_score=1, regular_matches=1, max_playoffs=0)
+    # 第 1 天全员出 0 流局，直接结算；第 2 天的出价轮暂停或失败。
+    game = replace(TEST_GAME, daily_pool=(1, 3), super_hit_score=1, regular_matches=1, max_playoffs=0)
     gate = threading.Event()
     controller = Controller(mode="continuous", max_concurrency=1,
                             announce=lambda text: gate.set() if text.startswith("[单步]") else None)
@@ -71,13 +71,10 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         controller.offer_command("p")
         return bid_reply(2)
 
-    alpha = make_player(fake_task_runner([bid_reply(1, 2)]), tmp_path, name="Alpha")
+    alpha = make_player(fake_task_runner([bid_reply(1, 2)]), tmp_path, name="Alpha", game=game)
     bravo = make_player(fake_task_runner(
         [ModelAPIError("offline", "unavailable"), bid_reply(2)] if failure else [pause_and_reply],
-    ), tmp_path, name="Bravo")
-    for player in (alpha, bravo):
-        player.game = game
-    alpha.plan_strategy("首日规划", "opening_plan")
+    ), tmp_path, name="Bravo", game=game)
     before = [player.checkpoint() for player in (alpha, bravo)]
     settlements, published, day_reports = [], [], []
     settle = engine.settle_day
@@ -87,6 +84,8 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         return settle(*args, **kwargs)
 
     def collect(observations):
+        if observations[0][1].day == 1:
+            return [(0, None) for _ in observations]
         tasks = [RoundTask(player.name, lambda p=player, o=obs: p.decide_bid(o), player)
                  for player, obs in observations]
         results = controller.run_round(tasks, "测试出价")
@@ -103,25 +102,24 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         on_day_end=report_day,
     )) as (thread, outcome):
         assert gate.wait(timeout=5)
-        assert settlements == published == day_reports == []
-        assert capsys.readouterr().out == ""
-        assert alpha._pending_day1_bid is None
+        assert len(settlements) == len(day_reports) == 1 and published == []
+        capsys.readouterr()  # 第 1 天的战报
         controller.offer_command(command)
         thread.join(timeout=5)
         assert not thread.is_alive()
         if command == "q":
             assert isinstance(outcome.get("error"), TournamentAborted)
-            assert settlements == published == day_reports == []
+            assert len(settlements) == len(day_reports) == 1 and published == []
             assert capsys.readouterr().out == ""
             assert [player.checkpoint() for player in (alpha, bravo)] == before
         else:
-            assert settlements == [True]
+            assert len(settlements) == 2
             assert len(published) == 1
             assert published[0].scores == {"Alpha": 4, "Bravo": 0}
             assert outcome["result"].final_standings[0].total_score == 4
-            assert len(day_reports) == 1
+            assert len(day_reports) == 2
             output = capsys.readouterr().out
-            assert output.count("===== 第 1 局（正赛）第 1 天 =====") == 1
+            assert output.count("===== 第 1 局（正赛）第 2 天 =====") == 1
             assert "超级出价命中：Alpha +1 分" in output
         assert len(alpha.task_runner.calls) == 1
         assert len(bravo.task_runner.calls) == (2 if failure and command != "q" else 1)
@@ -159,7 +157,6 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
             assert outcome.get("result") == {"Alpha": None, "Bravo": None}
             assert alpha.checkpoint() == successful and bravo.memory == "bravo cumulative"
             assert len(alpha.task_runner.calls) == 2 and len(bravo.task_runner.calls) == 3
-            assert alpha._pending_day1_bid is None and bravo._pending_day1_bid is None
 
 
 OPENING_LETTER = {"to": "Alpha", "text": "开局信"}
@@ -180,7 +177,7 @@ def test_rerun_sees_round_start_letters_and_new_letters_wait_for_next_round(tmp_
     def play():
         director.on_opening()
         for day in (1, 2):
-            director.collect_bids([(p, make_obs(my_name=p.name, day=day)) for p in (alpha, bravo)])
+            director.collect_bids([(p, make_ai_obs(day=day, name=p.name)) for p in (alpha, bravo)])
 
     with running(controller, play) as (thread, outcome):
         assert gate.wait(timeout=5)  # Alpha 的规划失败，Bravo 的规划已成功
@@ -670,68 +667,6 @@ class TestParallelRound:
                 assert outcome.get("result") == {"stateless": "ready", "counter": 1}
                 assert counter.calls == 2
             assert stateless_calls == [1]
-
-    @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
-    def test_pause_keeps_consumed_plan_before_result_collection(self, monkeypatch, command, tmp_path):
-        ready = threading.Event()
-        release_collection = threading.Event()
-        gate = threading.Event()
-        announcements = []
-
-        def announce(message):
-            announcements.append(message)
-            if message.startswith("[单步]"):
-                gate.set()
-
-        controller = Controller(
-            mode="continuous",
-            announce=announce,
-        )
-        task_runner = fake_task_runner([bid_reply(2, 6)])
-        player = make_player(task_runner, tmp_path, name="Alpha")
-        player.plan_strategy("请规划", "opening_plan")
-        checkpoint = player.checkpoint()
-        history = deepcopy(player.messages)
-        bid_calls = []
-
-        def consume_plan():
-            bid_calls.append(1)
-            return player.decide_bid(make_ai_obs(day=1))
-        original_as_completed = controller_module.as_completed
-        first_pass = True
-
-        def hold_first_collection(futures):
-            nonlocal first_pass
-            for future in original_as_completed(futures):
-                if first_pass:
-                    first_pass = False
-                    assert future.result() == (2, 6)  # 缓存已消费，控制器尚未收集
-                    ready.set()
-                    assert release_collection.wait(timeout=5)
-                yield future
-
-        monkeypatch.setattr(controller_module, "as_completed", hold_first_collection)
-        tasks = [RoundTask("Alpha", consume_plan, participant=player)]
-        with running(controller, lambda: controller.run_round(tasks, "首日"),
-                     release_collection) as (thread, outcome):
-            assert ready.wait(timeout=5)
-            assert player._pending_day1_bid is None
-            controller.offer_command("p")
-            release_collection.set()
-            assert gate.wait(timeout=5)
-            assert player._pending_day1_bid is None
-            assert player.messages == history
-            assert "result" not in outcome
-            controller.offer_command(command)
-            thread.join(timeout=5)
-            if command == "q":
-                assert isinstance(outcome.get("error"), TournamentAborted)
-                assert player.checkpoint() == checkpoint
-            else:
-                assert outcome.get("result") == {"Alpha": (2, 6)}
-                assert player._pending_day1_bid is None
-            assert len(task_runner.calls) == 1
-            assert bid_calls == [1]
 
     @pytest.mark.parametrize("failures, reason", [
         ([ModelAPIError("offline", "service unavailable")], "service unavailable"),

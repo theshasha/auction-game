@@ -80,8 +80,7 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         assert "encrypted_old_reasoning" in audit and "resp_1" in audit
     if protocol == "anthropic":
         assert "signed_old_reasoning" in audit and "redacted_old_reasoning" in audit
-    player.decide_bid(make_ai_obs())  # 消费首日缓存
-    player.decide_bid(make_ai_obs(day=2))
+    player.decide_bid(make_ai_obs())
     before = player.checkpoint()
     assert player.final_summary("audience review") == "audience"
     assert player.checkpoint() == before
@@ -192,8 +191,8 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             assert "public-" + ("Bravo" if name == "Alpha" else "Alpha") in prompt
             assert "private-" not in text
             return {"memory": "private-" + name}
-        players.append(make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6),
-                                                     bid_reply(0)]), tmp_path / name, game=game, name=name))
+        players.append(make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6)]),
+                                   tmp_path / name, game=game, name=name))
     director = AIDirector(players, continuous_controller(), tmp_path, game=players[0].game)
     # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。下一局是加赛时两人总分并列。
     next_is_playoff = match_index >= game.regular_matches
@@ -218,9 +217,5 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
                      "今日奖池为 2 分", "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
                      "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
-        obs = replace(make_ai_obs(game=game, coins=game.initial_coins), match_index=match_index + 1)
-        assert p.decide_bid(obs) == (1, 6)
-        assert len(p.task_runner.calls) == 3
-        assert p.decide_bid(obs) == (0, None)
-        assert len(p.task_runner.calls) == 4
+        assert director.day1_bids[p.name] == (1, 6)
     assert "private-" not in (tmp_path / "speeches.md").read_text(encoding="utf-8")

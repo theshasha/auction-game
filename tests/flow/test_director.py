@@ -1,4 +1,4 @@
-"""各轮编排、私信送达、公开与私有边界、规划缓存及观众总结。"""
+"""各轮编排、私信送达、公开与私有边界、规划交出的首日出价及观众总结。"""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -11,7 +11,7 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 from auction_game.flow import director as director_module
 from auction_game.llm.execution import OutputFailedError
 from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
-                                     make_log, make_obs, make_player, make_standings, request_text, speech_reply,
+                                     make_log, make_player, make_standings, request_text, speech_reply,
                                      text_reply, task_entries)
 from auction_game.game.settings import GameSettings
 
@@ -34,7 +34,7 @@ class RecordingPlayer:
 
     def plan_strategy(self, text, phase, context):
         self.calls.append((phase, text))
-        return []
+        return (0, None), []
 
     def save_memory(self, text, phase, context):
         self.calls.append((phase, text))
@@ -163,21 +163,6 @@ def test_double_blank_summary_fails_and_keeps_history(tmp_path):
     assert player.messages == before and len(runner.calls) == 2
 
 
-def test_cache_consumed_once_and_restored_with_history_by_checkpoint(tmp_path):
-    runner = fake_task_runner([bid_reply(2, 6), bid_reply(1)])
-    player = make_player(runner, tmp_path)
-    player.plan_strategy("规划", "opening_plan")
-    checkpoint = player.checkpoint()
-    history = deepcopy(player.messages)
-    for _ in range(2):
-        assert player.decide_bid(make_ai_obs()) == (2, 6)
-        player.rollback(checkpoint)
-        assert player.messages == history and player._pending_day1_bid == (2, 6)
-    assert player.decide_bid(make_ai_obs()) == (2, 6)
-    assert len(runner.calls) == 1
-    assert player.decide_bid(make_ai_obs()) == (1, None)
-
-
 @pytest.mark.parametrize("fails", [False, True])
 def test_replan_transaction_and_round_rollback(fails, tmp_path):
     replies = [bid_reply("bad"), bid_reply(99)] if fails else [bid_reply(4)]
@@ -189,27 +174,18 @@ def test_replan_transaction_and_round_rollback(fails, tmp_path):
     if fails:
         with pytest.raises(OutputFailedError):
             player.plan_strategy("新规划", "match_1_plan")
-        assert player.messages == before and player._pending_day1_bid == (2, 6)
+        assert player.messages == before
     else:
-        player.plan_strategy("新规划", "match_1_plan")
-        assert player._pending_day1_bid == (4, None)
+        assert player.plan_strategy("新规划", "match_1_plan") == ((4, None), [])
     player.rollback(checkpoint)
-    assert player.messages == before and player._pending_day1_bid == (2, 6)
+    assert player.messages == before
 
 
-def test_rollback_new_plan_removes_new_cache(tmp_path):
-    player = make_player(fake_task_runner([bid_reply(3)]), tmp_path)
-    checkpoint = player.checkpoint()
-    player.plan_strategy("规划", "opening_plan")
-    player.rollback(checkpoint)
-    assert player._pending_day1_bid is None and len(player.messages) == 1
-
-
-def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(tmp_path):
+def test_director_opening_plan_preserves_public_boundary_and_keeps_day_one_bids(tmp_path):
     game = replace(TEST_GAME, initial_coins=13, daily_pool=(2, 1, 3), max_bid=9,
                    super_cost=1, super_hit_score=2, regular_matches=1)
-    a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6), bid_reply(1)]), tmp_path / "a", game=game)
-    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), tmp_path / "b",
+    a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6)]), tmp_path / "a", game=game)
+    b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6)]), tmp_path / "b",
                     game=game, name="Bravo")
     director = director_module.AIDirector([a, b], continuous_controller(), tmp_path, game=a.game)
     director.on_opening()
@@ -217,7 +193,8 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
     assert "public-B" in request and "烟雾弹" not in request
     public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert "public-A" in public_log and "烟雾弹" not in public_log
-    for player, planned, fallback in ((a, (2, 6), (1, None)), (b, (3, 6), (0, None))):
+    assert director.day1_bids == {"Alpha": (2, 6), "Bravo": (3, 6)}
+    for player in (a, b):
         assert len(player.task_runner.calls) == 2
         plan_input = request_text(player.task_runner, -1)
         for fact in ("你有 13 枚金币", "今日奖池为 2 分",
@@ -225,11 +202,6 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
                      "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
         assert plan_input.count("全员累计总分：全员 0 分。") == 1
-        obs = make_ai_obs(game=game, coins=game.initial_coins)
-        assert player.decide_bid(obs) == planned
-        assert len(player.task_runner.calls) == 2
-        assert player.decide_bid(obs) == fallback
-        assert len(player.task_runner.calls) == 3
 
 
 def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
@@ -265,9 +237,9 @@ def test_letters_arrive_in_recipients_next_request_only(capsys, tmp_path):
     director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=game)
     director.on_opening()
     for day in (1, 2, 3):
-        director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in players])
+        director.collect_bids([(p, make_ai_obs(day=day, game=game, name=p.name)) for p in players])
     director.on_match_end([make_log(game=game)], make_standings({p.name: [0] for p in players}))
-    # 请求依次是开局发言、规划、第 2 天和第 3 天出价、局末发言、整理记忆、下一局规划；第 1 天出价取规划缓存。
+    # 请求依次是开局发言、规划、第 2 天和第 3 天出价、局末发言、整理记忆、下一局规划；第 1 天的出价由规划交出。
     # 收信段标题写明信是在哪一环节写的；规划请求同时交了第 1 天的出价。
     received = {("Bravo", 1): ("开局信", "在开局发言时"), ("Bravo", 2): ("规划信", "昨天出价时"),
                 ("Charlie", 3): ("次日信", "昨天出价时"), ("Bravo", 4): ("末日信", "在本局最后一天出价时"),
@@ -308,7 +280,7 @@ def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path
     director = director_module.AIDirector([alpha, bravo], continuous_controller(), tmp_path, game=game)
     director.on_opening()
     for day in range(1, days + 1):
-        director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in (alpha, bravo)])
+        director.collect_bids([(p, make_ai_obs(day=day, game=game, name=p.name)) for p in (alpha, bravo)])
     log, standings = make_log(game=game), make_standings({"Alpha": [0], "Bravo": [0]})
     if final:
         director.on_final(standings, log)

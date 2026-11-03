@@ -39,7 +39,7 @@ def test_failed_flow_keeps_history_and_audits_no_partial_reply(protocol, fault, 
     before = deepcopy(player.messages)
     with pytest.raises(CallFailedError):
         player.decide_bid(make_ai_obs())
-    assert player.messages == before and player._pending_day1_bid is None
+    assert player.messages == before
     assert len(h.requests) == 4
     entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
@@ -94,10 +94,10 @@ def test_success_then_failure_in_new_loop_keeps_previous_state_and_closes(protoc
     h = Harness(protocol, ["connect", reply(), 400, 400, 400, 400])
     player = make_player(TaskRunner(h.factory), tmp_path)
     player.plan_strategy("plan", "opening_plan")
-    before = deepcopy(player.messages), player._pending_day1_bid
+    before = deepcopy(player.messages)
     with pytest.raises(CallFailedError):
         player.give_speech("speak", "opening_speech")
-    assert (player.messages, player._pending_day1_bid) == before
+    assert player.messages == before
     assert h.closes == 2 and h.loops[0] is h.loops[1] and h.loops[0] is not h.loops[2]
     assert all(loop.is_closed() for loop in h.loops)
     entries = task_entries(player.log.path)
@@ -224,10 +224,8 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
     h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}), reply(),
                            reply(text=long_summary)])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    assert player.plan_strategy("plan", "opening_plan") == []
+    assert player.plan_strategy("plan", "opening_plan") == ((2, None), [])
     assert player.decide_bid(make_ai_obs()) == (2, None)
-    assert len(h.requests) == 1
-    assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
     assert player.give_speech("speak", "final_speech") == ("public", [])
     player.plan_strategy("next plan", "match_1_plan")
     before = deepcopy(player.messages)

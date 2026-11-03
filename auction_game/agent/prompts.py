@@ -148,15 +148,12 @@ def _yesterday_bids_table(obs: Observation) -> str:
 
 
 def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> str:
+    """第 2 天起的出价请求；第 1 天的出价在本局规划请求里交。"""
     # 余额已经包含当天工资，注明这一点，避免重复计算。
-    status_notes = []
-    if obs.day >= 2:
-        status_notes.append("已含今日工资")
-    status_notes.append(f"正常出价上限：{min(obs.game.max_bid, obs.my_coins)}")
     status_line = (
         "今日状态：\n\n"
         f"- 今日奖池：{obs.today_pool} 分。\n"
-        f"- 你的金币余额：{obs.my_coins}（{'，'.join(status_notes)}）。\n"
+        f"- 你的金币余额：{obs.my_coins}（已含今日工资，正常出价上限：{min(obs.game.max_bid, obs.my_coins)}）。\n"
         f"- 本局得分：{obs.my_match_score} 分。"
     )
     if obs.day == obs.game.max_days:
@@ -165,9 +162,6 @@ def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> 
     status_line += _remaining_scores_info(obs.game, obs.match_index, obs.day, obs.today_pool)
     # 第 2 天收到的是规划时写的信，规划请求同时交了第 1 天的出价，所以也是昨天出价时写的。
     task = "\n\n".join([*_received_letters(received, "昨天出价时"), BID_HINT])
-    if not obs.today_history:
-        return f"当前是第 {obs.match_index} 局第 {obs.day} 天。\n\n{status_line}\n\n{task}"
-
     yesterday = obs.today_history[-1]
     if yesterday.is_void:
         announcement = f"昨日公布：流局，奖池 {yesterday.pool} 分作废。"

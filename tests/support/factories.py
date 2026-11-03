@@ -267,6 +267,16 @@ def speech_reply(speech):
     return {"strategy": "先放个烟雾弹（私有）", "speech": speech}
 
 
-def make_ai_obs(day=1, coins=6, game=TEST_GAME):
-    """Alpha 视角的 Observation。"""
-    return make_obs(my_name="Alpha", day=day, coins=coins, game=game)
+def make_ai_obs(day=2, coins=6, game=TEST_GAME, name="Alpha"):
+    """ALL_NAMES 中 name 视角第 day 天的出价依据：之前每天全员出 0 流局，全员余额都是 coins。
+
+    出价请求从第 2 天起发出，所以默认第 2 天。
+    """
+    history = [settle_day(number, game.daily_pool[number - 1], [(name, 0, None) for name in ALL_NAMES], game)
+               for number in range(1, day)]
+    return Observation(
+        my_name=name, my_coins=coins, my_match_score=0, match_index=1, day=day,
+        today_pool=game.daily_pool[day - 1], today_history=history,
+        standings=compute_standings(ALL_NAMES, []), game=game,
+        all_coins={name: coins for name in ALL_NAMES},
+    )

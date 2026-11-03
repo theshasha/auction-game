@@ -43,13 +43,10 @@ def test_system_prompt_is_logged_once_before_tasks(tmp_path):
 
 
 @pytest.mark.parametrize("super_bid,label", [(None, "未使用"), (0, "0"), (3, "3")])
-def test_plan_has_one_human_submission_and_cached_day_one_writes_nothing(tmp_path, super_bid, label):
+def test_plan_log_has_one_human_submission(tmp_path, super_bid, label):
     player = make_player(fake_task_runner([bid_reply(1, super_bid, strategy="策略原文")]), tmp_path)
-    player.plan_strategy("规划输入", "opening_plan")
-    before = player.log.readable_path.read_bytes(), player.log.path.read_bytes()
-    assert player.decide_bid(make_ai_obs()) == (1, super_bid)
-    assert (player.log.readable_path.read_bytes(), player.log.path.read_bytes()) == before
-    markdown = before[0].decode()
+    assert player.plan_strategy("规划输入", "opening_plan") == ((1, super_bid), [])
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "## 第1局策略规划含首日出价" in markdown
     assert markdown.count("策略原文") == 1
     assert f"正常出价 1；超级出价 {label}" in markdown
