@@ -7,19 +7,20 @@ import json
 import re
 
 
-TASK_FORMATS = {
-    "bid": '<strategy>\n仅自己可见的出价分析和策略，可正常分段。\n</strategy>\n'
-           '<decision>\n{"bid": 正常出价, "super_bid": 超级出价或 null}\n</decision>',
-    "speech": '<strategy>\n仅自己可见的发言策略。\n</strategy>\n'
-              '<speech>\n其他玩家都能看到的公开发言。\n</speech>',
+# strategy 之后那一块的标签：decision 是出价，speech 是公开发言；不分块的任务直接返回正文。
+DECISION, SPEECH = "decision", "speech"
+BLOCK_FORMATS = {
+    DECISION: '<strategy>\n仅自己可见的出价分析和策略，可正常分段。\n</strategy>\n'
+              '<decision>\n{"bid": 正常出价, "super_bid": 超级出价或 null}\n</decision>',
+    SPEECH: '<strategy>\n仅自己可见的发言策略。\n</strategy>\n'
+            '<speech>\n其他玩家都能看到的公开发言。\n</speech>',
 }
-TASK_FORMATS["plan"] = TASK_FORMATS["bid"]
 LETTER_FORMAT = "<收件人名字>\n只有收件人能看到的私信。\n</收件人名字>"
 MAX_LETTERS = 2
-# 第 2 天起的出价只附这一句，完整格式在本局规划请求里。
+# 出价请求只附这一句，完整格式在本局规划请求里。
 BRIEF_BID_FORMAT = "请按本局规划时的格式提交：strategy 和 decision 两块，私信块可以不写，收件人下一次行动时才收到。"
 # 读取阵容时，玩家名也不能和这些标签相同，原因见 docs/letters.md 的"名字"。
-FIXED_TAGS = ("strategy", "decision", "speech")
+FIXED_TAGS = ("strategy", DECISION, SPEECH)
 
 
 @dataclass(frozen=True)
@@ -34,18 +35,27 @@ class OutputFormatError(ValueError):
     """可由模型重新提交修正的格式错误。"""
 
 
-def output_requirement(task: str, letters: LetterNames | None = None) -> str:
-    """完整格式说明；传了名单时加私信块，不传表示这个任务不能写信。"""
-    if task in ("memory", "summary"):
+@dataclass(frozen=True)
+class Blocks:
+    """分块提交的解析结果；body 是 speech 的正文，或 decision 解出的 JSON 对象。"""
+
+    strategy: str
+    body: str | dict
+    letters: list[dict]
+
+
+def output_requirement(second: str | None, letters: LetterNames | None = None) -> str:
+    """完整格式说明；second 是 strategy 之后那一块，None 表示不分块。传了名单时加私信块。"""
+    if second is None:
         return "请直接返回完整正文，正常换行，不加格式标签或 JSON 外壳。"
     hint = "请按以下格式提交完整结果，标签各占一行，块外只留空白：\n"
-    if task in ("bid", "plan"):
+    if second == DECISION:
         hint += "decision 是只含 bid 和 super_bid 的 JSON 对象，出价写不加引号的整数，不使用超级出价时填 null。\n"
     if letters is None:
-        return hint + TASK_FORMATS[task]
+        return hint + BLOCK_FORMATS[second]
     hint += (f"私信块可以不写，最多 {MAX_LETTERS} 块。标签是收件人的名字，可以写给{'、'.join(letters.recipients)}，"
              "每人最多 1 封，每封 200 字左右。收件人下一次行动时才收到，影响不了对方这一次的出价或发言。\n")
-    return f"{hint}{TASK_FORMATS[task]}\n{LETTER_FORMAT}"
+    return f"{hint}{BLOCK_FORMATS[second]}\n{LETTER_FORMAT}"
 
 
 def _marker_pattern(tags: tuple[str, ...]) -> re.Pattern:
@@ -63,18 +73,17 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     return result
 
 
-def parse_text_output(task: str, text: str, letters: LetterNames | None = None) -> dict | str:
-    """完整匹配协议边界，只裁剪字段两端空白，保留正文内部原文。
+def parse_text_output(second: str | None, text: str, letters: LetterNames | None = None) -> str | Blocks:
+    """完整匹配协议边界，只裁剪字段两端空白，保留正文内部原文；second 为 None 时返回正文。
 
     传了名单时，本场玩家名的标签也算块的边界，包括本人，用来报"写给自己"。
     """
-    if task in ("memory", "summary"):
+    if second is None:
         body = text.strip()
         if not body:
             raise OutputFormatError("正文不能为空白。")
-        return {"memory": body} if task == "memory" else body
+        return body
 
-    second = "decision" if task in ("bid", "plan") else "speech"
     names = () if letters is None else (letters.sender, *letters.recipients)
     markers = list(_marker_pattern((*FIXED_TAGS, *names)).finditer(text))
     expected = [("", "strategy"), ("/", "strategy"), ("", second), ("/", second)]
@@ -112,8 +121,8 @@ def parse_text_output(task: str, text: str, letters: LetterNames | None = None) 
     body = text[markers[2].end():markers[3].start()].strip()
     if not strategy or not body:
         raise OutputFormatError(f"strategy 与 {second} 都必须有非空正文。")
-    if second == "speech":
-        return {"strategy": strategy, "speech": body, "letters": written}
+    if second == SPEECH:
+        return Blocks(strategy, body, written)
     try:
         decision = json.loads(body, object_pairs_hook=_unique_object)
     except OutputFormatError:  # 保留重复字段的具体报错
@@ -122,4 +131,4 @@ def parse_text_output(task: str, text: str, letters: LetterNames | None = None) 
         raise OutputFormatError("decision 必须是一个完整 JSON 对象，不加代码围栏或尾随正文。") from exc
     if not isinstance(decision, dict) or set(decision) != {"bid", "super_bid"}:
         raise OutputFormatError("decision 必须且只能包含 bid 和 super_bid 两个字段。")
-    return {"strategy": strategy, **decision, "letters": written}
+    return Blocks(strategy, decision, written)

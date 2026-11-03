@@ -1,4 +1,4 @@
-"""个人赛任务：解析文本输出、校验出价，格式错误和违规出价共用一次纠错。"""
+"""五种任务的规格和输出：解析文本输出、校验出价，格式错误和违规出价共用一次纠错。"""
 
 from __future__ import annotations
 
@@ -12,10 +12,125 @@ from pydantic_ai.usage import UsageLimits
 from auction_game.llm.execution import AgentExecutor, ExecutionResult
 from auction_game.game.settings import GameSettings, validate_submission
 from auction_game.llm.client import ModelFactory
-from auction_game.agent.text_output import (BRIEF_BID_FORMAT, LetterNames, OutputFormatError, output_requirement,
-                                            parse_text_output)
+from auction_game.agent.text_output import (BRIEF_BID_FORMAT, DECISION, SPEECH, Blocks, LetterNames,
+                                            OutputFormatError, output_requirement, parse_text_output)
 
 Task = Literal["bid", "plan", "speech", "memory", "summary"]
+
+
+def _strategy_and_letters(strategy: str, letters: list[dict], result: str) -> list[str]:
+    """分块任务在私人日志里的小节：私有策略、结果，有信时再加私信。"""
+    lines = [f"### 私有策略\n\n{strategy}", result]
+    if letters:
+        lines.append("### 私信\n\n" + "\n\n".join(f"写给 {letter['to']}：{letter['text']}" for letter in letters))
+    return lines
+
+
+@dataclass(frozen=True)
+class BidOutput:
+    """出价和规划的结果；规划交的是本局第 1 天的出价。
+
+    解析出的 bid、super_bid 可能是任意 JSON 值，通过出价校验后才交给调用方。
+    """
+
+    strategy: str
+    bid: int
+    super_bid: int | None
+    letters: list[dict]
+
+    @classmethod
+    def from_parsed(cls, blocks: Blocks) -> BidOutput:
+        return cls(blocks.strategy, blocks.body["bid"], blocks.body["super_bid"], blocks.letters)
+
+    @property
+    def submission(self) -> tuple[int, int | None]:
+        return self.bid, self.super_bid
+
+    def to_log(self) -> dict:
+        return {"strategy": self.strategy, "bid": self.bid, "super_bid": self.super_bid, "letters": self.letters}
+
+    def render(self) -> list[str]:
+        super_bid = self.super_bid if self.super_bid is not None else "未使用"
+        return _strategy_and_letters(self.strategy, self.letters,
+                                     f"### 提交出价\n\n正常出价 {self.bid}；超级出价 {super_bid}")
+
+
+@dataclass(frozen=True)
+class SpeechOutput:
+    strategy: str
+    speech: str
+    letters: list[dict]
+
+    @classmethod
+    def from_parsed(cls, blocks: Blocks) -> SpeechOutput:
+        return cls(blocks.strategy, blocks.body, blocks.letters)
+
+    def to_log(self) -> dict:
+        return {"strategy": self.strategy, "speech": self.speech, "letters": self.letters}
+
+    def render(self) -> list[str]:
+        return _strategy_and_letters(self.strategy, self.letters, f"### 公开发言\n\n{self.speech}")
+
+
+@dataclass(frozen=True)
+class MemoryOutput:
+    memory: str
+    letters: tuple = ()  # 整理记忆不能写信
+
+    @classmethod
+    def from_parsed(cls, body: str) -> MemoryOutput:
+        return cls(body)
+
+    def to_log(self) -> dict:
+        return {"memory": self.memory}
+
+    def render(self) -> list[str]:
+        return [f"### 累计私有记忆\n\n{self.memory}"]
+
+
+@dataclass(frozen=True)
+class SummaryOutput:
+    text: str
+    letters: tuple = ()  # 观众总结不能写信
+
+    @classmethod
+    def from_parsed(cls, body: str) -> SummaryOutput:
+        return cls(body)
+
+    def to_log(self) -> str:
+        return self.text
+
+    def render(self) -> list[str]:
+        return [f"### 总结\n\n{self.text}"]
+
+
+TaskOutput = BidOutput | SpeechOutput | MemoryOutput | SummaryOutput
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    """一种任务的格式、校验和结果去向。
+
+    second 是 strategy 之后那一块，None 表示直接返回正文；decision 块的出价要通过出价校验。
+    history 是结果写回对话的方式：append 追加，reset 用记忆替换之前的对话，review 只读全场回顾、不写回。
+    brief 不为空时，请求后只附这一句格式提示，纠错时仍给完整格式。
+    """
+
+    name: Task
+    second: Literal["decision", "speech"] | None
+    output: type
+    can_write_letters: bool
+    history: Literal["append", "reset", "review"]
+    brief: str | None = None
+
+
+TASKS: dict[str, TaskSpec] = {
+    "bid": TaskSpec("bid", DECISION, BidOutput, True, "append", brief=BRIEF_BID_FORMAT),
+    "plan": TaskSpec("plan", DECISION, BidOutput, True, "append"),
+    "speech": TaskSpec("speech", SPEECH, SpeechOutput, True, "append"),
+    "memory": TaskSpec("memory", None, MemoryOutput, False, "reset"),
+    "summary": TaskSpec("summary", None, SummaryOutput, False, "review"),
+}
 
 
 @dataclass
@@ -24,41 +139,20 @@ class AuctionDeps:
     coins: int
 
 
-def render_task_result(result: dict | str) -> list[str]:
-    """把任务结果渲染成私人日志里的小节。"""
-    if not isinstance(result, dict):
-        return [f"### 总结\n\n{result}"]
-    lines = []
-    if "strategy" in result:
-        lines.append(f"### 私有策略\n\n{result['strategy']}")
-    if "memory" in result:
-        lines.append(f"### 累计私有记忆\n\n{result['memory']}")
-    if "speech" in result:
-        lines.append(f"### 公开发言\n\n{result['speech']}")
-    elif "bid" in result:
-        super_bid = result["super_bid"]
-        lines.append(f"### 提交出价\n\n正常出价 {result['bid']}；超级出价 "
-                     f"{super_bid if super_bid is not None else '未使用'}")
-    if result.get("letters"):
-        lines.append("### 私信\n\n" + "\n\n".join(f"写给 {letter['to']}：{letter['text']}"
-                                                  for letter in result["letters"]))
-    return lines
-
-
-def make_agent(model, task: Task, letters: LetterNames | None = None):
+def make_agent(model, spec: TaskSpec, letters: LetterNames | None = None):
     """letters 是这个任务可以写信的名单，不传表示不能写信。"""
-    def parse(text: str) -> dict | str:
+    def parse(text: str) -> TaskOutput:
         try:
-            return parse_text_output(task, text, letters)
+            return spec.output.from_parsed(parse_text_output(spec.second, text, letters))
         except OutputFormatError as exc:
-            raise ModelRetry(f"{exc}\n{output_requirement(task, letters)}") from exc
+            raise ModelRetry(f"{exc}\n{output_requirement(spec.second, letters)}") from exc
 
     agent = Agent(model, output_type=TextOutput(parse), deps_type=AuctionDeps, retries=1)
 
     @agent.output_validator
-    def validate(ctx: RunContext[AuctionDeps], result):
-        if task in ("bid", "plan"):
-            reason = validate_submission(result["bid"], result["super_bid"], ctx.deps.coins, ctx.deps.game)
+    def validate(ctx: RunContext[AuctionDeps], result: TaskOutput) -> TaskOutput:
+        if spec.second == DECISION:
+            reason = validate_submission(result.bid, result.super_bid, ctx.deps.coins, ctx.deps.game)
             if reason:
                 raise ModelRetry(f"{reason}\n请按原格式重新提交完整结果。")
         return result
@@ -72,11 +166,9 @@ class TaskRunner:
     def __init__(self, factory: ModelFactory):
         self.executor = AgentExecutor(factory)
 
-    def __call__(self, task: Task, prompt: str, history: list[ModelMessage], *,
-                 game: GameSettings, coins: int = 0, letters: LetterNames | None = None,
-                 brief_format: bool = False) -> ExecutionResult:
-        """brief_format 只用于第 2 天起的出价：提示后只接一句格式提示，纠错时仍给完整格式。"""
-        requirement = BRIEF_BID_FORMAT if brief_format else output_requirement(task, letters)
+    def __call__(self, spec: TaskSpec, prompt: str, history: list[ModelMessage], *,
+                 game: GameSettings, coins: int = 0, letters: LetterNames | None = None) -> ExecutionResult:
+        requirement = spec.brief or output_requirement(spec.second, letters)
         # retries=1 是纠错次数；request_limit 另外限定整个任务最多两次请求。
-        return self.executor(make_agent(None, task, letters), f"{prompt}\n\n{requirement}", history,
+        return self.executor(make_agent(None, spec, letters), f"{prompt}\n\n{requirement}", history,
                              deps=AuctionDeps(game, coins), usage_limits=UsageLimits(request_limit=2))

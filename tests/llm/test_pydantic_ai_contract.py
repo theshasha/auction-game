@@ -7,7 +7,7 @@ import pytest
 from pydantic_ai.messages import TextPart
 
 from auction_game.llm.execution import CallFailedError, OutputFailedError
-from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.tasks import TASKS, TaskRunner
 from tests.support.factories import TEST_GAME, text_reply
 from tests.support.wire import PROTOCOLS, MODEL, SYSTEM, GOOD, Harness, reply, run, make_agent
 
@@ -18,7 +18,7 @@ def test_real_sdk_stream_contract(protocol):
         data = dict(GOOD, super_bid=0)
         async with Harness(protocol, [reply(data)]) as h:
             result = await run(make_agent(h.model), coins=4)
-            assert result.output == {**data, "letters": []}
+            assert result.output.to_log() == {**data, "letters": []}
             assert len(h.requests) == 1
             request, body = h.requests[0]
             assert request.url.path == {"chat": "/v1/chat/completions", "responses": "/v1/responses",
@@ -47,15 +47,15 @@ def test_real_sdk_stream_contract(protocol):
 def test_mixed_corrections_share_two_request_limit(protocol, first, second):
     h = Harness(protocol, [first, second])
     with pytest.raises(OutputFailedError):
-        TaskRunner(h.factory)("plan", "plan", [], game=TEST_GAME, coins=6)
+        TaskRunner(h.factory)(TASKS["plan"], "plan", [], game=TEST_GAME, coins=6)
     assert len(h.requests) == 2 and h.closes == 1
 
 
 @pytest.mark.parametrize("value", ["null", 2.0])
 def test_non_integer_super_bid_gets_correction(value):
     h = Harness("chat", [reply(dict(GOOD, super_bid=value)), reply()])
-    result = TaskRunner(h.factory)("plan", "plan", [], game=TEST_GAME, coins=6)
-    assert result.output["super_bid"] is None and len(h.requests) == 2
+    result = TaskRunner(h.factory)(TASKS["plan"], "plan", [], game=TEST_GAME, coins=6)
+    assert result.output.super_bid is None and len(h.requests) == 2
     assert "super_bid" in json.dumps(h.requests[1][1]["messages"][-1], ensure_ascii=False)
 
 
@@ -70,5 +70,5 @@ def test_hallucinated_tool_call_is_resent_as_incomplete_stream():
     tool_call = [chunk({"role": "assistant", "tool_calls": [call]}), chunk({}, "tool_calls"), b"data: [DONE]\n\n"]
     h = Harness("chat", [list(tool_call) for _ in range(4)])
     with pytest.raises(CallFailedError, match="IncompleteStream"):
-        TaskRunner(h.factory)("bid", "today", [], game=TEST_GAME, coins=6)
+        TaskRunner(h.factory)(TASKS["bid"], "today", [], game=TEST_GAME, coins=6)
     assert len(h.requests) == 4 and h.closes == 1

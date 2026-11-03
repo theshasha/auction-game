@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
+from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput
 from auction_game.flow import director as director_module
 from auction_game.llm.execution import OutputFailedError
 from tests.support.factories import (TEST_GAME, StubPlayer, bid_reply, continuous_controller, fake_task_runner,
@@ -18,7 +19,7 @@ from auction_game.game.settings import GameSettings
 
 
 class RecordingPlayer:
-    """记录收到的任务，发言返回固定文本。"""
+    """记下每个任务的 (这一轮的标题, 提示)，发言返回固定文本。"""
 
     def __init__(self, name):
         self.name, self.calls = name, []
@@ -29,16 +30,17 @@ class RecordingPlayer:
     def rollback(self, checkpoint):
         pass
 
-    def give_speech(self, text, phase, context):
-        self.calls.append((phase, text))
-        return f"发言{self.name}", []
+    def give_speech(self, text, title):
+        self.calls.append((title, text))
+        return SpeechOutput("策略", f"发言{self.name}", [])
 
-    def plan_strategy(self, text, phase, context):
-        self.calls.append((phase, text))
-        return (0, None), []
+    def plan_strategy(self, text, title):
+        self.calls.append((title, text))
+        return BidOutput("策略", 0, None, [])
 
-    def save_memory(self, text, phase, context):
-        self.calls.append((phase, text))
+    def save_memory(self, text, title):
+        self.calls.append((title, text))
+        return MemoryOutput("记忆")
 
 
 def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp_path):
@@ -68,10 +70,11 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
     director.opening()
     director.match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
     assert players[0].calls == [
-        ("opening_speech", "开局"), ("opening_plan", "规划 {'乙': '发言乙'}"),
-        ("match_2_speech", "局末 2"), ("match_2_memory", "记忆 {'乙': '发言乙'} 2"), ("match_2_plan", "规划 [1, 2]"),
+        ("开局发言", "开局"), ("第 1 局策略规划（含首日出价）", "规划 {'乙': '发言乙'}"),
+        ("第 2 局局末发言", "局末 2"), ("第 2 局累计私有记忆", "记忆 {'乙': '发言乙'} 2"),
+        ("第 3 局策略规划（含首日出价）", "规划 [1, 2]"),
     ]
-    assert players[1].calls[1] == ("opening_plan", "规划 {'甲': '发言甲'}")
+    assert players[1].calls[1] == ("第 1 局策略规划（含首日出价）", "规划 {'甲': '发言甲'}")
 
 
 def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch, tmp_path):
@@ -81,13 +84,13 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
                "丙": [{"to": "甲", "text": "丙的信"}]}
 
     class OrderedPlayer(RecordingPlayer):
-        def give_speech(self, text, phase, context):
+        def give_speech(self, text, title):
             if self.name == "乙":
                 assert last_done.wait(timeout=5)
-            speech, _ = super().give_speech(text, phase, context)
+            output = super().give_speech(text, title)
             if self.name == "丙":
                 last_done.set()
-            return speech, letters[self.name]
+            return SpeechOutput(output.strategy, output.speech, letters[self.name])
 
     players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
     director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=TEST_GAME)
@@ -96,7 +99,7 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
     director.opening()
     public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
-    assert players[1].calls[-1] == ("opening_plan", "规划 ['乙', '丙'] 收信 ['乙', '丙']")
+    assert players[1].calls[-1] == ("第 1 局策略规划（含首日出价）", "规划 ['乙', '丙'] 收信 ['乙', '丙']")
     assert director.paths.letters.read_text(encoding="utf-8").endswith(
         "\n## 开局发言\n\n【乙 → 甲】乙的信\n\n【甲 → 丙】甲的第一封\n\n【甲 → 乙】甲的第二封\n\n【丙 → 甲】丙的信\n")
 
@@ -105,7 +108,8 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
     speech = '第一段说"6 真香"。\n\n第二段。' + "很" * 600
     runner = fake_task_runner([speech_reply(speech)])
     player = make_player(runner, tmp_path)
-    assert player.give_speech("请发言", "opening_speech") == (speech, [])
+    output = player.give_speech("请发言", "开局发言")
+    assert (output.speech, output.letters) == (speech, [])
     assert len(runner.calls) == 1
     entry = task_entries(player.log.path)[-1]
     assert entry["result"] == {**speech_reply(speech), "letters": []}
@@ -118,7 +122,7 @@ def test_only_public_speech_returned_without_hard_truncation(tmp_path):
 def test_speech_schema_failure_gets_one_correction(invalid, tmp_path):
     runner = fake_task_runner([invalid, speech_reply("补上的发言")])
     player = make_player(runner, tmp_path)
-    assert player.give_speech("请发言", "opening_speech") == ("补上的发言", [])
+    assert player.give_speech("请发言", "开局发言").speech == "补上的发言"
     assert len(runner.calls) == 2
 
 
@@ -127,7 +131,7 @@ def test_failed_speech_leaves_history_unchanged(tmp_path):
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
-        player.give_speech("请发言", "opening_speech")
+        player.give_speech("请发言", "开局发言")
     assert player.messages == before
 
 
@@ -135,9 +139,9 @@ def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
     from pydantic_ai.messages import TextPart
     runner = fake_task_runner([bid_reply(1), speech_reply(" "), speech_reply(" ")])
     player = make_player(runner, tmp_path)
-    player.plan_strategy("plan", "opening_plan")
+    player.plan_strategy("plan", "第 1 局策略规划（含首日出价）")
     with pytest.raises(OutputFailedError):
-        player.give_speech("speech", "match_1_speech")
+        player.give_speech("speech", "第 1 局局末发言")
     entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     # SDK 合并历史末尾请求后，失败审计仍只包含本任务的两次原文。
@@ -150,7 +154,7 @@ def test_blank_summary_gets_output_correction(tmp_path):
     runner = fake_task_runner(["  \n", "给观众的话"])
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
-    assert player.final_summary("总结") == "给观众的话"
+    assert player.final_summary("总结", "观众总结（仅观众可见）").text == "给观众的话"
     assert len(runner.calls) == 2 and player.messages == before
     assert "retry-prompt" in ModelMessagesTypeAdapter.dump_json(runner.calls[-1]).decode()
 
@@ -160,7 +164,7 @@ def test_double_blank_summary_fails_and_keeps_history(tmp_path):
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
-        player.final_summary("总结")
+        player.final_summary("总结", "观众总结（仅观众可见）")
     assert player.messages == before and len(runner.calls) == 2
 
 
@@ -169,15 +173,15 @@ def test_replan_transaction_and_round_rollback(fails, tmp_path):
     replies = [bid_reply("bad"), bid_reply(99)] if fails else [bid_reply(4)]
     runner = fake_task_runner([bid_reply(2, 6), *replies])
     player = make_player(runner, tmp_path)
-    player.plan_strategy("旧规划", "opening_plan")
+    player.plan_strategy("旧规划", "第 1 局策略规划（含首日出价）")
     checkpoint = player.checkpoint()
     before = deepcopy(player.messages)
     if fails:
         with pytest.raises(OutputFailedError):
-            player.plan_strategy("新规划", "match_1_plan")
+            player.plan_strategy("新规划", "第 2 局策略规划（含首日出价）")
         assert player.messages == before
     else:
-        assert player.plan_strategy("新规划", "match_1_plan") == ((4, None), [])
+        assert player.plan_strategy("新规划", "第 2 局策略规划（含首日出价）").submission == (4, None)
     player.rollback(checkpoint)
     assert player.messages == before
 
@@ -205,7 +209,7 @@ def test_director_opening_plan_preserves_public_boundary_and_keeps_day_one_bids(
 
 
 def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
-    from auction_game.agent.text_output import output_requirement
+    from auction_game.agent.text_output import SPEECH, output_requirement
 
     player = make_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path)
     director = director_module.AIDirector([player], continuous_controller(), tmp_path, game=TEST_GAME)
@@ -213,7 +217,7 @@ def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
                         lambda standings, log, *, received: "请发表最终感言")
     monkeypatch.setattr(director_module.prompts, "final_summary_request", lambda others: "请总结")
     director.final([], None)
-    assert request_text(player.task_runner, 0) == "请发表最终感言\n\n" + output_requirement("speech")
+    assert request_text(player.task_runner, 0) == "请发表最终感言\n\n" + output_requirement(SPEECH)
 
 
 def to_bravo(reply, text, to="Bravo"):
@@ -311,11 +315,11 @@ def test_run_speaks_between_matches_only_and_plays_playoffs_until_unique(tmp_pat
     assert result.playoff_count == 1 and not result.playoff_cap_hit
     assert [(entry.player, entry.total_score) for entry in result.final_standings] == [("甲", 2), ("乙", 1), ("丙", 0)]
     # 每局第 1 天的出价由规划交出；最后一局之后没有局末发言，直接最终感言。
-    assert players[0].phases == [
-        "opening_speech", "opening_plan", "bid_1_2",
-        "match_1_speech", "match_1_memory", "match_1_plan", "bid_2_2",
-        "match_2_speech", "match_2_memory", "match_2_plan", "bid_3_2",
-        "final_speech", "final_summary",
+    assert players[0].titles == [
+        "开局发言", "第 1 局策略规划（含首日出价）", "第 1 局第 2 天出价",
+        "第 1 局局末发言", "第 1 局累计私有记忆", "第 2 局策略规划（含首日出价）", "第 2 局第 2 天出价",
+        "第 2 局局末发言", "第 2 局累计私有记忆", "第 3 局策略规划（含首日出价）", "第 3 局第 2 天出价",
+        "最终感言", "观众总结（仅观众可见）",
     ]
 
 
@@ -324,8 +328,8 @@ def test_run_stops_at_playoff_cap_and_keeps_tied_champions(tmp_path):
     director, players, result = run_stub_game(tmp_path, game, {})
     assert [log.is_playoff for log in result.match_logs] == [False, True]
     assert result.playoff_cap_hit
-    assert players[0].phases == ["opening_speech", "opening_plan", "match_1_speech", "match_1_memory",
-                                 "match_1_plan", "final_speech", "final_summary"]
+    assert players[0].titles == ["开局发言", "第 1 局策略规划（含首日出价）", "第 1 局局末发言", "第 1 局累计私有记忆",
+                                 "第 2 局策略规划（含首日出价）", "最终感言", "观众总结（仅观众可见）"]
 
 
 def test_run_publishes_each_match_and_new_match_resets_coins(tmp_path, capsys):

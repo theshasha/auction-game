@@ -10,7 +10,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from auction_game.agent import prompts
 from auction_game.llm.execution import OutputFailedError
-from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.tasks import TASKS, TaskRunner
 from auction_game.flow.director import AIDirector
 from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
                                      make_log, make_logs, make_player, make_standings, request_text, speech_reply,
@@ -43,7 +43,7 @@ def test_cleaned_history_preserves_phase_without_mutating_audit(protocol, monkey
     h = Harness(protocol, [reply()])
     extend_openai_profile(monkeypatch, openai_supports_phase=True,
                           openai_supports_encrypted_reasoning_content=True)
-    TaskRunner(h.factory)("bid", "new task", cleaned, game=make_ai_obs().game, coins=6)
+    TaskRunner(h.factory)(TASKS["bid"], "new task", cleaned, game=make_ai_obs().game, coins=6)
     wire = json.dumps(h.requests[0][1])
     for marker in ("secret", "old_signature_value", "msg_old", "resp_old", "discard"):
         assert marker not in wire
@@ -62,7 +62,7 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         extend_openai_profile(monkeypatch, openai_supports_encrypted_reasoning_content=True)
         h.factory = replace(h.factory, model_settings={"openai_previous_response_id": "auto"} if auto else {})
     player = make_player(TaskRunner(h.factory), tmp_path)
-    player.plan_strategy("original task", "opening_plan")
+    player.plan_strategy("original task", "第 1 局策略规划（含首日出价）")
     assert len(h.requests) == 2
     # SDK 自行重放任务内纠错：thinking 与错误输出原文保持完整。
     correction = json.dumps(h.requests[1][1])
@@ -80,9 +80,9 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         assert "encrypted_old_reasoning" in audit and "resp_1" in audit
     if protocol == "anthropic":
         assert "signed_old_reasoning" in audit and "redacted_old_reasoning" in audit
-    player.bid(make_ai_obs(), {})[0]
+    player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     before = player.checkpoint()
-    assert player.final_summary("audience review") == "audience"
+    assert player.final_summary("audience review", "观众总结（仅观众可见）").text == "audience"
     assert player.checkpoint() == before
     for _, body in h.requests[2:]:
         wire = json.dumps(body, ensure_ascii=False)
@@ -103,17 +103,17 @@ def test_sdk_plain_memory_and_cross_match_replacement(protocol, tmp_path):
     h = Harness(protocol, [reply(speech_reply("old public signal")), reply({"memory": "cumulative-v1"}),
                            reply(bid_reply(1)), reply({"memory": "cumulative-v2"}), reply(bid_reply(2))])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    player.give_speech("old match raw", "match_1_speech")
-    player.save_memory(prompts.memory_request({"Bravo": "other signal"}, 1), "match_1_memory")
+    player.give_speech("old match raw", "第 1 局局末发言")
+    player.save_memory(prompts.memory_request({"Bravo": "other signal"}, 1), "第 1 局累计私有记忆")
     assert "不加格式标签或 JSON 外壳" in json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert player.memory == "cumulative-v1"
-    player.plan_strategy(prompts.next_match_plan_request(make_logs(1), [], player.game), "match_1_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(1), [], player.game), "第 2 局策略规划（含首日出价）")
     wire = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert "cumulative-v1" in wire and "最新累计成绩" in wire and "第 2 局" in wire
     assert "old match raw" not in wire and "old public signal" not in wire and "other signal" not in wire
-    player.save_memory("second match signals", "match_2_memory")
+    player.save_memory("second match signals", "第 2 局累计私有记忆")
     assert "cumulative-v1" in json.dumps(h.requests[-1][1])
-    player.plan_strategy(prompts.next_match_plan_request(make_logs(2), [], player.game), "match_2_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(2), [], player.game), "第 3 局策略规划（含首日出价）")
     wire = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert "cumulative-v2" in wire and "cumulative-v1" not in wire
     assert "second match signals" not in wire and len(h.requests) == h.closes == 5
@@ -125,26 +125,26 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
                                bid_reply(1), speech_reply("match two signal"), {"memory": long_memory},
                                bid_reply(2), "review"])
     player = make_player(runner, tmp_path)
-    player.give_speech("first match raw", "opening_speech")
+    player.give_speech("first match raw", "开局发言")
     checkpoint = player.checkpoint()
-    player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}, 1), "match_1_memory")
+    player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}, 1), "第 1 局累计私有记忆")
     assert "own raw signal" in encoded(runner.calls[-1]) and "other raw signal" in encoded(runner.calls[-1])
     assert player.memory == "第一版经验"
     assert "first match raw" not in encoded(player.messages)
     standings = make_standings({"Alpha": [3], "Bravo": [1]})
-    player.plan_strategy(prompts.next_match_plan_request(make_logs(1), standings, player.game), "match_1_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(1), standings, player.game), "第 2 局策略规划（含首日出价）")
     second_input = encoded(runner.calls[-1])
     assert "第一版经验" in second_input and "最新累计成绩" in second_input
     assert "own raw signal" not in second_input and "first match raw" not in second_input
-    player.give_speech("second match raw", "match_2_speech")
-    player.save_memory("all second match signals", "match_2_memory")
+    player.give_speech("second match raw", "第 2 局局末发言")
+    player.save_memory("all second match signals", "第 2 局累计私有记忆")
     assert "第一版经验" in encoded(runner.calls[-1]) and "second match raw" in encoded(runner.calls[-1])
     assert player.memory == long_memory and "第一版经验" not in encoded(player.messages)
-    player.plan_strategy(prompts.next_match_plan_request(make_logs(2), standings, player.game), "match_2_plan")
+    player.plan_strategy(prompts.next_match_plan_request(make_logs(2), standings, player.game), "第 3 局策略规划（含首日出价）")
     third_input = encoded(runner.calls[-1])
     assert long_memory in third_input and "second match raw" not in third_input
     assert "第一版经验" not in third_input and len(runner.calls) == 6  # 超软目标只请求一次
-    player.final_summary("review all matches")
+    player.final_summary("review all matches", "观众总结（仅观众可见）")
     assert "first match raw" in encoded(runner.calls[-1]) and "second match raw" in encoded(runner.calls[-1])
     entries = task_entries(player.log.path)
     assert entries[4]["history_reset"] == f"【累计私有记忆，仅自己可见】\n{long_memory}"
@@ -159,16 +159,16 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
 def test_memory_requires_nonempty_plain_body_and_shared_correction(invalid, tmp_path):
     runner = fake_task_runner([invalid, {"memory": "saved"}])
     player = make_player(runner, tmp_path)
-    player.save_memory("整理", "match_1_memory")
+    player.save_memory("整理", "第 1 局累计私有记忆")
     assert player.memory == "saved" and len(runner.calls) == 2
 
 
 def test_failed_memory_keeps_context_review_cache_and_memory(tmp_path):
     player = make_player(fake_task_runner([bid_reply(2), {"memory": " "}, {"memory": " "}]), tmp_path)
-    player.plan_strategy("old context", "opening_plan")
+    player.plan_strategy("old context", "第 1 局策略规划（含首日出价）")
     before = deepcopy(player.checkpoint())
     with pytest.raises(OutputFailedError):
-        player.save_memory("整理", "match_1_memory")
+        player.save_memory("整理", "第 1 局累计私有记忆")
     assert player.checkpoint() == before
 
 

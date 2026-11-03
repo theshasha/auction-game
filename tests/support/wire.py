@@ -10,7 +10,7 @@ from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
 from tests.support.factories import TEST_GAME, text_reply
 from auction_game.llm.client import ModelFactory
-from auction_game.agent.tasks import AuctionDeps, make_agent as production_agent
+from auction_game.agent.tasks import AuctionDeps, TASKS, make_agent as production_agent
 
 
 PROTOCOLS = ("chat", "responses", "anthropic")
@@ -20,7 +20,7 @@ GOOD = {"strategy": "keep private reasoning", "bid": 2, "super_bid": None}
 
 
 def make_agent(model):
-    return production_agent(model, "bid")
+    return production_agent(model, TASKS["bid"])
 
 
 def sse(protocol, data=GOOD, *, ending="ok", text=None, thinking=None):

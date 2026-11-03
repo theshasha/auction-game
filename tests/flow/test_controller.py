@@ -27,7 +27,7 @@ from auction_game.flow.director import AIDirector
 from auction_game.flow.controller import Controller, RoundTask, TournamentAborted
 from auction_game.flow import controller as controller_module
 from auction_game.llm.execution import CallFailedError, TaskCancelledError
-from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.tasks import MemoryOutput, TaskRunner
 
 
 @contextmanager
@@ -134,10 +134,10 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
                                           {"memory": "bravo cumulative"}]), tmp_path, name="Bravo")
     players = [alpha, bravo]
     for player in players:
-        player.plan_strategy("prior match context", "opening_plan")
+        player.plan_strategy("prior match context", "第 1 局策略规划（含首日出价）")
     before = [p.checkpoint() for p in players]
     tasks = [RoundTask(key=p.name, participant=p,
-                       fn=lambda p=p: p.save_memory("all published speeches", "match_1_memory")) for p in players]
+                       fn=lambda p=p: p.save_memory("all published speeches", "第 1 局累计私有记忆")) for p in players]
     with running(controller, lambda: controller.run_round(tasks, "累计记忆")) as (thread, outcome):
         assert gate.wait(timeout=5)
         assert alpha.memory == "alpha cumulative" and len(alpha.messages) == 2
@@ -149,7 +149,8 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
             assert isinstance(outcome.get("error"), TournamentAborted)
             assert [p.checkpoint() for p in players] == before
         else:
-            assert outcome.get("result") == {"Alpha": None, "Bravo": None}
+            assert outcome.get("result") == {"Alpha": MemoryOutput("alpha cumulative"),
+                                             "Bravo": MemoryOutput("bravo cumulative")}
             assert alpha.checkpoint() == successful and bravo.memory == "bravo cumulative"
             assert len(alpha.task_runner.calls) == 2 and len(bravo.task_runner.calls) == 3
 
@@ -583,7 +584,7 @@ class TestParallelRound:
         runner = TaskRunner(replace(h.factory, signals=controller.signals))
         player = make_player(runner, tmp_path, name="Alpha")
         before = player.checkpoint()
-        tasks = [RoundTask("Alpha", lambda: player.bid(make_ai_obs(day=2), {})[0], player)]
+        tasks = [RoundTask("Alpha", lambda: player.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价").submission, player)]
         with running(controller, lambda: controller.run_round(tasks, "出价")) as (thread, outcome):
             deadline = time.monotonic() + 5
             while not h.requests and time.monotonic() < deadline:
@@ -681,8 +682,8 @@ class TestParallelRound:
         bravo_chat = fake_task_runner([*failures, bid_reply(2)])
         bravo = make_player(bravo_chat, tmp_path, name="Bravo")
         tasks = [
-            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.bid(make_ai_obs(), {})[0]),
-            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.bid(make_ai_obs(), {})[0]),
+            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission),
+            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission),
         ]
         with running(controller, lambda: controller.run_round(tasks, "测试轮")) as (thread, outcome):
             assert gate.wait(timeout=5)
@@ -742,8 +743,8 @@ class TestParallelRound:
         bravo = make_player(fake_task_runner([bravo_chat, bravo_chat]), tmp_path, name="Bravo")
         checkpoints = [p.checkpoint() for p in (alpha, bravo)]
         tasks = [
-            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.bid(make_ai_obs(), {})[0]),
-            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.bid(make_ai_obs(), {})[0]),
+            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission),
+            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission),
         ]
         with running(controller, lambda: controller.run_round(tasks, "测试轮"),
                      release_bravo) as (thread, outcome):

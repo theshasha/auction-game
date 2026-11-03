@@ -93,12 +93,14 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     assert "【你的人设】" not in system["content"] and "不要被人设" not in system["content"]
     entries = task_entries(paths.player(1))
     assert len(entries) == expected_calls
-    assert [entry["phase"] for entry in entries[:3]] == ["opening_speech", "opening_plan", "bid"]
+    assert [entry["title"] for entry in entries[:3]] == ["开局发言", "第 1 局策略规划（含首日出价）", "第 1 局第 2 天出价"]
     assert [entry["context"] for entry in entries[:3]] == ["开局发言", "第 1 局策略规划（含首日出价）", "第 1 局第 2 天"]
     assert not any(entry["context"].endswith("第 1 天") for entry in entries if entry["task"] == "bid")
-    assert {entry["context"] for entry in entries if entry["phase"] == "match_1_plan"} == {"第 2 局策略规划（含首日出价）"}
-    assert not any(entry["phase"] == f"match_{len(matches)}_memory" for entry in entries)
-    assert entries[-2]["phase"] == "final_speech" and entries[-1]["phase"] == "final_summary"
+    assert [entry["title"] for entry in entries if entry["task"] == "plan"] == [
+        f"第 {index} 局策略规划（含首日出价）" for index in range(1, len(matches) + 1)]
+    assert [entry["title"] for entry in entries if entry["task"] == "memory"] == [
+        f"第 {index} 局累计私有记忆" for index in range(1, len(matches))]
+    assert entries[-2]["title"] == "最终感言" and entries[-1]["title"] == "观众总结（仅观众可见）"
     for entry in entries:
         assert entry["status"] == "success" and not entry["request_errors"]
         audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
@@ -109,7 +111,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
             assert set(result) == {"memory"}
             assert entry["history_reset"] == f"【累计私有记忆，仅自己可见】\n{result['memory']}"
         if entry["task"] == "plan":
-            match_index = 1 if entry["phase"] == "opening_plan" else int(entry["phase"].split("_")[1]) + 1
+            match_index = int(re.match(r"第 (\d+) 局", entry["title"])[1])
             actual = matches[match_index - 1]["match"]["days"][0]["players"][0]
             assert actual["player"] == names[0] and result["bid"] == actual["bid"]
     markdown = paths.player(1, readable=True).read_text(encoding="utf-8")
@@ -135,10 +137,10 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     last_bid = [entry for entry in entries if entry["task"] == "bid"][-1]
     assert last_bid["context"] == f"第 {len(matches)} 局第 {game.max_days} 天"
     last_letter = last_bid["result"]["letters"][0]["text"]
-    receiver = {entry["phase"]: entry for entry in task_entries(paths.player(2))}
-    for phase, written, letter in (("opening_plan", "在开局发言时", first_letter),
-                                   ("final_speech", "在本局最后一天出价时", last_letter)):
-        prompt = [part["content"] for message in receiver[phase]["messages"]
+    receiver = {entry["title"]: entry for entry in task_entries(paths.player(2))}
+    for title, written, letter in (("第 1 局策略规划（含首日出价）", "在开局发言时", first_letter),
+                                   ("最终感言", "在本局最后一天出价时", last_letter)):
+        prompt = [part["content"] for message in receiver[title]["messages"]
                   for part in message["parts"] if part["part_kind"] == "user-prompt"][-1]
         assert f"以下是其他玩家{written}写给你的私信：\n\n【甲】{letter}\n\n" in prompt
 

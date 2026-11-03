@@ -2,7 +2,7 @@
 
 ## 按任务查代码
 
-- `auction_game/agent/`：提示文字在 `prompts.py`，文本格式与解析在 `text_output.py`，出价校验和 Agent 组装在 `tasks.py`，玩家对话历史在 `player.py`，任务日志在 `log.py`。
+- `auction_game/agent/`：提示文字在 `prompts.py`，文本格式与解析在 `text_output.py`；五种任务的规格和输出、出价校验和 Agent 组装在 `tasks.py`；玩家对话历史在 `player.py`，任务日志在 `log.py`。
 - `auction_game/llm/`：任务执行在 `execution.py`，协议和网络请求在 `client.py`。
 - 发言、出价、记忆和规划的轮次以及私信送达在 `auction_game/flow/`，改之前读 `auction_game/flow/AGENTS.md`。
 - 私信的规则、格式、送达和日志见 `docs/letters.md`，改私信前先读。

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from auction_game.agent import prompts
 from auction_game.agent.player import AIPlayer
+from auction_game.agent.tasks import TaskOutput
 from auction_game.flow.controller import Controller, RoundTask
 from auction_game.game.engine import MatchState, compute_standings
 from auction_game.game.settings import GameSettings
@@ -53,74 +54,77 @@ class AIDirector:
         self.final(standings, logs[-1])
         return TournamentResult(logs, standings)
 
-    def _run_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], tuple[Any, list[dict]]]
-                   ) -> dict[str, Any]:
-        """全员执行 run(玩家, 收到的信)，run 返回 (结果, 写的信)；按配置中的玩家顺序返回结果。
+    def _run_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], TaskOutput]) -> dict[str, TaskOutput]:
+        """全员执行 run(玩家, 收到的信)；按配置中的玩家顺序返回各人的输出。
 
-        label 也是失败日志和 letters.md 的节标题。收到的信在轮开始前取出，补跑时不变。controller.run_round
-        只在整轮成功并确认后返回，这时才记下这一轮写的信、再用它们替换邮箱，所以退出时邮箱仍是轮开始时的状态。
+        label 是这一轮的标题，也是私人日志、失败公告和 letters.md 的节标题。收到的信在轮开始前取出，补跑时不变。
+        controller.run_round 只在整轮成功并确认后返回，这时才记下这一轮写的信、再用它们替换邮箱，
+        所以退出时邮箱仍是轮开始时的状态。
         """
         inbox = self.mailbox
         tasks = [RoundTask(key=player.name, participant=player,
                            fn=lambda player=player: run(player, inbox.get(player.name, {})))
                  for player in self.players]
         results = self.controller.run_round(tasks, label)
-        written = {player.name: results[player.name][1] for player in self.players}
-        record_letters(self.paths, label, [(sender, letter["to"], letter["text"])
-                                           for sender, sent in written.items() for letter in sent])
+        outputs = {player.name: results[player.name] for player in self.players}
+        letters = [(sender, letter["to"], letter["text"]) for sender, output in outputs.items()
+                   for letter in output.letters]
+        record_letters(self.paths, label, letters)
         mailbox: dict[str, dict[str, str]] = {}
-        for sender, sent in written.items():
-            for letter in sent:
-                mailbox.setdefault(letter["to"], {})[sender] = letter["text"]
+        for sender, to, text in letters:
+            mailbox.setdefault(to, {})[sender] = text
         self.mailbox = mailbox
-        return {player.name: results[player.name][0] for player in self.players}
+        return outputs
 
     @staticmethod
     def _others(speeches: dict[str, str], exclude: str) -> dict[str, str]:
         return {name: text for name, text in speeches.items() if name != exclude}
 
+    def _speech_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], TaskOutput]) -> dict[str, str]:
+        """发言或感言的一轮：公布并返回各人的公开发言。"""
+        speeches = {name: output.speech for name, output in self._run_round(label, run).items()}
+        publish_speeches(self.paths, label, speeches)
+        return speeches
+
+    def _submission_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], TaskOutput]) -> dict[str, Bid]:
+        """出价或规划的一轮：返回各人交的出价。"""
+        return {name: output.submission for name, output in self._run_round(label, run).items()}
+
     def bid_round(self, observations: dict[str, Observation]) -> dict[str, Bid]:
         """第 2 天起的出价轮；observations 是玩家到当天能看到的信息。"""
         sample = next(iter(observations.values()))  # 同一轮内所有玩家的局/天相同
-        return self._run_round(f"第 {sample.match_index} 局第 {sample.day} 天出价",
-                               lambda p, received: p.bid(observations[p.name], received))
+        label = f"第 {sample.match_index} 局第 {sample.day} 天出价"
+        return self._submission_round(label, lambda p, received: p.bid(observations[p.name], received, label))
 
     def opening(self) -> dict[str, Bid]:
         """开局发言和第 1 局规划，返回规划交出的第 1 天出价。"""
         label = "开局发言"
-        speeches = self._run_round(label, lambda p, _: p.give_speech(
-            prompts.opening_speech_request(), "opening_speech", label))
-        publish_speeches(self.paths, label, speeches)
+        speeches = self._speech_round(label, lambda p, _: p.give_speech(prompts.opening_speech_request(), label))
         plan_label = "第 1 局策略规划（含首日出价）"
-        return self._run_round(plan_label, lambda p, received: p.plan_strategy(
-            prompts.opening_plan_request(self._others(speeches, p.name), self.game, received=received),
-            "opening_plan", plan_label))
+        return self._submission_round(plan_label, lambda p, received: p.plan_strategy(
+            prompts.opening_plan_request(self._others(speeches, p.name), self.game, received=received), plan_label))
 
     def match_end(self, logs: list[MatchLog], standings: list[StandingsEntry]) -> dict[str, Bid]:
         """还有下一局时的局末发言、整理记忆和下一局规划，返回规划交出的第 1 天出价；logs 是已结束的全部局。"""
         log = logs[-1]
         index = log.match_index
         label = f"第 {index} 局局末发言"
-        speeches = self._run_round(label, lambda p, received: p.give_speech(
-            prompts.match_end_speech_request(log, standings, received=received), f"match_{index}_speech", label))
-        publish_speeches(self.paths, label, speeches)
+        speeches = self._speech_round(label, lambda p, received: p.give_speech(
+            prompts.match_end_speech_request(log, standings, received=received), label))
         memory_label = f"第 {index} 局累计私有记忆"
-        self._run_round(memory_label, lambda p, received: (p.save_memory(
-            prompts.memory_request(self._others(speeches, p.name), index, received=received),
-            f"match_{index}_memory", memory_label), []))
+        self._run_round(memory_label, lambda p, received: p.save_memory(
+            prompts.memory_request(self._others(speeches, p.name), index, received=received), memory_label))
         plan_label = f"第 {index + 1} 局策略规划（含首日出价）"
         # 整理记忆不写信，这一轮收不到信。
-        return self._run_round(plan_label, lambda p, _: p.plan_strategy(
-            prompts.next_match_plan_request(logs, standings, self.game), f"match_{index}_plan", plan_label))
+        return self._submission_round(plan_label, lambda p, _: p.plan_strategy(
+            prompts.next_match_plan_request(logs, standings, self.game), plan_label))
 
     def final(self, standings: list[StandingsEntry], log: MatchLog) -> None:
         """最后一局之后的最终感言和观众总结；最后一局的出价日志随感言请求发出。"""
         label = "最终感言"
-        speeches = self._run_round(label, lambda p, received: p.give_speech(
-            prompts.final_speech_request(standings, log, received=received), "final_speech", label,
-            letters=False))
-        publish_speeches(self.paths, label, speeches)
+        speeches = self._speech_round(label, lambda p, received: p.give_speech(
+            prompts.final_speech_request(standings, log, received=received), label, letters=False))
         summary_label = "观众总结（仅观众可见）"
-        summaries = self._run_round(summary_label, lambda p, _: (p.final_summary(
-            prompts.final_summary_request(self._others(speeches, p.name)), summary_label), []))
-        publish_speeches(self.paths, summary_label, summaries)
+        summaries = self._run_round(summary_label, lambda p, _: p.final_summary(
+            prompts.final_summary_request(self._others(speeches, p.name)), summary_label))
+        publish_speeches(self.paths, summary_label, {name: output.text for name, output in summaries.items()})

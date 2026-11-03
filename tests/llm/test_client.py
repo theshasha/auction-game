@@ -13,7 +13,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from auction_game.llm import client as llm_client
 from auction_game.llm.execution import CallFailedError, OutputFailedError, TaskCancelledError
-from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.tasks import TASKS, TaskRunner
 from auction_game.llm.client import BufferedRequest, RunSignals, wait_before_retry
 from tests.support.factories import CHANNELS, TEST_GAME, make_player, make_ai_obs, text_reply, task_entries
 from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, sse, GOOD
@@ -24,7 +24,7 @@ from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, sse, 
 def test_any_status_is_resent_three_times_and_client_closes(protocol, status, tmp_path):
     h = Harness(protocol, [status, status, status, reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    assert player.bid(make_ai_obs(), {})[0] == (2, None)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
     assert len(h.requests) == 4
     assert h.closes == 1 and all(s.closed for s in h.streams)
 
@@ -38,7 +38,7 @@ def test_failed_flow_keeps_history_and_audits_no_partial_reply(protocol, fault, 
     player = make_player(TaskRunner(h.factory), tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(CallFailedError):
-        player.bid(make_ai_obs(), {})[0]
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     assert player.messages == before
     assert len(h.requests) == 4
     entry = task_entries(player.log.path)[-1]
@@ -53,7 +53,7 @@ def test_anthropic_delta_without_usage_is_resent(tmp_path):
     empty = [chunk.replace(b', "usage": {"output_tokens": 3}', b"") for chunk in empty]
     h = Harness("anthropic", [empty, reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    assert player.bid(make_ai_obs(), {})[0] == (2, None)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
     assert len(h.requests) == 2 and h.requests[0][1] == h.requests[1][1]
     errors = task_entries(player.log.path)[-1]["request_errors"]
     assert [(e["request"], e["attempt"], e["type"]) for e in errors] == [(1, 1, "IncompleteStream")]
@@ -69,13 +69,13 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     player = make_player(TaskRunner(h.factory), tmp_path)
     before = deepcopy(player.messages)
     if succeeds:
-        assert player.bid(make_ai_obs(), {})[0] == (2, None)
+        assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
         parts = [p for m in player.messages for p in m.parts]
         assert [p.content for p in parts if isinstance(p, TextPart)] == [
             text_reply(dict(GOOD, bid="2")), text_reply(GOOD)]
     else:
         with pytest.raises(OutputFailedError):
-            player.bid(make_ai_obs(), {})[0]
+            player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
         assert player.messages == before
     assert len(h.requests) == 4 and h.closes == 1
     assert h.requests[0][1] == h.requests[1][1] and h.requests[2][1] == h.requests[3][1]
@@ -93,10 +93,10 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
 def test_success_then_failure_in_new_loop_keeps_previous_state_and_closes(protocol, tmp_path):
     h = Harness(protocol, ["connect", reply(), 400, 400, 400, 400])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    player.plan_strategy("plan", "opening_plan")
+    player.plan_strategy("plan", "第 1 局策略规划（含首日出价）")
     before = deepcopy(player.messages)
     with pytest.raises(CallFailedError):
-        player.give_speech("speak", "opening_speech")
+        player.give_speech("speak", "开局发言")
     assert player.messages == before
     assert h.closes == 2 and h.loops[0] is h.loops[1] and h.loops[0] is not h.loops[2]
     assert all(loop.is_closed() for loop in h.loops)
@@ -111,11 +111,11 @@ def test_empty_complete_response_uses_one_output_correction(protocol, task):
     h = Harness(protocol, [reply(text=""),
                            reply(text="summary") if task == "summary" else reply()])
     runner = TaskRunner(h.factory)
-    result = runner(task, "today", [], game=TEST_GAME, coins=6)
+    result = runner(TASKS[task], "today", [], game=TEST_GAME, coins=6)
     if task == "summary":
-        assert result.output == "summary"
+        assert result.output.text == "summary"
     else:
-        assert result.output["bid"] == 2
+        assert result.output.bid == 2
     assert len(h.requests) == 2 and h.closes == 1
     assert not result.request_errors
 
@@ -125,7 +125,7 @@ def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol,
     h = Harness(protocol, [reply(dict(GOOD, bid="2"))] + [reply(broken=True, ending="missing")] * 4)
     player = make_player(TaskRunner(h.factory), tmp_path)
     with pytest.raises(CallFailedError):
-        player.bid(make_ai_obs(), {})[0]
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
@@ -146,7 +146,7 @@ def test_each_resend_waits_retry_delay(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_client, "wait_before_retry", record)
     h = Harness("chat", ["connect", 503, reply()])
     player = make_player(TaskRunner(replace(h.factory, retry_delay=10)), tmp_path)
-    assert player.bid(make_ai_obs(), {})[0] == (2, None)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
     assert delays == [10, 10] and len(h.requests) == 3
 
 
@@ -170,7 +170,7 @@ def test_paused_failure_is_not_resent(tmp_path):
     h = Harness("chat", ["connect", reply()])
     player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
     with pytest.raises(CallFailedError):
-        player.bid(make_ai_obs(), {})[0]
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     assert len(h.requests) == 1
 
 
@@ -179,7 +179,7 @@ def test_correction_is_still_sent_while_paused(tmp_path):
     signals.paused.set()
     h = Harness("chat", [reply(dict(GOOD, bid="2")), reply()])
     player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
-    assert player.bid(make_ai_obs(), {})[0] == (2, None)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
     assert len(h.requests) == 2
 
 
@@ -206,7 +206,7 @@ def test_cancel_interrupts_task_and_logs_cancelled(script, texts, tmp_path):
     threading.Timer(0.05, signals.cancelled.set).start()
     started = time.monotonic()
     with pytest.raises(TaskCancelledError):
-        player.bid(make_ai_obs(), {})[0]
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     assert time.monotonic() - started < 2
     assert player.messages == before and h.closes == 1
     entry = task_entries(player.log.path)[-1]
@@ -224,12 +224,12 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
     h = Harness(protocol, [reply(), reply(), reply({"strategy": "private", "speech": "public"}), reply(),
                            reply(text=long_summary)])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    assert player.plan_strategy("plan", "opening_plan") == ((2, None), [])
-    assert player.bid(make_ai_obs(), {})[0] == (2, None)
-    assert player.give_speech("speak", "final_speech") == ("public", [])
-    player.plan_strategy("next plan", "match_1_plan")
+    assert player.plan_strategy("plan", "第 1 局策略规划（含首日出价）").submission == (2, None)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
+    assert player.give_speech("speak", "最终感言").speech == "public"
+    player.plan_strategy("next plan", "第 2 局策略规划（含首日出价）")
     before = deepcopy(player.messages)
-    assert player.final_summary("original summary request and other players' speeches") == long_summary
+    assert player.final_summary("original summary request and other players' speeches", "观众总结（仅观众可见）").text == long_summary
     assert player.messages == before and len(h.requests) == h.closes == 5
     body = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert body.count("【你的身份】") == 1 and "original summary request" in body
@@ -282,7 +282,7 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
                                            else {"openai_reasoning_effort": "high"})
     assert factory.base_url == channel["base_url"]
     factory = replace(factory, base_url=h.factory.base_url, transport=h.factory.transport)
-    assert TaskRunner(factory)("summary", "ping", [], game=TEST_GAME).output == "configured reply"
+    assert TaskRunner(factory)(TASKS["summary"], "ping", [], game=TEST_GAME).output.text == "configured reply"
     request, body = h.requests[0]
     assert body["model"] == "custom-model-alias"
     assert body["max_output_tokens" if protocol == "responses" else "max_tokens"] == 321

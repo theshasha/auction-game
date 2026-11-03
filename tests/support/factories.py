@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import json
 
 from pydantic_ai.models.function import FunctionModel
-from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput, SummaryOutput, TaskRunner
 
 from auction_game.agent.player import AIPlayer
 from auction_game.flow.controller import Controller
@@ -167,12 +167,13 @@ def run_scenario(table, default=0, super_strategies=None, capture=None, game=TES
 
 class StubPlayer:
     """供 AIDirector.run() 跑整场的玩家，不调模型。table[(局, 天)][名字] 是 (正常出价, 超级出价)，
-    没列出的出 (0, None)；每局的规划交出第 1 天的出价。phases 按顺序记下每个任务，observations 记下出价时看到的信息。"""
+    没列出的出 (0, None)；每局的规划交出第 1 天的出价。titles 按顺序记下每个任务所在那一轮的标题，
+    observations 记下出价时看到的信息。"""
 
     def __init__(self, name, table=None):
         self.name = name
         self.table = table or {}
-        self.phases = []
+        self.titles = []
         self.observations = []
         self._plans = 0
 
@@ -183,28 +184,30 @@ class StubPlayer:
         pass
 
     def _submission(self, match_index, day):
-        return self.table.get((match_index, day), {}).get(self.name, (0, None))
+        bid, super_bid = self.table.get((match_index, day), {}).get(self.name, (0, None))
+        return BidOutput("策略", bid, super_bid, [])
 
-    def give_speech(self, text, phase, context="", *, letters=True):
-        self.phases.append(phase)
-        return f"{self.name}的发言", []
+    def give_speech(self, text, title, *, letters=True):
+        self.titles.append(title)
+        return SpeechOutput("策略", f"{self.name}的发言", [])
 
-    def plan_strategy(self, text, phase, context=""):
-        self.phases.append(phase)
+    def plan_strategy(self, text, title):
+        self.titles.append(title)
         self._plans += 1
-        return self._submission(self._plans, 1), []
+        return self._submission(self._plans, 1)
 
-    def save_memory(self, text, phase, context=""):
-        self.phases.append(phase)
+    def save_memory(self, text, title):
+        self.titles.append(title)
+        return MemoryOutput("记忆")
 
-    def bid(self, obs, received):
-        self.phases.append(f"bid_{obs.match_index}_{obs.day}")
+    def bid(self, obs, received, title):
+        self.titles.append(title)
         self.observations.append(obs)
-        return self._submission(obs.match_index, obs.day), []
+        return self._submission(obs.match_index, obs.day)
 
-    def final_summary(self, text, context=""):
-        self.phases.append("final_summary")
-        return f"{self.name}的总结"
+    def final_summary(self, text, title):
+        self.titles.append(title)
+        return SummaryOutput(f"{self.name}的总结")
 
 
 def init_run_dir(tmp_path, names):

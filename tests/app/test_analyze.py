@@ -27,6 +27,7 @@ from tests.support.factories import TEST_GAME, make_day, make_log, make_standing
 
 from auction_game.llm.execution import CallFailedError, ExecutionResult
 from auction_game.agent.log import AgentLog
+from auction_game.agent.tasks import BidOutput, SpeechOutput, SummaryOutput
 from auction_game.reporting.analyze import analyze, collect_player_stats, find_latest_ai_run, load_match_logs, main
 from auction_game.reporting.run_output import initialize_run
 from auction_game.reporting.run_paths import RunPaths
@@ -297,24 +298,25 @@ def test_usage_sums_every_reply_by_player_and_task(tmp_path, capsys):
     run_dir = tmp_path / "20260909_120000_ai"
     write_matches(run_dir, make_matches(), run_type="ai")
     jia, yi = RunPaths(run_dir).read_config()["players"][:2]
-    bid_entry = {"phase": "bid", "task": "bid", "context": "第 1 局第 2 天"}
+    bid_entry = {"title": "第 1 局第 2 天出价", "task": "bid", "context": "第 1 局第 2 天"}
+    bid = BidOutput("策略", 1, None, [])
     jia_log = player_log(run_dir, jia)
-    jia_log.success({"phase": "opening_speech", "task": "speech", "context": "开局发言"},
-                    ExecutionResult("发言", [ModelRequest(parts=[UserPromptPart("请发言")]),
+    jia_log.success({"title": "开局发言", "task": "speech", "context": "开局发言"},
+                    ExecutionResult(SpeechOutput("策略", "发言", []), [ModelRequest(parts=[UserPromptPart("请发言")]),
                                              model_reply(100, 10, 40)], []))
     # 纠错往返的两条回复都计入，重发前失败的请求只计次数。
-    jia_log.success(bid_entry, ExecutionResult("出价", [
+    jia_log.success(bid_entry, ExecutionResult(bid, [
         ModelRequest(parts=[UserPromptPart("请出价")]), model_reply(200, 20),
         ModelRequest(parts=[RetryPromptPart("格式错误")]), model_reply(300, 30, 150),
     ], [request_error(1)]))
     yi_log = player_log(run_dir, yi)
     yi_log.failure(bid_entry, CallFailedError("请求失败", messages=[ModelRequest(parts=[UserPromptPart("请出价")])],
                                               request_errors=[request_error(1), request_error(2)]))
-    yi_log.success(bid_entry, ExecutionResult("出价", [ModelRequest(parts=[UserPromptPart("请出价")]),
-                                                     model_reply(250, 25)], []))
-    yi_log.success({"phase": "final_summary", "task": "summary", "context": "观众总结（仅观众可见）"},
-                   ExecutionResult("总结", [ModelRequest(parts=[UserPromptPart("请总结")]),
-                                          model_reply(1000, 5)], []))
+    yi_log.success(bid_entry, ExecutionResult(bid, [ModelRequest(parts=[UserPromptPart("请出价")]),
+                                                  model_reply(250, 25)], []))
+    yi_log.success({"title": "观众总结（仅观众可见）", "task": "summary", "context": "观众总结（仅观众可见）"},
+                   ExecutionResult(SummaryOutput("总结"), [ModelRequest(parts=[UserPromptPart("请总结")]),
+                                                          model_reply(1000, 5)], []))
 
     analyze(run_dir)
     output = capsys.readouterr().out
@@ -340,7 +342,7 @@ def test_usage_lists_failed_only_task_without_largest_input(tmp_path, capsys):
     write_matches(run_dir, make_matches(), run_type="ai-test")
     jia = RunPaths(run_dir).read_config()["players"][0]
     player_log(run_dir, jia).failure(
-        {"phase": "final_summary", "task": "summary", "context": "观众总结（仅观众可见）"},
+        {"title": "观众总结（仅观众可见）", "task": "summary", "context": "观众总结（仅观众可见）"},
         CallFailedError("请求失败", messages=[ModelRequest(parts=[UserPromptPart("请总结")])],
                         request_errors=[request_error(1)]))
     analyze(run_dir)

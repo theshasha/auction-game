@@ -13,7 +13,8 @@ from pydantic_ai.messages import (
 from auction_game.agent import prompts
 from auction_game.llm.execution import CallFailedError, TaskCancelledError
 from auction_game.agent.log import AgentLog
-from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.tasks import (TASKS, BidOutput, MemoryOutput, SpeechOutput, SummaryOutput, Task,
+                                      TaskOutput, TaskRunner)
 from auction_game.agent.text_output import LetterNames
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import Observation
@@ -74,65 +75,57 @@ class AIPlayer:
         self.messages = list(messages)
         self.review_messages = list(review)
 
-    def _task(self, task, prompt, phase, context="", *, coins=0, commit=True, reset=False,
-              letters=None, brief_format=False):
-        entry = {"phase": phase, "task": task, "context": context}
-        if not commit:
+    def _task(self, name: Task, prompt: str, title: str, context: str | None = None, *,
+              coins: int = 0, letters: bool = True) -> TaskOutput:
+        """title 是这一轮的标题，用作私人日志的小节标题；context 默认同 title。letters 为假时这次不能写信。"""
+        spec = TASKS[name]
+        entry = {"title": title, "task": name, "context": title if context is None else context}
+        if spec.history == "review":
             entry["history_note"] = "这次请求带的是从开局到现在的全部对话，不受局末记忆重置影响；结果不写回对话历史。"
-        history = self.messages if commit else self.review_messages
+        history = self.review_messages if spec.history == "review" else self.messages
         try:
-            result = self.task_runner(task, prompt, history, game=self.game, coins=coins,
-                                      letters=letters, brief_format=brief_format)
+            result = self.task_runner(spec, prompt, history, game=self.game, coins=coins,
+                                      letters=self.letter_names if spec.can_write_letters and letters else None)
         except CallFailedError as exc:
             self.log.failure(entry, exc)
             raise
         except TaskCancelledError as exc:
             self.log.cancelled(entry, exc)
             raise
-        if reset:
-            memory_message = f"{MEMORY_HEADER}\n{result.output['memory']}"
+        if spec.history == "reset":
+            memory_message = f"{MEMORY_HEADER}\n{result.output.memory}"
             entry["history_reset"] = memory_message
             entry["history_note"] = f"此后对话从系统提示和一条消息重新开始，消息内容是“{MEMORY_HEADER}”加上面的结果。"
         self.log.success(entry, result)
-        if commit:
+        if spec.history != "review":
             # 日志保留原始响应；下一任务沿用去推理后的原生对话与纠错往返。
             projection = completed_history(result.messages)
             self.review_messages.extend(projection)
-            if reset:
-                self.memory = result.output["memory"]
+            if spec.history == "reset":
+                self.memory = result.output.memory
                 self.messages = [self.messages[0], ModelRequest(parts=[UserPromptPart(memory_message)])]
             else:
                 self.messages.extend(projection)
         return result.output
 
-    def bid(self, obs: Observation, received: dict[str, str]) -> tuple[tuple[int, int | None], list[dict]]:
-        """返回 ((正常出价, 超级出价), 写的信)；received 是收到的信，写信人到正文。
-
-        出价请求从第 2 天起发出，第 1 天的出价由本局规划交出。
-        """
+    def bid(self, obs: Observation, received: dict[str, str], title: str) -> BidOutput:
+        """received 是收到的信，写信人到正文。出价请求从第 2 天起发出，第 1 天的出价由本局规划交出。"""
         # 本局规划请求里有完整格式，整理记忆前一直留在对话里，出价请求只附一句提示。
-        output = self._task("bid", prompts.bid_request(obs, received=received), "bid",
-                            f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
-                            letters=self.letter_names, brief_format=True)
-        return (output["bid"], output["super_bid"]), output["letters"]
+        return self._task("bid", prompts.bid_request(obs, received=received), title,
+                          f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins)
 
-    def give_speech(self, user_text: str, phase: str, context: str = "", *,
-                    letters: bool = True) -> tuple[str, list[dict]]:
-        """返回公开发言和写的信，私有策略只留在自己的对话历史和日志里。最终感言不能写信。"""
-        output = self._task("speech", user_text, phase, context,
-                            letters=self.letter_names if letters else None)
-        return output["speech"], output["letters"]
+    def give_speech(self, user_text: str, title: str, *, letters: bool = True) -> SpeechOutput:
+        """公开发言只有 speech 给其他玩家看，私有策略只留在自己的对话历史和日志里。最终感言不能写信。"""
+        return self._task("speech", user_text, title, letters=letters)
 
-    def plan_strategy(self, user_text: str, phase: str, context: str = "") -> tuple[tuple[int, int | None], list[dict]]:
-        """返回 ((本局第 1 天的正常出价, 超级出价), 写的信)。"""
-        output = self._task("plan", user_text, phase, context, coins=self.game.initial_coins,
-                            letters=self.letter_names)
-        return (output["bid"], output["super_bid"]), output["letters"]
+    def plan_strategy(self, user_text: str, title: str) -> BidOutput:
+        """规划同时交出本局第 1 天的出价。"""
+        return self._task("plan", user_text, title, coins=self.game.initial_coins)
 
-    def save_memory(self, user_text: str, phase: str, context: str = "") -> None:
+    def save_memory(self, user_text: str, title: str) -> MemoryOutput:
         """全部公开发言公布后整理；日志成功才替换记忆并清空历局对话。"""
-        self._task("memory", user_text, phase, context, reset=True)
+        return self._task("memory", user_text, title)
 
-    def final_summary(self, user_text: str, context: str = "") -> str:
+    def final_summary(self, user_text: str, title: str) -> SummaryOutput:
         """用开局以来的全部对话写观众总结；请求和结果都不写回历史。"""
-        return self._task("summary", user_text, "final_summary", context, commit=False)
+        return self._task("summary", user_text, title)

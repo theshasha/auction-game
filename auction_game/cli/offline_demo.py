@@ -74,14 +74,13 @@ class OfflineTaskRunner(TaskRunner):
         self.factory = factory
         self.match_index = self.day = 0
 
-    def __call__(self, task, prompt, history, *, game, coins=0, letters=None, brief_format=False):
-        if task == "plan":
+    def __call__(self, spec, prompt, history, *, game, coins=0, letters=None):
+        if spec.name == "plan":
             self.match_index, self.day = self.match_index + 1, 1
-        elif task == "bid":
+        elif spec.name == "bid":
             self.day += 1
-        self.factory.current = OfflineTask(task, game, coins, self.match_index, self.day, letters)
-        return super().__call__(task, prompt, history, game=game, coins=coins,
-                                letters=letters, brief_format=brief_format)
+        self.factory.current = OfflineTask(spec.name, game, coins, self.match_index, self.day, letters)
+        return super().__call__(spec, prompt, history, game=game, coins=coins, letters=letters)
 
 
 class OfflineController(Controller):
