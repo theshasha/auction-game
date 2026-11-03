@@ -18,7 +18,7 @@ from auction_game.ai.text_output import LetterNames
 from auction_game.game.game_rules import GameSettings
 from auction_game.runners import make_task_runners, play_ai
 from auction_game.reporting.run_output import make_run_dir
-from auction_game.game.rules import sync_root_rules
+from auction_game.game.rules import render_rules, sync_root_rules
 
 
 @dataclass(frozen=True)
@@ -159,6 +159,7 @@ def generate_demo(output: Path | None = None, *, test_model=False):
     game = load_game_settings(test_model=test_model)
     sync_root_rules(load_game_settings())
     names = [pc["name"] for pc in configs]
+    rules = render_rules(game, names)
     factories = []
 
     def factory(**kwargs):
@@ -179,7 +180,7 @@ def generate_demo(output: Path | None = None, *, test_model=False):
     controller = OfflineController(mode="continuous", max_concurrency=config["llm"]["max_concurrency"])
     with override_allow_model_requests(False):
         play_ai(config, configs, game, task_runners, controller,
-                run_dir=output, run_type="offline", test_model=test_model)
+                run_dir=output, run_type="offline", test_model=test_model, rules=rules)
     return output, factories
 
 

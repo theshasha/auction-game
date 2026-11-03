@@ -111,6 +111,23 @@ def test_max_bid_below_example_bids_is_configuration_error(tmp_path, monkeypatch
     rules.render_rules(replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID), ["配置甲", "配置乙"])
 
 
+@pytest.mark.parametrize("entry,module", [(runners.run_ai, runners), (offline_demo.generate_demo, offline_demo)])
+def test_session_rules_error_stops_before_logs(entry, module, monkeypatch, capsys):
+    """测试模式的覆盖参数生成不了规则时，在创建场次目录前停止。"""
+    monkeypatch.setattr(rules, "load_players", lambda **kwargs: [{"name": "配置甲"}, {"name": "配置乙"}])
+    monkeypatch.setattr(module, "load_game_settings", lambda test_model=False:
+                        replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID - 1) if test_model else TEST_GAME)
+    monkeypatch.setattr(module, "make_run_dir", lambda mode: pytest.fail("规则生成不了时不应创建场次目录"))
+    if entry is runners.run_ai:
+        monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("规则生成不了时不应创建客户端"))
+        assert runners.run_ai(test_model=True) == 1
+        output = capsys.readouterr().out
+        assert "[配置错误]" in output and "max_bid" in output
+    else:
+        with pytest.raises(configuration.ConfigurationError, match="max_bid"):
+            offline_demo.generate_demo(test_model=True)
+
+
 @pytest.mark.parametrize("entry,kwargs,module,boundary", [
     (runners.run_ai, {}, runners, "make_model_factory"),
     (runners.run_ai, {"test_model": True}, runners, "make_model_factory"),

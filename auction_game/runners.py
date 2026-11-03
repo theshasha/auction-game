@@ -34,6 +34,8 @@ def run_ai(test_model: bool = False) -> int:
         config, player_configs = load_configuration(test_model=test_model)
         game = load_game_settings(test_model=test_model)
         sync_root_rules(load_game_settings())
+        # 根规则按生产参数生成；测试模式的覆盖参数只用于本场，要单独生成一次。
+        rules = render_rules(game, [pc["name"] for pc in player_configs])
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
         task_runners = make_task_runners(config, player_configs, make_model_factory,
                                          signals=controller.signals)
@@ -58,12 +60,15 @@ def run_ai(test_model: bool = False) -> int:
         print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
               "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
     return play_ai(config, player_configs, game, task_runners, controller,
-                   run_dir=run_dir, run_type=run_type, test_model=test_model, start_reader=True)
+                   run_dir=run_dir, run_type=run_type, test_model=test_model, rules=rules, start_reader=True)
 
 
 def play_ai(config, player_configs, game, task_runners, controller, *,
-            run_dir, run_type, test_model, start_reader=False) -> int:
-    """写场次快照并跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。"""
+            run_dir, run_type, test_model, rules, start_reader=False) -> int:
+    """写场次快照并跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。
+
+    rules 是按本场参数生成的规则；入口在创建场次目录前生成它，参数有误时在那里报配置错误。
+    """
     all_names = [pc["name"] for pc in player_configs]
     predictions = [(pc["name"], pc["predicted_win_rate"]) for pc in player_configs]
     # 本场配置快照，统计和展示只读它。
@@ -80,7 +85,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
             "execution_model": {"key": pc["model_key"], **{key: pc[key] for key in EXECUTION_FIELDS}},
         } for pc in player_configs],
     }
-    paths = initialize_run(run_dir, snapshot, render_rules(game, all_names))
+    paths = initialize_run(run_dir, snapshot, rules)
 
     players = [
         AIPlayer(
