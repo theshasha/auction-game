@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from auction_game.configuration import ConfigurationError, load_game_settings, load_players
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 from auction_game.paths import TEMPLATE_PATH, RULES_PATH
 GENERATED_NOTE = "<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动生成：python -m auction_game.game.rules -->\n"
 # 模板里结算例子的出价写死为 0~5。

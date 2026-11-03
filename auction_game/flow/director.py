@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from auction_game.ai import prompts
-from auction_game.ai.ai_player import AIPlayer
-from auction_game.controller import Controller, RoundTask, run_parallel_round
-from auction_game.game.game_rules import GameSettings
+from auction_game.agent import prompts
+from auction_game.agent.player import AIPlayer
+from auction_game.flow.controller import Controller, RoundTask, run_parallel_round
+from auction_game.game.settings import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.reporting.run_paths import RunPaths
 

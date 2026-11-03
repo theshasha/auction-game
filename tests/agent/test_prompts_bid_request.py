@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from auction_game.ai import prompts
+from auction_game.agent import prompts
 from tests.support.factories import (
     NAMES, TEST_GAME, make_day, make_logs, make_obs, make_standings, run_scenario, super_by_day,
 )

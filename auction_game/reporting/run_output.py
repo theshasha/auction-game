@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from auction_game.ai import prompts
+from auction_game.agent import prompts
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES

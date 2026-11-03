@@ -25,14 +25,14 @@
 
 - 启动：`main.py` 只做参数解析和模式分派。默认路径在 `auction_game/paths.py`，配置由 `auction_game/configuration.py` 解析，输出预算和推理档位由 `auction_game/model_capabilities.py` 从能力快照得出，比赛由 `auction_game/runners.py` 组装。
 - 游戏规则、结算和比赛流程：`auction_game/game/`。
-- 模型调用、提示、对话历史和发言：修改前读 `auction_game/ai/AGENTS.md`。
+- 模型调用、提示、对话历史、发言和各轮编排：修改前读 `auction_game/agent/AGENTS.md`。
 - 私信：修改前读 `docs/letters.md`。
 - 日志和统计：修改前读 `auction_game/reporting/AGENTS.md`。统计口径见 `docs/analyze.md`。
 - 用户命令和日志说明：`docs/usage.md`。独立工具在 `auction_game/cli/`，用 `python -m` 运行。
 
 ## 暂停、补跑和退出
 
-修改前先读 `auction_game/controller.py` 和 `tests/app/test_controller.py`。需要回滚的任务通过 `RoundTask.participant` 提供 `checkpoint()` 和 `rollback()`。
+修改前先读 `auction_game/flow/controller.py` 和 `tests/flow/test_controller.py`。需要回滚的任务通过 `RoundTask.participant` 提供 `checkpoint()` 和 `rollback()`。
 
 - 暂停后不再启动新任务，也不再重发失败的请求，等进行中的请求结束。恢复时只补跑失败或未启动的任务，成功的不重跑。
 - 暂停过的轮次即使全部成功，也要用户确认后才提交。退出时马上取消已启动的任务，被取消的任务写"已取消"日志，再把整轮回滚到轮开始时的状态。

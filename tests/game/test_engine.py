@@ -16,7 +16,7 @@ from tests.support.factories import (
     run_scenario,
 )
 from auction_game.game.engine import run_match, settle_day
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 from auction_game.configuration import load_game_settings
 
 

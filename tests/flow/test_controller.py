@@ -22,11 +22,11 @@ from tests.support.factories import (
     speech_reply,
     task_entries,
 )
-from auction_game.ai.ai_director import AIDirector
-from auction_game.controller import Controller, RoundTask, TournamentAborted, run_parallel_round
-from auction_game import controller as controller_module
-from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
-from auction_game.ai.agent_tasks import TaskRunner
+from auction_game.flow.director import AIDirector
+from auction_game.flow.controller import Controller, RoundTask, TournamentAborted, run_parallel_round
+from auction_game.flow import controller as controller_module
+from auction_game.llm.execution import CallFailedError, TaskCancelledError
+from auction_game.agent.tasks import TaskRunner
 
 
 @contextmanager

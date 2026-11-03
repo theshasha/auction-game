@@ -23,7 +23,7 @@
 
 ## 格式
 
-沿用 `auction_game/ai/text_output.py` 的分块格式。私信块放在原有两块之后，标签是收件人的名字：
+沿用 `auction_game/agent/text_output.py` 的分块格式。私信块放在原有两块之后，标签是收件人的名字：
 
 ```
 <strategy>

@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from auction_game.ai import prompts
+from auction_game.agent import prompts
 from auction_game.game import rules
 from auction_game.configuration import load_game_settings, load_players
 from tests.support.factories import NAMES, TEST_GAME

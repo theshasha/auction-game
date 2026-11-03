@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
 from auction_game.game.engine import DayEndCallback, compute_standings, run_match
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.game.players import Player
 

@@ -13,8 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
-from auction_game.ai.llm_client import RunSignals
+from auction_game.llm.execution import CallFailedError, TaskCancelledError
+from auction_game.llm.client import RunSignals
 
 
 class TournamentAborted(Exception):

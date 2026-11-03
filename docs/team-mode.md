@@ -77,7 +77,7 @@
 - `auction_game/game/engine.py` 的结算要知道每名玩家的阵营，个人赛按每人自成一个阵营处理；
 - `auction_game/game/tournament.py` 按阵营总分判断并列，到上限算平局；
 - `auction_game/configuration.py` 解析 `teams.yaml`，`auction_game/game/rules.py` 生成两份规则；
-- `auction_game/ai/prompts.py` 和 `auction_game/reporting/run_output.py` 显示阵营；
+- `auction_game/agent/prompts.py` 和 `auction_game/reporting/run_output.py` 显示阵营；
 - `main.py` 和 `auction_game/runners.py` 组装入口，`auction_game/cli/offline_demo.py` 支持团队赛。
 
 ## 要看测试赛数据的

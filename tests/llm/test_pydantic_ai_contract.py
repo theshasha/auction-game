@@ -6,8 +6,8 @@ import json
 import pytest
 from pydantic_ai.messages import TextPart
 
-from auction_game.ai.agent_execution import CallFailedError, OutputFailedError
-from auction_game.ai.agent_tasks import TaskRunner
+from auction_game.llm.execution import CallFailedError, OutputFailedError
+from auction_game.agent.tasks import TaskRunner
 from tests.support.factories import TEST_GAME, text_reply
 from tests.support.wire import PROTOCOLS, MODEL, SYSTEM, GOOD, Harness, reply, run, make_agent
 

@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
-from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.ai.text_output import LetterNames, output_requirement
-from auction_game.reporting.agent_log import AgentLog, render_markdown_entry
+from auction_game.llm.execution import CallFailedError, ExecutionResult
+from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.text_output import LetterNames, output_requirement
+from auction_game.agent.log import AgentLog, render_markdown_entry
 from tests.support.factories import ALL_NAMES, bid_reply, fake_task_runner, make_ai_obs, make_player, task_entries
 from tests.support.wire import Harness, reply
 

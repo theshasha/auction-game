@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-from auction_game.ai import ai_director
-from auction_game.ai.agent_execution import OutputFailedError
+from auction_game.flow import director as director_module
+from auction_game.llm.execution import OutputFailedError
 from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
                                      make_log, make_obs, make_player, make_standings, request_text, speech_reply,
                                      text_reply, task_entries)
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 
 
 class RecordingPlayer:
@@ -47,7 +47,7 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
         regular_matches=2, max_playoffs=0,
     )
     players = [RecordingPlayer(name) for name in ("甲", "乙")]
-    director = ai_director.AIDirector(players, continuous_controller(), tmp_path, game=game)
+    director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=game)
 
     def opening_plan_request(others, actual_game, *, received):
         assert actual_game is game
@@ -57,12 +57,12 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
         assert actual_game is game
         return f"规划 {[log.match_index for log in logs]}"
 
-    monkeypatch.setattr(ai_director.prompts, "opening_speech_request", lambda: "开局")
-    monkeypatch.setattr(ai_director.prompts, "opening_plan_request", opening_plan_request)
-    monkeypatch.setattr(ai_director.prompts, "next_match_plan_request", next_match_plan_request)
-    monkeypatch.setattr(ai_director.prompts, "match_end_speech_request",
+    monkeypatch.setattr(director_module.prompts, "opening_speech_request", lambda: "开局")
+    monkeypatch.setattr(director_module.prompts, "opening_plan_request", opening_plan_request)
+    monkeypatch.setattr(director_module.prompts, "next_match_plan_request", next_match_plan_request)
+    monkeypatch.setattr(director_module.prompts, "match_end_speech_request",
                         lambda log, standings, *, received: f"局末 {log.match_index}")
-    monkeypatch.setattr(ai_director.prompts, "memory_request",
+    monkeypatch.setattr(director_module.prompts, "memory_request",
                         lambda others, index, *, received: f"记忆 {others} {index}")
     director.on_opening()
     director.on_match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
@@ -89,8 +89,8 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
             return speech, letters[self.name]
 
     players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
-    director = ai_director.AIDirector(players, continuous_controller(), tmp_path, game=TEST_GAME)
-    monkeypatch.setattr(ai_director.prompts, "opening_plan_request",
+    director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=TEST_GAME)
+    monkeypatch.setattr(director_module.prompts, "opening_plan_request",
                         lambda others, game, *, received: f"规划 {list(others)} 收信 {list(received)}")
     director.on_opening()
     public_log = director.paths.speeches.read_text(encoding="utf-8")
@@ -211,7 +211,7 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
     a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6), bid_reply(1)]), tmp_path / "a", game=game)
     b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6), bid_reply(0)]), tmp_path / "b",
                     game=game, name="Bravo")
-    director = ai_director.AIDirector([a, b], continuous_controller(), tmp_path, game=a.game)
+    director = director_module.AIDirector([a, b], continuous_controller(), tmp_path, game=a.game)
     director.on_opening()
     request = request_text(a.task_runner, -1)
     assert "public-B" in request and "烟雾弹" not in request
@@ -233,13 +233,13 @@ def test_director_opening_plan_preserves_public_boundary_and_one_use_bid_cache(t
 
 
 def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
-    from auction_game.ai.text_output import output_requirement
+    from auction_game.agent.text_output import output_requirement
 
     player = make_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path)
-    director = ai_director.AIDirector([player], continuous_controller(), tmp_path, game=TEST_GAME)
-    monkeypatch.setattr(ai_director.prompts, "final_speech_request",
+    director = director_module.AIDirector([player], continuous_controller(), tmp_path, game=TEST_GAME)
+    monkeypatch.setattr(director_module.prompts, "final_speech_request",
                         lambda standings, log, *, received: "请发表最终感言")
-    monkeypatch.setattr(ai_director.prompts, "final_summary_request", lambda others: "请总结")
+    monkeypatch.setattr(director_module.prompts, "final_summary_request", lambda others: "请总结")
     director.on_final([], None)
     assert request_text(player.task_runner, 0) == "请发表最终感言\n\n" + output_requirement("speech")
 
@@ -262,7 +262,7 @@ def test_letters_arrive_in_recipients_next_request_only(capsys, tmp_path):
         bid_reply(1),
     ]), tmp_path, game=game, name=name) for name in ("Bravo", "Charlie"))
     players = [alpha, bravo, charlie]
-    director = ai_director.AIDirector(players, continuous_controller(), tmp_path, game=game)
+    director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=game)
     director.on_opening()
     for day in (1, 2, 3):
         director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in players])
@@ -305,7 +305,7 @@ def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path
                         tmp_path, game=game, name="Alpha")
     bravo = make_player(fake_task_runner([speech_reply("B"), *[bid_reply(1)] * days, speech_reply("B"), *ending]),
                         tmp_path, game=game, name="Bravo")
-    director = ai_director.AIDirector([alpha, bravo], continuous_controller(), tmp_path, game=game)
+    director = director_module.AIDirector([alpha, bravo], continuous_controller(), tmp_path, game=game)
     director.on_opening()
     for day in range(1, days + 1):
         director.collect_bids([(p, make_obs(my_name=p.name, day=day, game=game)) for p in (alpha, bravo)])

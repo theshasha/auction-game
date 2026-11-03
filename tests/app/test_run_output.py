@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from auction_game.ai import prompts
+from auction_game.agent import prompts
 from auction_game.game.rules import render_rules
 from auction_game.game.tournament import run_tournament
 from auction_game.reporting.run_output import (initialize_run, make_publish, print_day_result, print_final_result,

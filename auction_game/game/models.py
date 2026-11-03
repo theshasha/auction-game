@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Literal, Optional
 
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 
 
 @dataclass(frozen=True)

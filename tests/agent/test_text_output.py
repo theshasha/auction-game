@@ -2,8 +2,8 @@
 
 import pytest
 
-from auction_game.ai.text_output import LetterNames, OutputFormatError, output_requirement, parse_text_output
-from auction_game.game.game_rules import validate_submission
+from auction_game.agent.text_output import LetterNames, OutputFormatError, output_requirement, parse_text_output
+from auction_game.game.settings import validate_submission
 from tests.support.factories import TEST_GAME, text_reply, task_entries
 
 
@@ -63,7 +63,7 @@ def test_fields_keep_strict_types(field, value):
 
 
 def test_deeply_nested_decision_gets_correction_and_keeps_audit(tmp_path):
-    from auction_game.ai.agent_tasks import TaskRunner
+    from auction_game.agent.tasks import TaskRunner
     from tests.support.factories import make_ai_obs, make_player
     from tests.support.wire import Harness, reply
 

@@ -7,8 +7,8 @@ import time
 import argparse
 
 from auction_game.configuration import ConfigurationError, load_configuration
-from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
-from auction_game.ai.agent_execution import AgentExecutor
+from auction_game.llm.client import MissingApiKeyError, make_model_factory
+from auction_game.llm.execution import AgentExecutor
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 from pydantic_ai.usage import UsageLimits

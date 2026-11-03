@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from auction_game.configuration import ConfigurationError, load_game_settings
-from auction_game.game.game_rules import GameSettings, validate_submission
+from auction_game.game.settings import GameSettings, validate_submission
 
 
 @pytest.fixture

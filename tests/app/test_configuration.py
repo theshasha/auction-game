@@ -245,7 +245,7 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
 
 
 def test_missing_key_stops_before_logs(config_files, monkeypatch, capsys):
-    from auction_game.ai import llm_client
+    from auction_game.llm import client as llm_client
     monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     monkeypatch.setattr(llm_client, "load_dotenv", lambda path: None)
     monkeypatch.delenv("FAKE_KEY", raising=False)

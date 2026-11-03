@@ -12,10 +12,10 @@ from pydantic_ai.models import override_allow_model_requests
 from pydantic_ai.models.function import FunctionModel
 
 from auction_game.configuration import load_configuration, load_game_settings
-from auction_game.controller import Controller
-from auction_game.ai.agent_tasks import Task, TaskRunner
-from auction_game.ai.text_output import LetterNames
-from auction_game.game.game_rules import GameSettings
+from auction_game.flow.controller import Controller
+from auction_game.agent.tasks import Task, TaskRunner
+from auction_game.agent.text_output import LetterNames
+from auction_game.game.settings import GameSettings
 from auction_game.runners import make_task_runners, play_ai
 from auction_game.reporting.run_output import make_run_dir
 from auction_game.game.rules import render_rules, sync_root_rules

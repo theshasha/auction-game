@@ -10,12 +10,12 @@ from pydantic_ai.messages import (
     ThinkingPart, TextPart,
 )
 
-from auction_game.ai import prompts
-from auction_game.ai.agent_execution import CallFailedError, TaskCancelledError
-from auction_game.reporting.agent_log import AgentLog
-from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.ai.text_output import LetterNames
-from auction_game.game.game_rules import GameSettings
+from auction_game.agent import prompts
+from auction_game.llm.execution import CallFailedError, TaskCancelledError
+from auction_game.agent.log import AgentLog
+from auction_game.agent.tasks import TaskRunner
+from auction_game.agent.text_output import LetterNames
+from auction_game.game.settings import GameSettings
 from auction_game.game.models import Observation
 from auction_game.game.players import Player
 

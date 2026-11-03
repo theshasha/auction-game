@@ -7,12 +7,12 @@ from typing import Callable, Optional
 import json
 
 from pydantic_ai.models.function import FunctionModel
-from auction_game.ai.agent_tasks import TaskRunner
+from auction_game.agent.tasks import TaskRunner
 
-from auction_game.ai.ai_player import AIPlayer
-from auction_game.controller import Controller
+from auction_game.agent.player import AIPlayer
+from auction_game.flow.controller import Controller
 from auction_game.game.engine import compute_standings, run_match, settle_day
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 from auction_game.game.models import MatchLog, Observation
 from auction_game.game.players import Player
 

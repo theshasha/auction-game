@@ -8,10 +8,10 @@ import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from auction_game.ai import prompts
-from auction_game.ai.agent_execution import OutputFailedError
-from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.ai.ai_director import AIDirector
+from auction_game.agent import prompts
+from auction_game.llm.execution import OutputFailedError
+from auction_game.agent.tasks import TaskRunner
+from auction_game.flow.director import AIDirector
 from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
                                      make_log, make_logs, make_player, make_standings, request_text, speech_reply,
                                      task_entries)
@@ -30,7 +30,7 @@ def extend_openai_profile(monkeypatch, **overrides):
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_cleaned_history_preserves_phase_without_mutating_audit(protocol, monkeypatch):
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ThinkingPart, UserPromptPart
-    from auction_game.ai.ai_player import completed_history
+    from auction_game.agent.player import completed_history
     raw = [ModelRequest(parts=[UserPromptPart("old task")]), ModelResponse(parts=[
         ThinkingPart("secret", signature="old_signature_value", provider_name="openai"),
         TextPart("working", id="msg_old", provider_name="openai",

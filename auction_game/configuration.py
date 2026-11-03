@@ -6,8 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from auction_game.ai.text_output import FIXED_TAGS
-from auction_game.game.game_rules import GameSettings
+from auction_game.agent.text_output import FIXED_TAGS
+from auction_game.game.settings import GameSettings
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
 from auction_game.paths import (ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, MODELS_PATH, GAME_PATH, CAPABILITIES_PATH,
                                 WRITING_STYLE_PATH)

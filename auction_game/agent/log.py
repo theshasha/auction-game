@@ -9,8 +9,8 @@ import re
 
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-from auction_game.ai.agent_execution import CallFailedError, ExecutionResult, TaskCancelledError
-from auction_game.ai.agent_tasks import render_task_result
+from auction_game.llm.execution import CallFailedError, ExecutionResult, TaskCancelledError
+from auction_game.agent.tasks import render_task_result
 
 
 def _inputs(entry: dict) -> list[str]:

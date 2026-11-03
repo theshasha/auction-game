@@ -11,7 +11,7 @@ from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelResponse
 
-from auction_game.ai.llm_client import POLL_SECONDS, IncompleteStream, ModelFactory
+from auction_game.llm.client import POLL_SECONDS, IncompleteStream, ModelFactory
 
 
 @dataclass

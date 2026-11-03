@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path
 
 from auction_game.game.engine import resolve_bids
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
 

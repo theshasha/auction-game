@@ -11,10 +11,10 @@ import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart
 from pydantic_ai.models.function import FunctionModel
 
-from auction_game.ai import llm_client
-from auction_game.ai.agent_execution import CallFailedError, OutputFailedError, TaskCancelledError
-from auction_game.ai.agent_tasks import TaskRunner
-from auction_game.ai.llm_client import BufferedRequest, RunSignals, wait_before_retry
+from auction_game.llm import client as llm_client
+from auction_game.llm.execution import CallFailedError, OutputFailedError, TaskCancelledError
+from auction_game.agent.tasks import TaskRunner
+from auction_game.llm.client import BufferedRequest, RunSignals, wait_before_retry
 from tests.support.factories import CHANNELS, TEST_GAME, make_player, make_ai_obs, text_reply, task_entries
 from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, sse, GOOD
 
@@ -271,7 +271,7 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
-    from auction_game.ai import llm_client
+    from auction_game.llm import client as llm_client
     channel = {"base_url": "https://configured.invalid/custom", "api_key_env": "TEST_WIRE_KEY"}
     monkeypatch.setattr(llm_client, "load_dotenv", lambda path: None)
     monkeypatch.setenv(channel["api_key_env"], "fake-key")

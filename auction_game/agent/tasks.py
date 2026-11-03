@@ -9,11 +9,11 @@ from pydantic_ai import Agent, ModelRetry, RunContext, TextOutput
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import UsageLimits
 
-from auction_game.ai.agent_execution import AgentExecutor, ExecutionResult
-from auction_game.game.game_rules import GameSettings, validate_submission
-from auction_game.ai.llm_client import ModelFactory
-from auction_game.ai.text_output import (BRIEF_BID_FORMAT, LetterNames, OutputFormatError, output_requirement,
-                                         parse_text_output)
+from auction_game.llm.execution import AgentExecutor, ExecutionResult
+from auction_game.game.settings import GameSettings, validate_submission
+from auction_game.llm.client import ModelFactory
+from auction_game.agent.text_output import (BRIEF_BID_FORMAT, LetterNames, OutputFormatError, output_requirement,
+                                            parse_text_output)
 
 Task = Literal["bid", "plan", "speech", "memory", "summary"]
 

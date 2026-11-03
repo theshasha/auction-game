@@ -12,8 +12,8 @@ from auction_game.reporting import analyze
 from auction_game.cli import offline_demo
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.cli.offline_demo import generate_demo
-from auction_game.ai import prompts
-from auction_game.game.game_rules import GameSettings
+from auction_game.agent import prompts
+from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_paths import RunPaths
 from tests.support.factories import task_entries, text_reply
 

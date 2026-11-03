@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from auction_game.ai.ai_director import AIDirector
-from auction_game.ai.ai_player import AIPlayer
+from auction_game.flow.director import AIDirector
+from auction_game.agent.player import AIPlayer
 from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, load_configuration, load_game_settings
-from auction_game.controller import Controller, TournamentAborted
-from auction_game.ai.llm_client import MissingApiKeyError, make_model_factory
-from auction_game.ai.agent_tasks import TaskRunner
+from auction_game.flow.controller import Controller, TournamentAborted
+from auction_game.llm.client import MissingApiKeyError, make_model_factory
+from auction_game.agent.tasks import TaskRunner
 from auction_game.game.rules import render_rules, sync_root_rules
 from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_day_result, print_final_result
 from auction_game.game.tournament import run_tournament

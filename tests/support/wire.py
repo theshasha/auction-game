@@ -9,8 +9,8 @@ import httpx2 as http
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
 from tests.support.factories import TEST_GAME, text_reply
-from auction_game.ai.llm_client import ModelFactory
-from auction_game.ai.agent_tasks import AuctionDeps, make_agent as production_agent
+from auction_game.llm.client import ModelFactory
+from auction_game.agent.tasks import AuctionDeps, make_agent as production_agent
 
 
 PROTOCOLS = ("chat", "responses", "anthropic")

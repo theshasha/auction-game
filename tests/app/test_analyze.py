@@ -25,8 +25,8 @@ from pydantic_ai.usage import RequestUsage
 
 from tests.support.factories import TEST_GAME, make_day, make_log
 
-from auction_game.ai.agent_execution import CallFailedError, ExecutionResult
-from auction_game.reporting.agent_log import AgentLog
+from auction_game.llm.execution import CallFailedError, ExecutionResult
+from auction_game.agent.log import AgentLog
 from auction_game.reporting.analyze import analyze, collect_player_stats, find_latest_ai_run, load_match_logs, main
 from auction_game.reporting.run_output import initialize_run
 from auction_game.reporting.run_paths import RunPaths

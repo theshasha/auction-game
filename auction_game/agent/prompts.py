@@ -1,13 +1,13 @@
 """生成模型提示词，以及出价记录和排名表。
 
 规则正文维护于 RULES.template.md，使用本场参数与实际名单生成系统提示。
-文本输出格式见 text_output，业务校验和纠错见 agent_tasks。
+文本输出格式见 text_output，业务校验和纠错见 tasks。
 """
 
 from __future__ import annotations
 
 
-from auction_game.game.game_rules import GameSettings
+from auction_game.game.settings import GameSettings
 from auction_game.game.models import MatchLog, Observation, PlayerDayResult, StandingsEntry
 from auction_game.game.rules import render_rules
 

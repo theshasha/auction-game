@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import Callable, Optional
 
-from auction_game.game.game_rules import GameSettings, validate_submission
+from auction_game.game.settings import GameSettings, validate_submission
 from auction_game.game.models import (
     DayResult,
     MatchLog,
