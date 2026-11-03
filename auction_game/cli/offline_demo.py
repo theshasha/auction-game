@@ -34,12 +34,12 @@ class OfflineTask:
 
 
 def demo_submission(game, index, player_count, match_index, day, coins):
-    """离线报价脚本，按局和天给出确定的报价。
+    """离线出价脚本，按局和天给出确定的出价。
 
     每局首日全员出 0 流局，首位玩家的超级出价落空；次日前两位玩家用超级出价狙中末位玩家的 2，
     本局赢家从这天起每天以 1 独得。正赛由前两位轮流赢（局数为奇数时最后一局给第三位），
     两人打平进入加赛，加赛由首位玩家赢。至少 4 名玩家且金币够用时这些阶段都会出现；
-    否则报价截断到规则允许的范围，只保证合法。
+    否则出价截断到规则允许的范围，只保证合法。
     """
     super_bid = None
     if day == 1:
@@ -132,13 +132,13 @@ class DemoFactory:
                    + self._letter(current.letters))
         elif task == "memory":
             yield (f"我是{self.name}。本局已经结束，局末公开发言已收到。"
-                   "拍卖得分与超级命中分分别核对；下一局金币重置，按新局实际余额检查报价。")
+                   "拍卖分与命中分分别核对；下一局金币重置，按新局实际余额检查出价。")
         elif task == "speech":
             speech = f"我是{self.name}。我会根据公开结果谨慎使用金币。"
             yield ("<strategy>\n模拟私有策略：公开表达谨慎态度，不透露具体出价。\n</strategy>\n"
                    f"<speech>\n{speech}\n</speech>" + self._letter(current.letters))
         elif task == "summary":
-            yield f"模拟观众总结：我是{self.name}，本场按离线脚本完成比赛。拍卖得分与超级命中分以实际结算为准。"
+            yield f"模拟观众总结：我是{self.name}，本场按离线脚本完成比赛。拍卖分与命中分以实际结算为准。"
         else:
             raise ValueError(f"未知离线任务：{task}")
 

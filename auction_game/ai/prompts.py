@@ -111,7 +111,7 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
 
 
 def _my_last_day_line(obs: Observation) -> str:
-    """只解释本人金币结算；报价与得分由公开明细提供。
+    """只解释本人金币结算；出价与得分由公开明细提供。
 
     这些都能从公开记录推出，单独写出是为了避免模型算错扣款，进而误判其他玩家的余额。
     """
@@ -145,7 +145,7 @@ def _super_cell(result: PlayerDayResult) -> tuple[str, str]:
 
 
 def _yesterday_bids_table(obs: Observation) -> str:
-    """昨日报价与当前余额按玩家对齐；正常出价结果与局末出价日志的写法一致。"""
+    """昨日出价与当前余额按玩家对齐；正常出价结果与局末出价日志的写法一致。"""
     headers = ["玩家", "正常出价", "正常出价结果", "超级出价", "命中情况", "当前金币"]
     lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
     for result in obs.today_history[-1].players:

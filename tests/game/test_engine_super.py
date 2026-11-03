@@ -28,7 +28,7 @@ def test_resolve_bids_with_and_without_supers():
 class TestSuperBid:
     def test_snipe_unique_normal_bounty_and_reuse(self):
         # 狙击唯一正常出价：甲出 6；乙正常出 4 + 超级出价 6；丙 5；
-        # 丁戊 3；己 2。乙的超级 6 命中甲的唯一 6（甲按撞车扣 6），3 互撞
+        # 丁戊 3；己 2。乙狙 6，命中甲唯一的 6（甲按撞车扣 6），3 互撞
         # （丁戊各扣 3），丙未撞车最高 5 获胜扣 5；乙 -2 成本 +3 悬赏，正常出价 4 退还
         captured = {}
         log = run_scenario(
@@ -101,7 +101,7 @@ class TestSuperBid:
             )
 
     def test_multi_snipers_same_value_both_rewarded(self):
-        # 多人命中同一数值各得 3 金币：乙、己的超级 6 同时命中甲的唯一 6
+        # 多人命中同一数值各得 3 金币：乙、己都狙 6，同时命中甲唯一的 6
         captured = {}
         log = run_scenario(
             {1: [6, 4, 5, 3, 3, 2], 2: [0, 6, 0, 0, 0, 6]},
@@ -120,7 +120,7 @@ class TestSuperBid:
         assert captured["己"][1].my_match_score == 2
 
     def test_snipe_non_top_unique_also_pays_bounty(self):
-        # 命中不限于最高唯一价：乙的超级 0 命中己的唯一 0（扣 0 无实质损失），
+        # 命中不限于最高唯一价：乙狙 0，命中己唯一的 0（扣 0 无实质损失），
         # 乙照拿 3 金币悬赏（净 +1）；胜者仍是未撞车最高的甲
         captured = {}
         log = run_scenario(
@@ -175,7 +175,7 @@ class TestSuperBid:
         assert [day.pool for day in log.days] == [4, 4, 4, 4, 4, 4]
         assert log.auction_scores == {"甲": 0, "乙": 0, "丙": 0, "丁": 4, "戊": 0, "己": 0}
         assert log.scores == {"甲": 4, "乙": 4, "丙": 4, "丁": 4, "戊": 0, "己": 0}
-        # 首日流局照扣正常出价和超级成本，并发悬赏；次日再加工资。
+        # 首日流局照扣正常出价和超级出价成本，并发悬赏；次日再加工资。
         assert captured["甲"][1].all_coins == {"甲": 7, "乙": 7, "丙": 11, "丁": 10, "戊": 10, "己": 10}
         assert captured["甲"][1].my_match_score == 2
         assert captured["乙"][1].my_match_score == 2

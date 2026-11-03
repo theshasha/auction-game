@@ -94,7 +94,7 @@ def collect_player_stats(matches: list[dict]) -> dict:
                     result["super_hit"] and normal_bid_counts[result["super_bid"]] >= 2
                     for result in super_results
                 )
-                # 固定当天正常报价，移除全部超级后重新判定，只比较当天结果。
+                # 固定当天正常出价，移除全部超级出价后重新判定，只比较当天结果。
                 without_super, _, _ = resolve_bids(((result["player"], result["bid"]) for result in results), ())
                 if without_super != day["winner"]:
                     super_changed_days += 1
@@ -104,7 +104,7 @@ def collect_player_stats(matches: list[dict]) -> dict:
                     zero_bid_counts[name] += 1
                 if result["outcome"] == "collided":
                     collision_burn[name] += bid
-                    # 原本互撞的价位即使同时被狙，也只归入正常报价互撞。
+                    # 原本互撞的价位即使同时被狙，也只归入正常出价互撞。
                     if normal_bid_counts[bid] >= 2:
                         normal_collision_burn[name] += bid
                     else:
@@ -151,7 +151,7 @@ def print_player_stats(stats: dict) -> None:
     for row in stats["rows"]:
         print()
         print(row["name"])
-        print(f"  总分：{row['total_score']}分（拍卖{row['auction_score']}分，超级命中{row['super_score']}分）")
+        print(f"  总分：{row['total_score']}分（拍卖{row['auction_score']}分，命中{row['super_score']}分）")
         cells = " / ".join(str(score) for score in stats["score_matrix"][row["name"]])
         auction_cells = " / ".join(str(score) for score in stats["auction_score_matrix"][row["name"]])
         print(f"  各局总分：{cells}")
@@ -163,7 +163,7 @@ def print_player_stats(stats: dict) -> None:
         print(f"  超级出价：{super_text}")
         print(f"  超级出价净金币变化：{row['super_net_coins']:+d}金币")
         print(f"  撞车损失：{row['collision_burn']}金币"
-              f"（正常报价互撞{row['normal_collision_burn']}，唯一报价被狙{row['unique_sniped_burn']}）")
+              f"（正常出价互撞{row['normal_collision_burn']}，唯一正常出价被狙{row['unique_sniped_burn']}）")
         avg_bid_text = f"{row['avg_bid']:.2f}" if row["avg_bid"] is not None else "—"
         print(f"  平均正常出价（不含流局日）：{avg_bid_text}")
         end_coins_text = " / ".join(str(coins) for coins in row["end_coins"])
@@ -296,21 +296,21 @@ def analyze(run_dir: Path) -> None:
     print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
           f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
     print(f"撞车损失：{collision_burn} 金币"
-          f"（正常报价互撞 {normal_collision_burn}，唯一报价被狙 {unique_sniped_burn}；只计正常出价）")
+          f"（正常出价互撞 {normal_collision_burn}，唯一正常出价被狙 {unique_sniped_burn}；只计正常出价）")
     print(f"  每局平均：{collision_burn / len(matches):.1f} 金币")
     hit_rate = f"（命中率 {super_hits / super_uses:.0%}）" if super_uses else ""
     print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次{hit_rate}")
     print(f"  成本消耗：{super_cost_spent} 金币")
     print(f"  悬赏发放：{super_bounty_minted} 金币")
     print(f"  超级出价净金币变化：{super_bounty_minted - super_cost_spent:+d} 金币")
-    print(f"  命中原本互撞价 {player_stats['super_collision_hits']} 次（按超级使用笔数计，包含流局）")
+    print(f"  命中原本互撞价 {player_stats['super_collision_hits']} 次（按超级出价笔数计，包含流局）")
     print(f"  使用超级出价：{player_stats['super_days']} 天")
     print(f"  改变当日结果：{player_stats['super_changed_days']} 天")
-    print("    保持正常报价不变，对比取消全部超级后的结果")
+    print("    保持正常出价不变，对比取消全部超级出价后的结果")
     print()
 
     print("平均出价与奖池：")
-    print("  出价排除流局日，含正常报价及超级数值；奖池包含流局日")
+    print("  出价排除流局日，含正常出价及超级出价的价位；奖池包含流局日")
     for day_index in sorted(pools_by_day_index):
         pools = pools_by_day_index[day_index]
         bids = bids_by_day_index.get(day_index, [])

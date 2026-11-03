@@ -34,16 +34,16 @@ def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(c
     first, second, last = reports
     assert "第 1 局（正赛）第 1 天" in first
     assert "奖池 1 分；丙 以 9 金币获胜。" in first
-    assert "超级命中：丁 +3 分；己 +3 分。" in first
+    assert "超级出价命中：丁 +3 分；己 +3 分。" in first
     assert "| 排名 | 玩家 | 累计总分 | 金币（结算后） |" in first
     assert "| 1 | 丁 | 3 | 23 |" in first
     assert "| 1 | 己 | 3 | 23 |" in first
     assert "| 3 | 丙 | 1 | 11 |" in first
     assert first.index("| 1 | 丁") < first.index("| 3 | 丙")
     assert "奖池 2 分；流局，奖池作废。" in second
-    assert "超级命中：丁 +3 分。" in second
+    assert "超级出价命中：丁 +3 分。" in second
     assert "奖池 3 分；流局，奖池作废。" in last
-    assert "超级命中：无。" in last
+    assert "超级出价命中：无。" in last
 
 
 @pytest.mark.parametrize("tied", [False, True])

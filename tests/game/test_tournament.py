@@ -184,7 +184,7 @@ class TestDirectorMatchEnd:
         players = make_bid_players({
             (1, 1): {"甲": (2, None), "乙": (0, 1), "丙": (1, None)},
             (1, 2): {"甲": (2, None), "乙": (0, 1), "丙": (1, None)},
-            # 加赛全部正常报价作废，只有甲命中得 1 分；次日流局不再得分。
+            # 加赛全部正常出价作废，只有甲命中得 1 分；次日流局不再得分。
             (2, 1): {"甲": (0, 1), "乙": (1, None)},
         }, capture=observations)
         publications = []

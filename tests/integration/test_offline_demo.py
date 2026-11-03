@@ -53,7 +53,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     paths = RunPaths(run_dir)
     report = paths.matches_report.read_text(encoding="utf-8")
 
-    # 阶段：每局首日流局且超级出价落空，次日两笔超级命中；正赛打平后加赛一局。
+    # 阶段：每局首日流局且超级出价落空，次日两笔超级出价命中；正赛打平后加赛一局。
     matches = analyze.load_match_logs(run_dir)
     assert [payload["match"]["is_playoff"] for payload in matches] == [False] * game.regular_matches + [True]
     totals = dict.fromkeys(names, 0)

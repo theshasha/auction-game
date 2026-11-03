@@ -3,16 +3,16 @@
 合成对局（两局，每天一行出价 = NAMES 顺序）：
 
 第 1 局
-  第 1 天：出价 [5,4,3,2,1,0]；乙 超级狙 5（命中）、丙 超级狙 6（空）；
+  第 1 天：出价 [5,4,3,2,1,0]；乙 狙 5（命中）、丙 狙 6（落空）；
             5 被撞车（甲 扣款 5），乙 以 4 获胜。
   第 2 天：出价 [3,3,1,2,0,6]；3 互撞（甲、乙 扣款 3），己 以 6 获胜。
-  拍卖分：乙 1、己 1；乙超级命中另得 2 分，独占最高。
+  拍卖分：乙 1、己 1；乙命中另得 2 分，独占最高。
 第 2 局
   第 1 天：出价 [0,3,0,2,5,4]；0 互撞，戊 以 5 获胜。
   第 2 天：出价 [0,4,1,2,3,2]；2 互撞（丁、己 扣款 2），乙 以 4 获胜。
   拍卖分：乙 1、戊 1（乙/戊 各记并列最高 1 局）。
 
-局末余额按 game（初始 7、日工资 3、超级成本 2、悬赏 3）手算后写进日志。
+局末余额按 game（初始 7、日工资 3、超级出价成本 2、悬赏 3）手算后写进日志。
 """
 
 import json
@@ -76,7 +76,7 @@ def test_score_matrices_and_top_match_counts():
     assert stats["score_matrix"]["乙"] == [3, 1]
     assert stats["score_matrix"]["己"] == [1, 0]
     rows = rows_by_name(stats)
-    # 首局乙超级命中后独占最高，次局乙/戊并列最高。
+    # 首局乙命中后独占最高，次局乙/戊并列最高。
     assert rows["乙"]["tied_top_matches"] == 1
     assert rows["乙"]["solo_top_matches"] == 1
     assert rows["己"]["tied_top_matches"] == 0
@@ -121,7 +121,7 @@ def test_player_detail_metrics():
     assert rows["乙"]["avg_bid"] == 3.5
     assert rows["乙"]["end_coins"] == [4, 6]
     assert rows["乙"]["zero_bids"] == 0
-    # 甲：无超级；撞车扣款 = 5+3；均出 = (5+3+0+0)/4；出 0 两次
+    # 甲：没用超级出价；撞车扣款 = 5+3；均出 = (5+3+0+0)/4；出 0 两次
     assert rows["甲"]["super_uses"] == 0 and rows["甲"]["super_hits"] == 0
     assert rows["甲"]["super_net_coins"] == 0
     assert rows["甲"]["collision_burn"] == 8
@@ -129,13 +129,13 @@ def test_player_detail_metrics():
     assert rows["甲"]["unique_sniped_burn"] == 5
     assert rows["甲"]["avg_bid"] == 2.0
     assert rows["甲"]["zero_bids"] == 2
-    # 丙：超 1 用 0 中（狙 6 空）；无撞车扣款；出 0 一次
+    # 丙：超级出价 1 次，命中 0 次（狙 6 落空）；无撞车扣款；出 0 一次
     assert rows["丙"]["super_uses"] == 1 and rows["丙"]["super_hits"] == 0
     assert rows["丙"]["super_net_coins"] == -2
     assert rows["丙"]["collision_burn"] == 0
     assert rows["丙"]["avg_bid"] == 1.25
     assert rows["丙"]["zero_bids"] == 1
-    # 丁：无超级；撞车扣款 = 2（第 2 局第 2 天互撞）
+    # 丁：没用超级出价；撞车扣款 = 2（第 2 局第 2 天互撞）
     assert rows["丁"]["super_uses"] == 0 and rows["丁"]["super_hits"] == 0
     assert rows["丁"]["collision_burn"] == 2
     assert rows["丁"]["avg_bid"] == 2.0
@@ -156,27 +156,27 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert [output.index(section) for section in sections] == sorted(output.index(section) for section in sections)
     assert "各局顺序：正赛第 1 局 / 正赛第 2 局" in output
     yi = output.split("\n乙\n", 1)[1].split("\n\n", 1)[0]
-    for text in ["总分：4分（拍卖2分，超级命中2分）", "各局总分：3 / 1", "各局拍卖分：1 / 1",
+    for text in ["总分：4分（拍卖2分，命中2分）", "各局总分：3 / 1", "各局拍卖分：1 / 1",
                  "单局最高总分：独占1局，并列1局",
                  "超级出价：使用1次，命中1次（100%）", "超级出价净金币变化：+1金币",
-                 "撞车损失：3金币（正常报价互撞3，唯一报价被狙0）",
+                 "撞车损失：3金币（正常出价互撞3，唯一正常出价被狙0）",
                  "平均正常出价（不含流局日）：3.50", "各局结束余额：4 / 6 金币",
                  "正常出价为零：0次"]:
         assert text in yi
     jia = output.split("\n甲\n", 1)[1].split("\n\n", 1)[0]
     assert "超级出价：使用0次，命中0次\n" in jia
     assert "正常出价为零：2次" in jia
-    assert "撞车损失：8金币（正常报价互撞3，唯一报价被狙5）" in jia
-    assert "撞车损失：15 金币（正常报价互撞 10，唯一报价被狙 5；只计正常出价）" in output
+    assert "撞车损失：8金币（正常出价互撞3，唯一正常出价被狙5）" in jia
+    assert "撞车损失：15 金币（正常出价互撞 10，唯一正常出价被狙 5；只计正常出价）" in output
     assert "局末平均剩余金币：7.08（最低 2，最高 10）" in output
     assert "成本消耗：4 金币" in output
     assert "悬赏发放：3 金币" in output
     assert "超级出价净金币变化：-1 金币" in output
     assert "超级出价净金币变化：-2金币" in output
-    assert "命中原本互撞价 0 次（按超级使用笔数计，包含流局）" in output
+    assert "命中原本互撞价 0 次（按超级出价笔数计，包含流局）" in output
     assert "使用超级出价：1 天" in output
     assert "改变当日结果：1 天" in output
-    assert "含正常报价及超级数值" in output
+    assert "含正常出价及超级出价的价位" in output
     assert "获胜价平均" in output
     assert "模型用量" not in output  # 离线赛的用量是假模型估算的，不输出
 
@@ -207,7 +207,7 @@ def test_super_result_days_compare_all_supers_once_without_changing_logs(
         name: hit for name, (_, hit) in super_bids.items()}
     names = [result.player for result in days[0].players]
     auction_scores = {name: int(name == winner) for name in names}
-    # 各超级命中独立得 2 分，含流局日。
+    # 每笔命中各得 2 分，含流局日。
     scores = {name: auction_scores[name] + (2 if super_bids.get(name, (0, False))[1] else 0)
               for name in names}
     matches = [{"match": make_log(days=days, auction_scores=auction_scores,
@@ -253,8 +253,8 @@ def test_super_collision_hits_include_void_days(tmp_path, capsys):
     write_matches(tmp_path, matches)
     analyze(tmp_path)
     output = capsys.readouterr().out
-    assert "命中原本互撞价 3 次（按超级使用笔数计，包含流局）" in output
-    assert "撞车损失：6 金币（正常报价互撞 6，唯一报价被狙 0；只计正常出价）" in output
+    assert "命中原本互撞价 3 次（按超级出价笔数计，包含流局）" in output
+    assert "撞车损失：6 金币（正常出价互撞 6，唯一正常出价被狙 0；只计正常出价）" in output
 
 
 def test_super_result_days_do_not_simulate_future():
@@ -263,7 +263,7 @@ def test_super_result_days_do_not_simulate_future():
         make_day(1, [0, 5, 3], super_bids={"甲": 6}, game=game),
         make_day(2, [0, 0, 3], game=game),
     ]
-    # 移除首日超级后只重判首日，不重算次日余额或报价。
+    # 移除首日超级出价后只重判首日，不重算次日余额或出价。
     points = {"甲": 0, "乙": 1, "丙": 1}
     log = make_log(days=days, auction_scores=points, scores=points, game=game).to_dict()
     stats = collect_player_stats([{"match": log}])
@@ -498,7 +498,7 @@ def test_aggregate_zero_bids_include_super_but_player_zero_bids_only_normal(tmp_
                      scores={"甲": 2, "乙": 0, "丙": 2, "丁": 0, "戊": 0, "己": 1},
                      game=ANALYZE_GAME).to_dict()
     rows = rows_by_name(collect_player_stats([{"match": match}]))
-    assert rows["甲"]["zero_bids"] == 1  # 流局日正常 0 计入，两笔超级 0 不计
+    assert rows["甲"]["zero_bids"] == 1  # 流局日正常 0 计入，两笔狙 0 的超级出价不计
     assert rows["乙"]["zero_bids"] == 2
     write_matches(tmp_path, [{"match": match}])
     analyze(tmp_path)

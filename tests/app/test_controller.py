@@ -122,7 +122,7 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
             assert len(day_reports) == 1
             output = capsys.readouterr().out
             assert output.count("===== 第 1 局（正赛）第 1 天 =====") == 1
-            assert "超级命中：Alpha +1 分" in output
+            assert "超级出价命中：Alpha +1 分" in output
         assert len(alpha.task_runner.calls) == 1
         assert len(bravo.task_runner.calls) == (2 if failure and command != "q" else 1)
 

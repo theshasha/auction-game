@@ -55,7 +55,7 @@ python -m auction_game.game.rules --check  # 过期或模板有错时返回非�
 
 ## 交互控制
 
-AI 比赛默认单步：回车执行下一轮任务（如一轮出价或发言），`c` 切到连续模式，`s` 切回单步，`p` 暂停，`q` 退出。每天结算后终端显示赢家、超级命中和累计排名，金币列是当天结算后、发次日工资前的余额。
+比赛默认单步：回车执行下一轮任务（如一轮出价或发言），`c` 切到连续模式，`s` 切回单步，`p` 暂停，`q` 退出。每天结算后终端显示赢家、超级出价命中和累计排名，金币列是当天结算后、发次日工资前的余额。
 
 模型回复格式不对或出价违规时，程序会让它改一次；还不对，这个任务就算失败。请求失败（服务报错、网络中断、输出被截断）时，程序等 10 秒重发，最多重发 3 次。
 
@@ -101,6 +101,8 @@ python -m auction_game.cli.check_llm                      # 查常规阵容用�
 
 ## 常用调整
 
-- 提示开关：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测；`prompts.enable_personas` 关掉后，模型看不到人设。两项都关适合做公平对照。目录里的角色名带模型身份；要隐去时，在阵容里另写名字。`prompts.enable_writing_style` 开启时，`configs/writing_style.md` 的全文接在每位玩家系统提示的最后，约束所有输出的文风；文件缺失时启动报配置错误。
+- 预测：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测。
+- 人设：`prompts.enable_personas` 关掉后，模型看不到人设。和预测都关时适合做公平对照；目录里的角色名带模型身份，要隐去时，在阵容里另写名字。
+- 写作要求：`prompts.enable_writing_style` 开启时，`configs/writing_style.md` 的全文接在每位玩家系统提示的最后，约束所有输出的文风；文件缺失时启动报配置错误。
 - 并发：`llm.max_concurrency`，1 为串行。
 - 超时：`llm.timeout_seconds`，单次请求的秒数。

@@ -24,7 +24,7 @@ Submission = tuple[str, int, Optional[int]]  # (玩家, 正常出价, 超级出�
 def resolve_bids(
     normal_bids: Iterable[tuple[str, int]], super_values: Iterable[int],
 ) -> tuple[Optional[str], set[int], set[int]]:
-    """判定当天结果，返回获胜者、撞车价位和超级命中价位；只有正常出价能获胜。"""
+    """判定当天结果，返回获胜者、撞车价位和超级出价命中的价位；只有正常出价能获胜。"""
     normal_bids = list(normal_bids)
     normal_counts = Counter(bid for _, bid in normal_bids)
     sniped_values = {value for value in super_values if value in normal_counts}

@@ -109,7 +109,7 @@ def print_day_result(log: MatchLog, standings: list[StandingsEntry], coins: dict
         outcome = f"{day.winner} 以 {day.winning_bid} 金币获胜"
     print(f"奖池 {day.pool} 分；{outcome}。")
     hits = [f"{result.player} +{log.game.super_hit_score} 分" for result in day.players if result.super_hit]
-    print("超级命中：" + ("；".join(hits) if hits else "无") + "。")
+    print("超级出价命中：" + ("；".join(hits) if hits else "无") + "。")
     print("| 排名 | 玩家 | 累计总分 | 金币（结算后） |")
     print("| --- | --- | --- | --- |")
     for entry in standings:
