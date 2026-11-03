@@ -49,8 +49,8 @@ python main.py
 启动时会按 `game.yaml` 的生产参数生成根目录的 `RULES.md`，测试模式也一样；本场实际规则在场次目录的 `RULES.md`。改了 `RULES.template.md`、`game.yaml` 或阵容后也可以手动生成或检查：
 
 ```bash
-python -m auction_game.game.rules          # 更新 RULES.md
-python -m auction_game.game.rules --check  # 过期或模板有错时返回非零
+python -m auction_game.cli.rules          # 更新 RULES.md
+python -m auction_game.cli.rules --check  # 过期或模板有错时返回非零
 ```
 
 ## 交互控制

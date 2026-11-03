@@ -1,12 +1,13 @@
 """提示词文案：system 提示词、局末结果、记忆、收到的私信、加赛预告、规划与首日出价合并。
 每日出价消息见 test_prompts_bid_request.py；表格渲染见 test_prompts_render.py；
-规则文本见 test_prompts_rules.py。"""
+规则文本见 tests/game/test_rules.py。"""
 
 from dataclasses import replace
 
 import pytest
 
 from auction_game.agent import prompts
+from auction_game.game import tables
 from tests.support.factories import NAMES, TEST_GAME, make_day, make_log, make_logs, make_obs, make_standings
 
 
@@ -74,8 +75,8 @@ class TestSpeechFields:
                 else prompts.match_end_speech_request(log, standings))
         assert "本局得分：甲 3 分、乙 0 分" in text
         assert "排名与分数明细" in text
-        assert f"本局完整出价日志：\n\n{prompts.render_match_log(log)}" in text
-        assert f"排名与分数明细：\n\n{prompts.render_standings(standings)}" in text
+        assert f"本局完整出价日志：\n\n{tables.render_match_log(log)}" in text
+        assert f"排名与分数明细：\n\n{tables.render_standings(standings)}" in text
         assert "| 1 | 乙 | 14 | 12 | 2 | 1 |" in text
         assert "| 2 | 甲 | 12 | 8 | 4 | 3 |" in text
 
@@ -113,14 +114,14 @@ def test_received_letters_sit_between_facts_and_task(kind):
         "bid": (lambda received: prompts.bid_request(obs, received=received), "全员累计总分：", "昨天出价时",
                 prompts.BID_HINT),
         "match-end": (lambda received: prompts.match_end_speech_request(log, standings, received=received),
-                      prompts.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
+                      tables.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
         "playoff-match-end": (lambda received: prompts.match_end_speech_request(playoff_log, standings,
                                                                                 received=received),
                               "第一名总分并列，全员进入加赛。", "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
         "memory": (lambda received: prompts.memory_request({"乙": "局末发言"}, 2, received=received),
                    "【乙】局末发言", "在局末发言时", "请结合旧记忆"),
         "final": (lambda received: prompts.final_speech_request(standings, log, received=received),
-                  prompts.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的最终感言"),
+                  tables.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的最终感言"),
     }[kind]
     block = f"以下是其他玩家{written}写给你的私信：\n\n【乙】第一封\n第二行\n\n【丙】第二封"
     text = build({"乙": "第一封\n第二行", "丙": "第二封"})
@@ -183,8 +184,8 @@ class TestPlanBidMerge:
     def test_next_match_plan_restores_all_past_match_logs(self):
         logs = [make_log(match_index=1), make_log(match_index=2, is_playoff=True)]
         text = prompts.next_match_plan_request(logs, [], TEST_GAME)
-        assert f"第 1 局（正赛局）：\n\n{prompts.render_match_log(logs[0])}" in text
-        assert f"第 2 局（加赛局）：\n\n{prompts.render_match_log(logs[1])}" in text
+        assert f"第 1 局（正赛局）：\n\n{tables.render_match_log(logs[0])}" in text
+        assert f"第 2 局（加赛局）：\n\n{tables.render_match_log(logs[1])}" in text
         assert text.index("出价日志") < text.index("最新累计成绩") < text.index("规划第 3 局")
         assert "之前各局的出价日志会另行提供" in prompts.memory_request({}, 2)
 

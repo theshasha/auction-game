@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from auction_game.agent import prompts
 from auction_game.agent.player import AIPlayer
-from auction_game.flow.controller import Controller, RoundTask, run_parallel_round
+from auction_game.flow.controller import Controller, RoundTask
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.reporting.run_paths import RunPaths
@@ -49,7 +49,7 @@ class AIDirector:
                    *, deliver: bool = True) -> dict[str, Any]:
         """全员执行 run(玩家, 收到的信)，run 返回 (结果, 写的信)；按配置中的玩家顺序返回结果。
 
-        label 也是失败日志和 letters.md 的节标题。收到的信在轮开始前取出，补跑时不变。run_parallel_round
+        label 也是失败日志和 letters.md 的节标题。收到的信在轮开始前取出，补跑时不变。controller.run_round
         只在整轮成功并确认后返回，这时才记下这一轮写的信、再用它们替换邮箱，所以退出时邮箱仍是轮开始时的状态。
         deliver 为假的轮次不发请求，不收信也不写信，邮箱原样留到下一轮。
         """
@@ -57,7 +57,7 @@ class AIDirector:
         tasks = [RoundTask(key=player.name, participant=player,
                            fn=lambda player=player: run(player, inbox.get(player.name, {})))
                  for player in self.players]
-        results = run_parallel_round(tasks, self.controller, label=label)
+        results = self.controller.run_round(tasks, label)
         if deliver:
             written = {player.name: results[player.name][1] for player in self.players}
             self._record_letters(label, written)

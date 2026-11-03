@@ -8,7 +8,8 @@ from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, loa
 from auction_game.flow.controller import Controller, TournamentAborted
 from auction_game.llm.client import MissingApiKeyError, make_model_factory
 from auction_game.agent.tasks import TaskRunner
-from auction_game.game.rules import render_rules, sync_root_rules
+from auction_game.cli.rules import sync_root_rules
+from auction_game.game.rules import RulesError, render_rules
 from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_day_result, print_final_result
 from auction_game.game.tournament import run_tournament
 
@@ -39,7 +40,7 @@ def run_ai(test_model: bool = False) -> int:
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
         task_runners = make_task_runners(config, player_configs, make_model_factory,
                                          signals=controller.signals)
-    except (ConfigurationError, MissingApiKeyError) as exc:
+    except (ConfigurationError, RulesError, MissingApiKeyError) as exc:
         print(f"[配置错误] {exc}")
         return 1
     run_type = "ai-test" if test_model else "ai"

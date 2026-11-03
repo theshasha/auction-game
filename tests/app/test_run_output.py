@@ -8,6 +8,7 @@ import json
 import pytest
 
 from auction_game.agent import prompts
+from auction_game.game import tables
 from auction_game.game.rules import render_rules
 from auction_game.game.tournament import run_tournament
 from auction_game.reporting.run_output import (initialize_run, make_publish, print_day_result, print_final_result,
@@ -61,7 +62,7 @@ def test_final_result_counts_actual_regular_matches_and_reports_scores(capsys, t
     print_final_result(result)
     output = capsys.readouterr().out
     assert "共进行 3 局（正赛 2 局 + 加赛 1 局）" in output
-    assert prompts.render_standings(standings) in output
+    assert tables.render_standings(standings) in output
     if tied:
         names = "、".join(entry.player for entry in standings)
         assert f"并列冠军: {names}（32 分）" in output
@@ -119,9 +120,9 @@ def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):
     assert [section.split("\n", 1)[0] for section in sections] == [
         "第 1 局（正赛）", "第 2 局（正赛）", "第 3 局（加赛）"]
     for section, log in zip(sections, result.match_logs):
-        assert prompts.render_match_log(log) in section
+        assert tables.render_match_log(log) in section
     assert sections[-1].endswith(
-        f"截至本局的累计排名：\n\n{prompts.render_standings(result.final_standings)}\n")
+        f"截至本局的累计排名：\n\n{tables.render_standings(result.final_standings)}\n")
     assert "[逐局结果](matches.md)" in (paths.root / "README.md").read_text(encoding="utf-8")
 
 
@@ -158,7 +159,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert "| 3 | 3 |" in report
     for text in [report, prompts.match_end_speech_request(log, standings),
                  prompts.final_speech_request(standings, log)]:
-        assert prompts.render_match_log(log) in text
+        assert tables.render_match_log(log) in text
 
     payload = json.loads(paths.match(1).read_text(encoding="utf-8"))
     assert payload == expected
@@ -166,7 +167,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert payload["match"]["game"]["super_cost"] == 2
     assert payload["match"]["game"]["super_bounty"] == 5
     assert payload["match"]["scores"] == {"甲": 0, "乙": 0, "丙": 1, "丁": 4, "戊": 0, "己": 0}
-    shared_standings = prompts.render_standings(standings)
+    shared_standings = tables.render_standings(standings)
     assert f"截至本局的累计排名：\n\n{shared_standings}" in report
     assert shared_standings in (paths.root / "README.md").read_text(encoding="utf-8")
     assert all(entry["total_score"] == log.scores[entry["player"]]

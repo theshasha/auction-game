@@ -2,10 +2,9 @@
 
 import yaml
 
-from auction_game.flow import director as director_module
 from auction_game.cli import offline_demo
 from auction_game.configuration import load_configuration
-from auction_game.flow.controller import run_parallel_round
+from auction_game.flow.controller import Controller
 from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_paths import RunPaths
 
@@ -22,12 +21,14 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
     ))
     controllers = {"bid": set(), "speech": set()}
 
-    def run(tasks, controller, label):
+    run_round = Controller.run_round
+
+    def run(controller, tasks, label):
         assert controller.max_concurrency == 1
         controllers["bid" if label.endswith("出价") else "speech"].add(id(controller))
-        return run_parallel_round(tasks, controller, label)
+        return run_round(controller, tasks, label)
 
-    monkeypatch.setattr(director_module, "run_parallel_round", run)
+    monkeypatch.setattr(Controller, "run_round", run)
     run_dir = tmp_path / "offline"
     offline_demo.generate_demo(run_dir, test_model=True)
     assert len(controllers["bid"]) == len(controllers["speech"]) == 1

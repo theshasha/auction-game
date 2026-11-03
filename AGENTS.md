@@ -48,7 +48,7 @@
 
 ```bash
 python -m pytest tests/ -q
-python -m auction_game.game.rules --check
+python -m auction_game.cli.rules --check
 python -m pip check
 git diff --check
 ```

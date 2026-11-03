@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from auction_game.agent import prompts
+from auction_game.game import tables
 from tests.support.factories import NAMES, TEST_GAME, make_day, make_log, make_standings
 
 
@@ -18,7 +18,7 @@ class TestRenderMatchLog:
             auction_scores=dict(zip(NAMES, [1, 0, 0, 0, 0, 1])),
             scores=dict(zip(NAMES, [1, 0, 0, 0, 0, 1])),
         )
-        text = prompts.render_match_log(log)
+        text = tables.render_match_log(log)
         lines = text.splitlines()
 
         assert lines[0] == "奖池和得分的单位为分，正常出价的单位为金币。"
@@ -42,7 +42,7 @@ class TestRenderMatchLog:
             make_day(2, [3, 4, 5, 3, 2, 1], super_bids={"甲": 6}),
         ], auction_scores=dict(zip(NAMES, [0, 0, 2, 0, 0, 0])),
             scores=dict(zip(NAMES, [0, 2, 2, 0, 0, 0])))
-        text = prompts.render_match_log(log)
+        text = tables.render_match_log(log)
         assert "6（撞车） | 4（退款）；超级出价 6（命中） | 5（获胜）" in text
         assert "3（撞车）；超级出价 6（落空） | 4（退款）" in text
         assert "| 乙 2、丙 1 |" in text
@@ -61,7 +61,7 @@ class TestRenderMatchLog:
             ],
             game=replace(TEST_GAME, daily_pool=(2, 1, 3)),
         )
-        text = prompts.render_match_log(log)
+        text = tables.render_match_log(log)
         assert text.count("| 流局（奖池作废） | 1、2 |") == 2
         assert "2（撞车）" in text and "1（撞车）" in text
 
@@ -77,7 +77,7 @@ class TestRenderMatchLog:
             scores=dict(zip(NAMES, [expected + hit_score, hit_score, 0, 0, 0, 0])),
             game=game,
         )
-        text = prompts.render_match_log(log)
+        text = tables.render_match_log(log)
         void_scores = f"甲 {hit_score}、乙 {hit_score}" if hit_score else "—"
         assert f"| 流局（奖池作废） | 1、2 | {void_scores} |" in text
         assert f"| 甲 以 5 金币获胜 | 4 | 甲 {expected} |" in text
@@ -90,14 +90,14 @@ class TestRenderMatchLog:
             scores=dict(zip(NAMES, [2, 0, 0, 2, 0, 0])),
             game=replace(TEST_GAME, daily_pool=(1,)),
         )
-        text = prompts.render_match_log(log)
+        text = tables.render_match_log(log)
         assert "流局（奖池作废） | 1、2 | 甲 2、丁 2 |" in text
         assert "本局得分：甲 2 分、乙 0 分、丙 0 分、丁 2 分" in text
 
     def test_summary_uses_settled_scores(self):
         log = make_log(auction_scores=dict(zip(NAMES, [1, 0, 0, 0, 0, 0])),
                        scores=dict(zip(NAMES, [4, 0, 0, 0, 0, 0])))
-        text = prompts.render_match_log(log)
+        text = tables.render_match_log(log)
         assert text.splitlines()[4].endswith("| 甲 1 |")
         assert "本局得分：甲 4 分" in text
 
@@ -106,7 +106,7 @@ class TestRenderStandings:
     def test_renders_markdown_table_with_match_columns(self):
         standings = make_standings({"甲": [2, 1], "乙": [1, 1], "丙": [0, 0]},
                                    scores_history={"甲": [8, 6], "乙": [4, 4], "丙": [2, 0]})
-        text = prompts.render_standings(standings)
+        text = tables.render_standings(standings)
         lines = text.splitlines()
 
         assert lines[0] == "| 排名 | 玩家 | 总分 | 第1局 | 第2局 | 拍卖分 | 命中分 |"
@@ -115,23 +115,23 @@ class TestRenderStandings:
 
     def test_tied_players_share_rank_cell(self):
         standings = make_standings({"甲": [2], "乙": [1]}, scores_history={"甲": [8], "乙": [8]})
-        text = prompts.render_standings(standings)
+        text = tables.render_standings(standings)
         assert "| 1 | 甲 | 8 | 8 | 2 | 6 |" in text
         assert "| 1 | 乙 | 8 | 8 | 1 | 7 |" in text
 
     def test_less_auction_score_can_lead_by_total_score(self):
         standings = make_standings({"甲": [2], "乙": [1]}, scores_history={"甲": [8], "乙": [9]})
-        lines = prompts.render_standings(standings).splitlines()
+        lines = tables.render_standings(standings).splitlines()
         assert lines[2] == "| 1 | 乙 | 9 | 9 | 1 | 8 |"
         assert lines[3] == "| 2 | 甲 | 8 | 8 | 2 | 6 |"
 
     def test_match_columns_follow_score_history(self):
         standings = make_standings({"甲": [2]}, scores_history={"甲": [4, 6]})
-        text = prompts.render_standings(standings)
+        text = tables.render_standings(standings)
         assert "| 第2局 |" in text
         assert "| 1 | 甲 | 10 | 4 | 6 | 2 | 8 |" in text
 
     def test_no_match_columns_when_history_empty(self):
         standings = make_standings({"甲": [], "乙": []})
-        text = prompts.render_standings(standings)
+        text = tables.render_standings(standings)
         assert text.splitlines()[0] == "| 排名 | 玩家 | 总分 | 拍卖分 | 命中分 |"

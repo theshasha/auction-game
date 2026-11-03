@@ -6,7 +6,7 @@ import yaml
 
 from auction_game.cli.sync_models import build_snapshot
 from tests.support.factories import CHANNELS
-from auction_game.game import rules
+from auction_game.cli import rules
 
 
 @pytest.fixture(autouse=True)

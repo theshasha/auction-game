@@ -34,7 +34,7 @@
 
 ### 规则正文
 
-- 团队赛的模板是 `RULES_TEAM.template.md`。团队赛入口在创建日志和请求模型前生成根目录的 `RULES_TEAM.md`，`python -m auction_game.game.rules --check` 两份都检查。场次目录里的规则文件仍叫 `RULES.md`。
+- 团队赛的模板是 `RULES_TEAM.template.md`。团队赛入口在创建日志和请求模型前生成根目录的 `RULES_TEAM.md`，`python -m auction_game.cli.rules --check` 两份都检查。场次目录里的规则文件仍叫 `RULES.md`。
 - 第一节改为阵营赛制：列出两个阵营和各自的队员，排名只看阵营总分，同分加赛，到上限算平局。
 - 第二节写明金币归个人，不能转给队友。
 - 第四节第 1、2 条换成上面的正文。结算例子覆盖两种情况：只狙到队友的价位算落空；命中时，同价位上的队友出价一起撞车。第二种情况要写明，队友撞车是因为它和对方出了同一个价，本来就会撞车，超级出价没有额外伤到队友；写不清楚的话，模型可能刻意避开队友的价位。
@@ -76,7 +76,7 @@
 
 - `auction_game/game/engine.py` 的结算要知道每名玩家的阵营，个人赛按每人自成一个阵营处理；
 - `auction_game/game/tournament.py` 按阵营总分判断并列，到上限算平局；
-- `auction_game/configuration.py` 解析 `teams.yaml`，`auction_game/game/rules.py` 生成两份规则；
+- `auction_game/configuration.py` 解析 `teams.yaml`，`auction_game/cli/rules.py` 生成和检查两份规则；
 - `auction_game/agent/prompts.py` 和 `auction_game/reporting/run_output.py` 显示阵营；
 - `main.py` 和 `auction_game/runners.py` 组装入口，`auction_game/cli/offline_demo.py` 支持团队赛。
 

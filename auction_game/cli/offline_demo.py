@@ -18,7 +18,8 @@ from auction_game.agent.text_output import LetterNames
 from auction_game.game.settings import GameSettings
 from auction_game.runners import make_task_runners, play_ai
 from auction_game.reporting.run_output import make_run_dir
-from auction_game.game.rules import render_rules, sync_root_rules
+from auction_game.cli.rules import sync_root_rules
+from auction_game.game.rules import render_rules
 
 
 @dataclass(frozen=True)

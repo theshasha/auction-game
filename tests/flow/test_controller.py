@@ -23,7 +23,7 @@ from tests.support.factories import (
     task_entries,
 )
 from auction_game.flow.director import AIDirector
-from auction_game.flow.controller import Controller, RoundTask, TournamentAborted, run_parallel_round
+from auction_game.flow.controller import Controller, RoundTask, TournamentAborted
 from auction_game.flow import controller as controller_module
 from auction_game.llm.execution import CallFailedError, TaskCancelledError
 from auction_game.agent.tasks import TaskRunner
@@ -89,7 +89,7 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
     def collect(observations):
         tasks = [RoundTask(player.name, lambda p=player, o=obs: p.decide_bid(o), player)
                  for player, obs in observations]
-        results = run_parallel_round(tasks, controller, "测试出价")
+        results = controller.run_round(tasks, "测试出价")
         return [results[player.name] for player, _ in observations]
 
     def report_day(log, standings, coins):
@@ -145,7 +145,7 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
     before = [p.checkpoint() for p in players]
     tasks = [RoundTask(key=p.name, participant=p,
                        fn=lambda p=p: p.save_memory("all published speeches", "match_1_memory")) for p in players]
-    with running(controller, lambda: run_parallel_round(tasks, controller, "累计记忆")) as (thread, outcome):
+    with running(controller, lambda: controller.run_round(tasks, "累计记忆")) as (thread, outcome):
         assert gate.wait(timeout=5)
         assert alpha.memory == "alpha cumulative" and len(alpha.messages) == 2
         assert bravo.checkpoint() == before[1]
@@ -360,7 +360,7 @@ class TestParallelRound:
             return index
 
         tasks = [RoundTask(str(i), lambda i=i: task(i)) for i in range(count)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "有界"), *releases) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "有界"), *releases) as (thread, outcome):
             assert gate.wait(timeout=5)
             assert not any(event.is_set() for event in started)
             controller.offer_command("")
@@ -396,7 +396,7 @@ class TestParallelRound:
             return 2
 
         tasks = [RoundTask("first", first), RoundTask("second", second)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "快速恢复"), release) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "快速恢复"), release) as (thread, outcome):
             assert started.wait(timeout=5)
             controller.offer_command("p")
             controller.offer_command(command)
@@ -427,7 +427,7 @@ class TestParallelRound:
             return 2
 
         tasks = [RoundTask("first", first), RoundTask("second", second)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "暂停派发"), release) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "暂停派发"), release) as (thread, outcome):
             assert started.wait(timeout=5)
             controller.offer_command("p")
             release.set()
@@ -468,7 +468,7 @@ class TestParallelRound:
             return index
 
         tasks = [RoundTask(str(i), lambda i=i: task(i)) for i in range(3)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "混合"), release) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "混合"), release) as (thread, outcome):
             assert first_started.wait(timeout=5)
             assert pause_requested.wait(timeout=5)
             release.set()
@@ -515,7 +515,7 @@ class TestParallelRound:
             return "recovered"
 
         tasks = [RoundTask("success", success), RoundTask("retry", retry)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "立即确认")) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "立即确认")) as (thread, outcome):
             assert all(notice.wait(timeout=5) for notice in notices)
             thread.join(timeout=5)
             assert outcome.get("result") == {"success": "kept", "retry": "recovered"}
@@ -536,7 +536,7 @@ class TestParallelRound:
             calls.append(1)
             raise CallFailedError("测试失败")
 
-        with running(controller, lambda: run_parallel_round([RoundTask("fail", fail)], controller, "中止补跑")) as (thread, outcome):
+        with running(controller, lambda: controller.run_round([RoundTask("fail", fail)], "中止补跑")) as (thread, outcome):
             assert notice.wait(timeout=5)
             thread.join(timeout=5)
             assert isinstance(outcome.get("error"), TournamentAborted)
@@ -567,7 +567,7 @@ class TestParallelRound:
         participant = Participant()
         tasks = [RoundTask("first", participant.run, participant),
                  RoundTask("unstarted", lambda: pytest.fail("q 后不得派发"))]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "中止")) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "中止")) as (thread, outcome):
             assert started.wait(timeout=5)
             controller.offer_command("q")
             thread.join(timeout=5)
@@ -593,7 +593,7 @@ class TestParallelRound:
         player = make_player(runner, tmp_path, name="Alpha")
         before = player.checkpoint()
         tasks = [RoundTask("Alpha", lambda: player.decide_bid(make_ai_obs(day=2)), player)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "出价")) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "出价")) as (thread, outcome):
             deadline = time.monotonic() + 5
             while not h.requests and time.monotonic() < deadline:
                 time.sleep(0.01)
@@ -618,7 +618,7 @@ class TestParallelRound:
             raise ValueError("真实程序错误")
 
         with pytest.raises(ValueError, match="真实程序错误"):
-            run_parallel_round([RoundTask("broken", broken)], controller, "程序错误")
+            controller.run_round([RoundTask("broken", broken)], "程序错误")
 
     @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
     def test_failed_participant_rolls_back_and_successful_result_is_kept(self, command):
@@ -658,7 +658,7 @@ class TestParallelRound:
             return "ready"
 
         tasks = [RoundTask("stateless", stateless), RoundTask("counter", counter.run, participant=counter)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "通用任务")) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "通用任务")) as (thread, outcome):
             assert notice.wait(timeout=5)
             assert counter.value == 0 and counter.restored == ["start"]
             controller.offer_command(command)
@@ -712,7 +712,7 @@ class TestParallelRound:
 
         monkeypatch.setattr(controller_module, "as_completed", hold_first_collection)
         tasks = [RoundTask("Alpha", consume_plan, participant=player)]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "首日"),
+        with running(controller, lambda: controller.run_round(tasks, "首日"),
                      release_collection) as (thread, outcome):
             assert ready.wait(timeout=5)
             assert player._pending_day1_bid is None
@@ -755,7 +755,7 @@ class TestParallelRound:
             RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
             RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
         ]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮")) as (thread, outcome):
+        with running(controller, lambda: controller.run_round(tasks, "测试轮")) as (thread, outcome):
             assert gate.wait(timeout=5)
             assert "result" not in outcome
             assert len(alpha_chat.calls) == 1
@@ -816,7 +816,7 @@ class TestParallelRound:
             RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
             RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
         ]
-        with running(controller, lambda: run_parallel_round(tasks, controller, "测试轮"),
+        with running(controller, lambda: controller.run_round(tasks, "测试轮"),
                      release_bravo) as (thread, outcome):
             assert alpha_collected.wait(timeout=5)
             assert bravo_started.wait(timeout=5)

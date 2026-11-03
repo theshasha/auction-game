@@ -7,8 +7,8 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from auction_game.agent import prompts
 from auction_game.game.models import MatchLog, StandingsEntry
+from auction_game.game.tables import render_match_log, render_standings
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
 
@@ -47,8 +47,8 @@ def make_publish(log_dir: Path):
         kind = "加赛" if log.is_playoff else "正赛"
         text = (
             f"\n## 第 {log.match_index} 局（{kind}）\n\n"
-            f"{prompts.render_match_log(log)}\n\n"
-            f"截至本局的累计排名：\n\n{prompts.render_standings(standings)}\n"
+            f"{render_match_log(log)}\n\n"
+            f"截至本局的累计排名：\n\n{render_standings(standings)}\n"
         )
         with paths.matches_report.open("a", encoding="utf-8") as file:
             file.write(text)
@@ -90,7 +90,7 @@ def write_readme(paths, standings=None):
         lines.append("[私信](letters.md)")
     lines.append("[逐局结果](matches.md)")
     if standings is not None:
-        lines.extend(["## 截至当前的结果", prompts.render_standings(standings)])
+        lines.extend(["## 截至当前的结果", render_standings(standings)])
     private = [pc for pc in config["players"] if paths.player(pc["number"], readable=True).exists()]
     if private:
         lines.append("## 私人对话（含私有策略，仅供赛后阅读）")
@@ -122,7 +122,7 @@ def print_final_result(result) -> None:
     if result.playoff_cap_hit:
         print("加赛已达上限，保留并列冠军。")
     print("\n===== 最终排名 =====")
-    print(prompts.render_standings(result.final_standings))
+    print(render_standings(result.final_standings))
     champions = [e for e in result.final_standings if e.rank == 1]
     if len(champions) > 1:
         names = "、".join(e.player for e in champions)

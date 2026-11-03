@@ -7,6 +7,7 @@ import pytest
 
 from auction_game.agent import prompts
 from auction_game.game import rules
+from auction_game.cli import rules as rules_command
 from auction_game.configuration import load_game_settings, load_players
 from tests.support.factories import NAMES, TEST_GAME
 from auction_game.game.rules import render_rules
@@ -19,8 +20,8 @@ class TestRulesText:
         names = [player["name"] for player in load_players()]
         text = render_rules(load_game_settings(), names)
         document = tmp_path / "RULES.md"
-        monkeypatch.setattr(rules, "RULES_PATH", document)
-        rules.sync_root_rules(load_game_settings())
+        monkeypatch.setattr(rules_command, "RULES_PATH", document)
+        rules_command.sync_root_rules(load_game_settings())
         assert document.read_text(encoding="utf-8") == text
         system = prompts.build_system_prompt(names[0], "人设", "正文", [], names, load_game_settings())
         body = render_rules(load_game_settings(), names, include_note=False)
@@ -64,7 +65,7 @@ class TestRulesText:
             render_rules(TEST_GAME, NAMES)
 
     def test_runtime_render_does_not_read_generated_document(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(rules, "RULES_PATH", tmp_path / "missing.md")
+        monkeypatch.setattr(rules_command, "RULES_PATH", tmp_path / "missing.md")
         text = render_rules(TEST_GAME, NAMES, include_note=False)
         system = prompts.build_system_prompt(
             "甲", "人设", "正文", [], NAMES, TEST_GAME
@@ -74,7 +75,7 @@ class TestRulesText:
     def test_check_command_rejects_stale_document_and_keeps_it(self, tmp_path, monkeypatch):
         document = tmp_path / "RULES.md"
         document.write_text("过期规则", encoding="utf-8")
-        monkeypatch.setattr(rules, "RULES_PATH", document)
+        monkeypatch.setattr(rules_command, "RULES_PATH", document)
         monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
-        assert rules.main() == 1
+        assert rules_command.main() == 1
         assert document.read_text(encoding="utf-8") == "过期规则"

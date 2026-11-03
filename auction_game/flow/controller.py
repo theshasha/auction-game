@@ -132,90 +132,89 @@ class Controller:
                 self._resume_requested = False
                 return
 
+    def run_round(self, tasks: list[RoundTask], label: str) -> dict[str, Any]:
+        """运行一轮输入已固定的任务；全部成功，且暂停过时用户已确认继续，才返回结果。
 
-def run_parallel_round(tasks: list[RoundTask], controller: Controller, label: str) -> dict[str, Any]:
-    """运行一轮输入已固定的任务；全部成功，且暂停过时用户已确认继续，才返回结果。
+        同时最多运行 max_concurrency 项。派发和暂停共用一把锁；即使 p 后立即恢复，
+        也先等已启动任务结束并收集结果，再决定补跑或提交。
+        """
+        checkpoints = {task.key: task.participant.checkpoint()
+                       for task in tasks if task.participant is not None}
 
-    同时最多运行 max_concurrency 项。派发和暂停共用一把锁；即使 p 后立即恢复，
-    也先等已启动任务结束并收集结果，再决定补跑或提交。
-    """
-    checkpoints = {task.key: task.participant.checkpoint()
-                   for task in tasks if task.participant is not None}
+        def rollback(task: RoundTask) -> None:
+            if task.key in checkpoints:
+                task.participant.rollback(checkpoints[task.key])
 
-    def rollback(task: RoundTask) -> None:
-        if task.key in checkpoints:
-            task.participant.rollback(checkpoints[task.key])
+        def notify_done(_future) -> None:
+            with self._changed:
+                self._changed.notify_all()
 
-    def notify_done(_future) -> None:
-        with controller._changed:
-            controller._changed.notify_all()
+        results: dict[str, Any] = {}
+        pending = list(tasks)
+        gate_label = label
+        try:
+            self.wait_for_turn(gate_label)
+            while True:
+                if not pending:
+                    with self._lock:
+                        if self._quit_requested:
+                            raise TournamentAborted
+                        if not self._pause_requested:
+                            return results
+                    self.wait_for_turn(f"{label}（全部成功，确认后继续）")
+                    continue
+                failed: dict[str, str] = {}
+                unstarted = list(pending)
+                active = {}
+                with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(pending))) as pool:
+                    while unstarted or active:
+                        with self._changed:
+                            # 派发和暂停命令在同一把锁下，暂停后不会再派发。
+                            while (unstarted and len(active) < self.max_concurrency
+                                   and not self._pause_requested and not self._quit_requested):
+                                task = unstarted.pop(0)
+                                future = pool.submit(task.fn)
+                                active[future] = task
+                                future.add_done_callback(notify_done)
+                            done = [future for future in active if future.done()]
+                            if not done:
+                                if not active:
+                                    break
+                                self._changed.wait()
+                                continue
+                        # 收集所有已完成的结果，包括暂停前已完成但还没收集的。
+                        # done 里都已完成；用 as_completed 是为了让竞态测试在收集时机插入等待。
+                        for future in as_completed(done):
+                            task = active.pop(future)
+                            try:
+                                results[task.key] = future.result()
+                            except CallFailedError as exc:
+                                failed[task.key] = str(exc)
+                                rollback(task)
+                            except TaskCancelledError:
+                                rollback(task)  # 只在 q 之后发生，下面随即中止比赛
 
-    results: dict[str, Any] = {}
-    pending = list(tasks)
-    gate_label = label
-    try:
-        controller.wait_for_turn(gate_label)
-        while True:
-            if not pending:
-                with controller._lock:
-                    if controller._quit_requested:
+                pending = [task for task in pending if task.key not in results]
+                with self._lock:
+                    if self._quit_requested:
                         raise TournamentAborted
-                    if not controller._pause_requested:
-                        return results
-                controller.wait_for_turn(f"{label}（全部成功，确认后继续）")
-                continue
-            failed: dict[str, str] = {}
-            unstarted = list(pending)
-            active = {}
-            with ThreadPoolExecutor(max_workers=min(controller.max_concurrency, len(pending))) as pool:
-                while unstarted or active:
-                    with controller._changed:
-                        # 派发和暂停命令在同一把锁下，暂停后不会再派发。
-                        while (unstarted and len(active) < controller.max_concurrency
-                               and not controller._pause_requested and not controller._quit_requested):
-                            task = unstarted.pop(0)
-                            future = pool.submit(task.fn)
-                            active[future] = task
-                            future.add_done_callback(notify_done)
-                        done = [future for future in active if future.done()]
-                        if not done:
-                            if not active:
-                                break
-                            controller._changed.wait()
-                            continue
-                    # 收集所有已完成的结果，包括暂停前已完成但还没收集的。
-                    # done 里都已完成；用 as_completed 是为了让竞态测试在收集时机插入等待。
-                    for future in as_completed(done):
-                        task = active.pop(future)
-                        try:
-                            results[task.key] = future.result()
-                        except CallFailedError as exc:
-                            failed[task.key] = str(exc)
-                            rollback(task)
-                        except TaskCancelledError:
-                            rollback(task)  # 只在 q 之后发生，下面随即中止比赛
-
-            pending = [task for task in pending if task.key not in results]
-            with controller._lock:
-                if controller._quit_requested:
-                    raise TournamentAborted
-                paused = controller._pause_requested
-                if not paused and not pending:
-                    return results  # 提交和暂停在同一把锁下判断。
-            notices = []
-            if paused:
-                notices.append(f"[暂停] 成功 {len(results)}，失败 {len(failed)}，"
-                               f"未启动 {len(unstarted)}。成功结果已保留。")
-            if failed:
-                notices.append(f"[失败] {'、'.join(failed)}：回车或 c 只补跑失败和未启动任务，"
-                               "成功任务不重跑；q 撤销本轮并退出比赛。")
-                for detail in failed.values():
-                    notices.append(f"  {detail}")
-            gate_label = (f"{label}（补跑 {len(pending)} 项）" if pending
-                          else f"{label}（全部成功，确认后继续）")
-            controller.wait_for_turn(gate_label, notices=tuple(notices),
-                                     require_confirmation=bool(failed))
-    except TournamentAborted:
-        for task in tasks:
-            rollback(task)
-        raise
+                    paused = self._pause_requested
+                    if not paused and not pending:
+                        return results  # 提交和暂停在同一把锁下判断。
+                notices = []
+                if paused:
+                    notices.append(f"[暂停] 成功 {len(results)}，失败 {len(failed)}，"
+                                   f"未启动 {len(unstarted)}。成功结果已保留。")
+                if failed:
+                    notices.append(f"[失败] {'、'.join(failed)}：回车或 c 只补跑失败和未启动任务，"
+                                   "成功任务不重跑；q 撤销本轮并退出比赛。")
+                    for detail in failed.values():
+                        notices.append(f"  {detail}")
+                gate_label = (f"{label}（补跑 {len(pending)} 项）" if pending
+                              else f"{label}（全部成功，确认后继续）")
+                self.wait_for_turn(gate_label, notices=tuple(notices),
+                                   require_confirmation=bool(failed))
+        except TournamentAborted:
+            for task in tasks:
+                rollback(task)
+            raise
