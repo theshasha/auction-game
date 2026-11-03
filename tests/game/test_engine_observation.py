@@ -4,14 +4,13 @@ from dataclasses import replace
 
 from tests.support.factories import (
     TEST_GAME,
-    ScriptedPlayer,
     constant_strategies,
     run_one_match,
     run_scenario,
     scored_log,
     super_by_day,
 )
-from auction_game.game.engine import compute_standings, run_match
+from auction_game.game.engine import compute_standings
 
 
 class TestDayHistoryObservation:
@@ -134,11 +133,8 @@ class TestScoreObservations:
             captured[obs.my_name].append(obs)
             return bids[obs.my_name][obs.day - 1]
 
-        players = [
-            ScriptedPlayer(name, strategy, super_by_day({1: 4, 2: 0}) if name == "乙" else None)
-            for name in names
-        ]
-        log = run_match(players, 2, False, finished, game)
+        log = run_one_match({name: strategy for name in names}, 2, game=game, names=names, finished_logs=finished,
+                            super_strategies={"乙": super_by_day({1: 4, 2: 0})})
         assert all(obs.match_index == 2 for observations in captured.values() for obs in observations)
         assert log.auction_scores == {"甲": 0, "乙": 10, "丙": 0}
         assert log.scores == {"甲": 0, "乙": 16, "丙": 0}

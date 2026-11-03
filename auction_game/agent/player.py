@@ -17,7 +17,6 @@ from auction_game.agent.tasks import TaskRunner
 from auction_game.agent.text_output import LetterNames
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import Observation
-from auction_game.game.players import Player
 
 
 MEMORY_HEADER = "【累计私有记忆，仅自己可见】"
@@ -43,7 +42,7 @@ def completed_history(messages: list[ModelMessage]) -> list[ModelMessage]:
     return [message for message in history if message.parts]
 
 
-class AIPlayer(Player):
+class AIPlayer:
     """日志成功才提交；快照同时恢复当前上下文、全场回顾和记忆。"""
 
     def __init__(self, name: str, persona_title: str, persona_text: str,
@@ -52,7 +51,7 @@ class AIPlayer(Player):
                  readable_path: Path,
                  enable_predictions: bool = True, enable_personas: bool = True,
                  writing_style: str | None = None):
-        super().__init__(name)
+        self.name = name
         self.game = game
         system_prompt = prompts.build_system_prompt(
             name, persona_title, persona_text, predictions, all_names, game,
@@ -116,10 +115,6 @@ class AIPlayer(Player):
                             f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
                             letters=self.letter_names, brief_format=True)
         return (output["bid"], output["super_bid"]), output["letters"]
-
-    def decide_bid(self, obs: Observation) -> tuple[int, int | None]:
-        """引擎接口；比赛中的出价经编排层调用 bid，才能收信和写信。"""
-        return self.bid(obs, {})[0]
 
     def give_speech(self, user_text: str, phase: str, context: str = "", *,
                     letters: bool = True) -> tuple[str, list[dict]]:

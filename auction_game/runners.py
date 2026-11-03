@@ -10,8 +10,7 @@ from auction_game.llm.client import MissingApiKeyError, make_model_factory
 from auction_game.agent.tasks import TaskRunner
 from auction_game.cli.rules import sync_root_rules
 from auction_game.game.rules import RulesError, render_rules
-from auction_game.reporting.run_output import initialize_run, make_publish, make_run_dir, print_day_result, print_final_result
-from auction_game.game.tournament import run_tournament
+from auction_game.reporting.run_output import initialize_run, make_run_dir, print_final_result
 
 
 def make_task_runners(config, player_configs, model_factory, runner=TaskRunner, signals=None) -> dict:
@@ -114,16 +113,8 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
         controller.start_stdin_reader()
         print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=退出比赛")
 
-    director = AIDirector(players, controller, run_dir, game=game)
     try:
-        result = run_tournament(
-            players,
-            game,
-            on_match_end=make_publish(run_dir),
-            on_day_end=print_day_result,
-            director=director,
-            bid_collector=director.collect_bids,
-        )
+        result = AIDirector(players, controller, run_dir, game=game).run()
     except TournamentAborted:
         print("\n已退出比赛。")
         return 0

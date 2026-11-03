@@ -272,8 +272,8 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: factories.append(kwargs))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / mode)
     monkeypatch.setattr(runners.Controller, "start_stdin_reader", lambda self: None)
-    monkeypatch.setattr(runners, "run_tournament",
-                        lambda *args, **kwargs: (_ for _ in ()).throw(runners.TournamentAborted))
+    monkeypatch.setattr(runners.AIDirector, "run",
+                        lambda self: (_ for _ in ()).throw(runners.TournamentAborted))
     assert runners.run_ai(test_model=test_model) == 0
     output = capsys.readouterr().out
     if test_model:

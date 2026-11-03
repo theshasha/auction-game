@@ -70,7 +70,7 @@ def test_deeply_nested_decision_gets_correction_and_keeps_audit(tmp_path):
     invalid = GOOD.replace('"bid": 2', '"bid": ' + "[" * 10000 + "0" + "]" * 10000)
     harness = Harness("chat", [reply(text=invalid), reply()])
     player = make_player(TaskRunner(harness.factory), tmp_path)
-    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert player.bid(make_ai_obs(), {})[0] == (2, None)
     assert len(harness.requests) == 2
     entry = task_entries(player.log.path)[-1]
     texts = [part["content"] for message in entry["messages"] for part in message["parts"]

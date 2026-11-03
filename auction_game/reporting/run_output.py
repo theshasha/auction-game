@@ -1,4 +1,4 @@
-"""运行目录、每日战报、局末日志与最终结果展示。"""
+"""场次目录、公开发言、私信、每日战报、局末日志与最终结果展示。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.game.tables import render_match_log, render_standings
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
+
+# 节标题是写信的环节，说明送达时机，免得读成收信的时候。
+LETTERS_HEADER = "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
 
 
 def make_run_dir(mode: str) -> Path:
@@ -31,31 +34,47 @@ def make_run_dir(mode: str) -> Path:
     return run_dir
 
 
-def make_publish(log_dir: Path):
+def publish_match(paths: RunPaths, log: MatchLog, standings: list[StandingsEntry]) -> None:
     """每局结束时写入该局的完整结算 JSON，并把出价表和累计排名追加到 matches.md，终端只提示阅读位置。"""
+    payload = {
+        "match": log.to_dict(),
+        "standings_after_match": [asdict(entry) for entry in standings],
+    }
+    paths.match(log.match_index).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    kind = "加赛" if log.is_playoff else "正赛"
+    text = (
+        f"\n## 第 {log.match_index} 局（{kind}）\n\n"
+        f"{render_match_log(log)}\n\n"
+        f"截至本局的累计排名：\n\n{render_standings(standings)}\n"
+    )
+    _append(paths.matches_report, text)
+    write_readme(paths, standings)
+    print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {paths.matches_report}")
 
-    paths = RunPaths(log_dir)
 
-    def publish(log: MatchLog, standings: list[StandingsEntry]) -> None:
-        payload = {
-            "match": log.to_dict(),
-            "standings_after_match": [asdict(entry) for entry in standings],
-        }
-        paths.match(log.match_index).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        kind = "加赛" if log.is_playoff else "正赛"
-        text = (
-            f"\n## 第 {log.match_index} 局（{kind}）\n\n"
-            f"{render_match_log(log)}\n\n"
-            f"截至本局的累计排名：\n\n{render_standings(standings)}\n"
-        )
-        with paths.matches_report.open("a", encoding="utf-8") as file:
-            file.write(text)
-        write_readme(paths, standings)
-        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {paths.matches_report}")
+def publish_speeches(paths: RunPaths, title: str, speeches: dict[str, str]) -> None:
+    """公开发言按配置中的玩家顺序追加到 speeches.md，并打印到终端。"""
+    text = "\n".join([f"\n===== {title} =====", *(f"【{name}】{speech}" for name, speech in speeches.items())])
+    _append(paths.speeches, text + "\n")
+    print(text)
 
-    return publish
+
+def record_letters(paths: RunPaths, title: str, letters: list[tuple[str, str, str]]) -> None:
+    """这一轮有人写信时向 letters.md 追加一节，第一次有信时创建文件；终端不打印。
+
+    letters 是 (写信人, 收件人, 正文)，写信人按配置顺序。
+    """
+    if not letters:
+        return
+    text = f"\n## {title}\n\n" + "\n\n".join(f"【{sender} → {to}】{body}" for sender, to, body in letters) + "\n"
+    _append(paths.letters, text if paths.letters.exists() else LETTERS_HEADER + text)
+
+
+def _append(path: Path, text: str) -> None:
+    with path.open("a", encoding="utf-8") as file:
+        file.write(text)
 
 
 def initialize_run(run_dir, snapshot, rules):
@@ -98,8 +117,9 @@ def write_readme(paths, standings=None):
     (paths.root / "README.md").write_text("\n\n".join(lines) + "\n", encoding="utf-8")
 
 
-def print_day_result(log: MatchLog, standings: list[StandingsEntry], coins: dict[str, int]) -> None:
+def print_day_result(log: MatchLog, standings: list[StandingsEntry]) -> None:
     """仅在终端展示已提交的每日结算，不写文件或生成玩家提示。"""
+    coins = log.remaining_coins
     day = log.days[-1]
     kind = "加赛" if log.is_playoff else "正赛"
     print(f"\n===== 第 {log.match_index} 局（{kind}）第 {day.day} 天 =====")

@@ -3,7 +3,6 @@
 from copy import deepcopy
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Callable, Optional
 import json
 
 from pydantic_ai.models.function import FunctionModel
@@ -11,10 +10,10 @@ from auction_game.agent.tasks import TaskRunner
 
 from auction_game.agent.player import AIPlayer
 from auction_game.flow.controller import Controller
-from auction_game.game.engine import compute_standings, run_match, settle_day
+from auction_game.reporting.run_output import initialize_run
+from auction_game.game.engine import MatchState, compute_standings, settle_day
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import DayResult, MatchLog, Observation, PlayerDayResult
-from auction_game.game.players import Player
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
 TEST_GAME = GameSettings(
@@ -53,7 +52,7 @@ def make_logs(count, game=TEST_GAME):
     return [make_log(match_index=index, game=game) for index in range(1, count + 1)]
 
 
-def scored_log(match_index, auction_scores, scores=None, game=TEST_GAME):
+def scored_log(match_index, auction_scores, scores=None, game=TEST_GAME, *, is_playoff=False):
     """分数给定的局日志，只用于排名：有拍卖分的玩家各赢一天，奖池等于他的拍卖分；
     最后一天无人获胜，补上总分减拍卖分的命中分。scores 默认等于拍卖分。"""
     scores = scores if scores is not None else auction_scores
@@ -68,7 +67,7 @@ def scored_log(match_index, auction_scores, scores=None, game=TEST_GAME):
                 winner)
             for number, winner in enumerate((name for name in names if auction_scores[name]), 1)]
     days.append(day(len(days) + 1, 1, lambda name: scores[name] - auction_scores[name]))
-    return MatchLog(match_index=match_index, is_playoff=False, game=game, days=days)
+    return MatchLog(match_index=match_index, is_playoff=is_playoff, game=game, days=days)
 
 
 def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None):
@@ -109,34 +108,20 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
 
 # ---------- 引擎场景：策略只依赖 obs.day 和 obs.my_name，全员可共用 ----------
 
-class ScriptedPlayer(Player):
-    """按给定函数出价：strategy(obs) 返回正常出价，可选的 super_strategy(obs) 返回超级出价或 None。"""
-
-    def __init__(
-        self,
-        name: str,
-        strategy: Callable[[Observation], int],
-        super_strategy: Optional[Callable[[Observation], Optional[int]]] = None,
-    ):
-        super().__init__(name)
-        self.strategy = strategy
-        self.super_strategy = super_strategy
-
-    def decide_bid(self, obs: Observation) -> tuple[int, Optional[int]]:
-        super_bid = None
-        if self.super_strategy is not None:
-            super_bid = self.super_strategy(obs)
-        return self.strategy(obs), super_bid
-
-
-def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=None,
-                  game=TEST_GAME):
-    """用给定的 {名字: 策略函数} 跑一局，返回 MatchLog。super_strategies 可选。"""
+def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=None, game=TEST_GAME, *,
+                  names=NAMES, finished_logs=()):
+    """用 {名字: 策略函数} 跑一局，返回 MatchLog。strategy(obs) 返回正常出价；super_strategies 可选，
+    其中的函数返回超级出价或 None。每天按座位顺序先调正常出价策略，再调超级出价策略。"""
     super_strategies = super_strategies or {}
-    players = [
-        ScriptedPlayer(name, strategies[name], super_strategies.get(name)) for name in NAMES
-    ]
-    return run_match(players, match_index, is_playoff, [], game)
+    match = MatchState(names, match_index, is_playoff, list(finished_logs), game)
+    for _ in range(game.max_days):
+        observations = match.start_day()
+        submissions = {}
+        for name, obs in observations.items():
+            bid = strategies[name](obs)
+            submissions[name] = bid, super_strategies[name](obs) if name in super_strategies else None
+        match.settle(submissions)
+    return match.log
 
 
 def constant_by_name(bids_by_name: dict):
@@ -176,6 +161,58 @@ def run_scenario(table, default=0, super_strategies=None, capture=None, game=TES
     return run_one_match(
         {name: strategy for name in NAMES}, super_strategies=super_strategies, game=game
     )
+
+
+# ---------- 整场流程：不调模型的玩家按出价表行动 ----------
+
+class StubPlayer:
+    """供 AIDirector.run() 跑整场的玩家，不调模型。table[(局, 天)][名字] 是 (正常出价, 超级出价)，
+    没列出的出 (0, None)；每局的规划交出第 1 天的出价。phases 按顺序记下每个任务，observations 记下出价时看到的信息。"""
+
+    def __init__(self, name, table=None):
+        self.name = name
+        self.table = table or {}
+        self.phases = []
+        self.observations = []
+        self._plans = 0
+
+    def checkpoint(self):
+        return None
+
+    def rollback(self, checkpoint):
+        pass
+
+    def _submission(self, match_index, day):
+        return self.table.get((match_index, day), {}).get(self.name, (0, None))
+
+    def give_speech(self, text, phase, context="", *, letters=True):
+        self.phases.append(phase)
+        return f"{self.name}的发言", []
+
+    def plan_strategy(self, text, phase, context=""):
+        self.phases.append(phase)
+        self._plans += 1
+        return self._submission(self._plans, 1), []
+
+    def save_memory(self, text, phase, context=""):
+        self.phases.append(phase)
+
+    def bid(self, obs, received):
+        self.phases.append(f"bid_{obs.match_index}_{obs.day}")
+        self.observations.append(obs)
+        return self._submission(obs.match_index, obs.day), []
+
+    def final_summary(self, text, context=""):
+        self.phases.append("final_summary")
+        return f"{self.name}的总结"
+
+
+def init_run_dir(tmp_path, names):
+    """初始化一个离线场次目录，整场流程往里写发言、局日志和 README。"""
+    run_dir = tmp_path / "run"
+    initialize_run(run_dir, {"run_type": "offline", "mode": "regular",
+                             "players": [{"name": name} for name in names]}, "测试规则")
+    return run_dir
 
 
 # ---------- AI 玩家：只替换模型输出，解析、校验和纠错走生产 Agent ----------

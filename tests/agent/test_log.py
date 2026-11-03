@@ -33,7 +33,7 @@ def test_inputs_are_expanded_losslessly_and_final_fields_appear_once(tmp_path):
 
 def test_system_prompt_is_logged_once_before_tasks(tmp_path):
     player = make_player(fake_task_runner([bid_reply(1)]), tmp_path)
-    player.decide_bid(make_ai_obs())
+    player.bid(make_ai_obs(), {})[0]
     system = player.messages[0].parts[0].content
     first = json.loads(player.log.path.read_text(encoding="utf-8").splitlines()[0])
     assert first == {"task": "system", "content": system}
@@ -60,9 +60,9 @@ def test_failures_and_recovery_append_links_to_first_input(tmp_path):
     prefixes = []
     for _ in range(2):
         with pytest.raises(CallFailedError):
-            player.decide_bid(make_ai_obs(day=2))
+            player.bid(make_ai_obs(day=2), {})[0]
         prefixes.append(md_path.read_text(encoding="utf-8"))
-    assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
+    assert player.bid(make_ai_obs(day=2), {})[0] == (2, None)
     markdown = md_path.read_text(encoding="utf-8")
     assert prefixes[1].startswith(prefixes[0]) and markdown.startswith(prefixes[1])
     assert markdown.count("### 输入原文") == 1
@@ -84,7 +84,7 @@ def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_
     runner = fake_task_runner([bid_reply("bad", strategy="首次无效策略"),
                                bid_reply(2, strategy="最终策略原文")])
     player = make_player(runner, tmp_path)
-    player.decide_bid(make_ai_obs(day=2))
+    player.bid(make_ai_obs(day=2), {})[0]
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "首次无效策略" not in markdown
     assert markdown.count("最终策略原文") == 1
@@ -120,7 +120,7 @@ def test_correction_reason_is_truncated_first_line(content, reason, status, outc
 def test_text_format_correction_uses_actual_sdk_retry_prompt(tmp_path):
     invalid = "<strategy>\n首次私有策略\n</strategy>"
     player = make_player(fake_task_runner([invalid, bid_reply(2, strategy="最终私有策略")]), tmp_path)
-    assert player.decide_bid(make_ai_obs(day=2)) == (2, None)
+    assert player.bid(make_ai_obs(day=2), {})[0] == (2, None)
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "纠错 1 次，已通过" in markdown
     assert "首次私有策略" not in markdown and "最终私有策略" in markdown
@@ -175,8 +175,8 @@ def test_input_markdown_preserves_indentation():
 def test_private_log_lists_letters_after_result(tmp_path):
     letters = [{"to": "Bravo", "text": "第一行\n第二行"}, {"to": "Charlie", "text": "另一封"}]
     player = make_player(fake_task_runner([{**bid_reply(1), "letters": letters}, bid_reply(2)]), tmp_path)
-    player.decide_bid(make_ai_obs(day=2))
-    player.decide_bid(make_ai_obs(day=3))
+    player.bid(make_ai_obs(day=2), {})[0]
+    player.bid(make_ai_obs(day=3), {})[0]
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert ("### 提交出价\n\n正常出价 1；超级出价 未使用\n\n"
             "### 私信\n\n写给 Bravo：第一行\n第二行\n\n写给 Charlie：另一封\n\n---") in markdown

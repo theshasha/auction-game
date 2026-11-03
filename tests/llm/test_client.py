@@ -24,7 +24,7 @@ from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, sse, 
 def test_any_status_is_resent_three_times_and_client_closes(protocol, status, tmp_path):
     h = Harness(protocol, [status, status, status, reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert player.bid(make_ai_obs(), {})[0] == (2, None)
     assert len(h.requests) == 4
     assert h.closes == 1 and all(s.closed for s in h.streams)
 
@@ -38,7 +38,7 @@ def test_failed_flow_keeps_history_and_audits_no_partial_reply(protocol, fault, 
     player = make_player(TaskRunner(h.factory), tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(CallFailedError):
-        player.decide_bid(make_ai_obs())
+        player.bid(make_ai_obs(), {})[0]
     assert player.messages == before
     assert len(h.requests) == 4
     entry = task_entries(player.log.path)[-1]
@@ -53,7 +53,7 @@ def test_anthropic_delta_without_usage_is_resent(tmp_path):
     empty = [chunk.replace(b', "usage": {"output_tokens": 3}', b"") for chunk in empty]
     h = Harness("anthropic", [empty, reply()])
     player = make_player(TaskRunner(h.factory), tmp_path)
-    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert player.bid(make_ai_obs(), {})[0] == (2, None)
     assert len(h.requests) == 2 and h.requests[0][1] == h.requests[1][1]
     errors = task_entries(player.log.path)[-1]["request_errors"]
     assert [(e["request"], e["attempt"], e["type"]) for e in errors] == [(1, 1, "IncompleteStream")]
@@ -69,13 +69,13 @@ def test_mixed_network_and_output_budget_reaches_at_most_four_attempts(protocol,
     player = make_player(TaskRunner(h.factory), tmp_path)
     before = deepcopy(player.messages)
     if succeeds:
-        assert player.decide_bid(make_ai_obs()) == (2, None)
+        assert player.bid(make_ai_obs(), {})[0] == (2, None)
         parts = [p for m in player.messages for p in m.parts]
         assert [p.content for p in parts if isinstance(p, TextPart)] == [
             text_reply(dict(GOOD, bid="2")), text_reply(GOOD)]
     else:
         with pytest.raises(OutputFailedError):
-            player.decide_bid(make_ai_obs())
+            player.bid(make_ai_obs(), {})[0]
         assert player.messages == before
     assert len(h.requests) == 4 and h.closes == 1
     assert h.requests[0][1] == h.requests[1][1] and h.requests[2][1] == h.requests[3][1]
@@ -125,7 +125,7 @@ def test_correction_then_network_exhaustion_audits_only_complete_reply(protocol,
     h = Harness(protocol, [reply(dict(GOOD, bid="2"))] + [reply(broken=True, ending="missing")] * 4)
     player = make_player(TaskRunner(h.factory), tmp_path)
     with pytest.raises(CallFailedError):
-        player.decide_bid(make_ai_obs())
+        player.bid(make_ai_obs(), {})[0]
     entry = task_entries(player.log.path)[-1]
     audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
     assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
@@ -146,7 +146,7 @@ def test_each_resend_waits_retry_delay(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_client, "wait_before_retry", record)
     h = Harness("chat", ["connect", 503, reply()])
     player = make_player(TaskRunner(replace(h.factory, retry_delay=10)), tmp_path)
-    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert player.bid(make_ai_obs(), {})[0] == (2, None)
     assert delays == [10, 10] and len(h.requests) == 3
 
 
@@ -170,7 +170,7 @@ def test_paused_failure_is_not_resent(tmp_path):
     h = Harness("chat", ["connect", reply()])
     player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
     with pytest.raises(CallFailedError):
-        player.decide_bid(make_ai_obs())
+        player.bid(make_ai_obs(), {})[0]
     assert len(h.requests) == 1
 
 
@@ -179,7 +179,7 @@ def test_correction_is_still_sent_while_paused(tmp_path):
     signals.paused.set()
     h = Harness("chat", [reply(dict(GOOD, bid="2")), reply()])
     player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
-    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert player.bid(make_ai_obs(), {})[0] == (2, None)
     assert len(h.requests) == 2
 
 
@@ -206,7 +206,7 @@ def test_cancel_interrupts_task_and_logs_cancelled(script, texts, tmp_path):
     threading.Timer(0.05, signals.cancelled.set).start()
     started = time.monotonic()
     with pytest.raises(TaskCancelledError):
-        player.decide_bid(make_ai_obs())
+        player.bid(make_ai_obs(), {})[0]
     assert time.monotonic() - started < 2
     assert player.messages == before and h.closes == 1
     entry = task_entries(player.log.path)[-1]
@@ -225,7 +225,7 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
                            reply(text=long_summary)])
     player = make_player(TaskRunner(h.factory), tmp_path)
     assert player.plan_strategy("plan", "opening_plan") == ((2, None), [])
-    assert player.decide_bid(make_ai_obs()) == (2, None)
+    assert player.bid(make_ai_obs(), {})[0] == (2, None)
     assert player.give_speech("speak", "final_speech") == ("public", [])
     player.plan_strategy("next plan", "match_1_plan")
     before = deepcopy(player.messages)

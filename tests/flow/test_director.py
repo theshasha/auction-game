@@ -1,7 +1,8 @@
-"""各轮编排、私信送达、公开与私有边界、规划交出的首日出价及观众总结。"""
+"""整场流程和各轮编排：阶段顺序、加赛、私信送达、公开与私有边界、规划交出的首日出价及观众总结。"""
 
 from copy import deepcopy
 from dataclasses import replace
+import json
 import threading
 from types import SimpleNamespace
 
@@ -10,9 +11,9 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.flow import director as director_module
 from auction_game.llm.execution import OutputFailedError
-from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
-                                     make_log, make_player, make_standings, request_text, speech_reply,
-                                     text_reply, task_entries)
+from tests.support.factories import (TEST_GAME, StubPlayer, bid_reply, continuous_controller, fake_task_runner,
+                                     init_run_dir, make_ai_obs, make_log, make_player, make_standings,
+                                     request_text, speech_reply, text_reply, task_entries)
 from auction_game.game.settings import GameSettings
 
 
@@ -64,8 +65,8 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
                         lambda log, standings, *, received: f"局末 {log.match_index}")
     monkeypatch.setattr(director_module.prompts, "memory_request",
                         lambda others, index, *, received: f"记忆 {others} {index}")
-    director.on_opening()
-    director.on_match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
+    director.opening()
+    director.match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
     assert players[0].calls == [
         ("opening_speech", "开局"), ("opening_plan", "规划 {'乙': '发言乙'}"),
         ("match_2_speech", "局末 2"), ("match_2_memory", "记忆 {'乙': '发言乙'} 2"), ("match_2_plan", "规划 [1, 2]"),
@@ -92,7 +93,7 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
     director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=TEST_GAME)
     monkeypatch.setattr(director_module.prompts, "opening_plan_request",
                         lambda others, game, *, received: f"规划 {list(others)} 收信 {list(received)}")
-    director.on_opening()
+    director.opening()
     public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
     assert players[1].calls[-1] == ("opening_plan", "规划 ['乙', '丙'] 收信 ['乙', '丙']")
@@ -188,12 +189,11 @@ def test_director_opening_plan_preserves_public_boundary_and_keeps_day_one_bids(
     b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6)]), tmp_path / "b",
                     game=game, name="Bravo")
     director = director_module.AIDirector([a, b], continuous_controller(), tmp_path, game=a.game)
-    director.on_opening()
+    assert director.opening() == {"Alpha": (2, 6), "Bravo": (3, 6)}
     request = request_text(a.task_runner, -1)
     assert "public-B" in request and "烟雾弹" not in request
     public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert "public-A" in public_log and "烟雾弹" not in public_log
-    assert director.day1_bids == {"Alpha": (2, 6), "Bravo": (3, 6)}
     for player in (a, b):
         assert len(player.task_runner.calls) == 2
         plan_input = request_text(player.task_runner, -1)
@@ -212,7 +212,7 @@ def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
     monkeypatch.setattr(director_module.prompts, "final_speech_request",
                         lambda standings, log, *, received: "请发表最终感言")
     monkeypatch.setattr(director_module.prompts, "final_summary_request", lambda others: "请总结")
-    director.on_final([], None)
+    director.final([], None)
     assert request_text(player.task_runner, 0) == "请发表最终感言\n\n" + output_requirement("speech")
 
 
@@ -235,10 +235,10 @@ def test_letters_arrive_in_recipients_next_request_only(capsys, tmp_path):
     ]), tmp_path, game=game, name=name) for name in ("Bravo", "Charlie"))
     players = [alpha, bravo, charlie]
     director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=game)
-    director.on_opening()
-    for day in (1, 2, 3):
-        director.collect_bids([(p, make_ai_obs(day=day, game=game, name=p.name)) for p in players])
-    director.on_match_end([make_log(game=game)], make_standings({p.name: [0] for p in players}))
+    director.opening()
+    for day in (2, 3):
+        director.bid_round({p.name: make_ai_obs(day=day, game=game, name=p.name) for p in players})
+    director.match_end([make_log(game=game)], make_standings({p.name: [0] for p in players}))
     # 请求依次是开局发言、规划、第 2 天和第 3 天出价、局末发言、整理记忆、下一局规划；第 1 天的出价由规划交出。
     # 收信段标题写明信是在哪一环节写的；规划请求同时交了第 1 天的出价。
     received = {("Bravo", 1): ("开局信", "在开局发言时"), ("Bravo", 2): ("规划信", "昨天出价时"),
@@ -278,16 +278,69 @@ def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path
     bravo = make_player(fake_task_runner([speech_reply("B"), *[bid_reply(1)] * days, speech_reply("B"), *ending]),
                         tmp_path, game=game, name="Bravo")
     director = director_module.AIDirector([alpha, bravo], continuous_controller(), tmp_path, game=game)
-    director.on_opening()
-    for day in range(1, days + 1):
-        director.collect_bids([(p, make_ai_obs(day=day, game=game, name=p.name)) for p in (alpha, bravo)])
+    director.opening()
+    for day in range(2, days + 1):
+        director.bid_round({p.name: make_ai_obs(day=day, game=game, name=p.name) for p in (alpha, bravo)})
     log, standings = make_log(game=game), make_standings({"Alpha": [0], "Bravo": [0]})
     if final:
-        director.on_final(standings, log)
+        director.final(standings, log)
     else:
-        director.on_match_end([log], standings)
+        director.match_end([log], standings)
     speech_request = request_text(bravo.task_runner, days + 1)
     assert ("最终感言" if final else "局末发言") in speech_request
     # 一天一局时这封是规划时写的，规划请求交的就是最后一天的出价。
     assert "以下是其他玩家在本局最后一天出价时写给你的私信：\n\n【Alpha】最后一封" in speech_request
     assert all("最后一封" not in request_text(bravo.task_runner, index) for index in range(days + 1))
+
+
+RUN_NAMES = ["甲", "乙", "丙"]
+
+
+def run_stub_game(tmp_path, game, table):
+    players = [StubPlayer(name, table) for name in RUN_NAMES]
+    director = director_module.AIDirector(players, continuous_controller(), init_run_dir(tmp_path, RUN_NAMES), game=game)
+    return director, players, director.run()
+
+
+def test_run_speaks_between_matches_only_and_plays_playoffs_until_unique(tmp_path):
+    game = replace(TEST_GAME, daily_pool=(1, 1), regular_matches=2, max_playoffs=2)
+    # 正赛甲、乙各赢一天并列第一，加赛甲再赢一天；其余天全员出 0 流局。
+    table = {(1, 2): {"甲": (1, None)}, (2, 2): {"乙": (1, None)}, (3, 2): {"甲": (1, None)}}
+    director, players, result = run_stub_game(tmp_path, game, table)
+    assert [(log.match_index, log.is_playoff) for log in result.match_logs] == [(1, False), (2, False), (3, True)]
+    assert result.playoff_count == 1 and not result.playoff_cap_hit
+    assert [(entry.player, entry.total_score) for entry in result.final_standings] == [("甲", 2), ("乙", 1), ("丙", 0)]
+    # 每局第 1 天的出价由规划交出；最后一局之后没有局末发言，直接最终感言。
+    assert players[0].phases == [
+        "opening_speech", "opening_plan", "bid_1_2",
+        "match_1_speech", "match_1_memory", "match_1_plan", "bid_2_2",
+        "match_2_speech", "match_2_memory", "match_2_plan", "bid_3_2",
+        "final_speech", "final_summary",
+    ]
+
+
+def test_run_stops_at_playoff_cap_and_keeps_tied_champions(tmp_path):
+    game = replace(TEST_GAME, daily_pool=(1,), regular_matches=1, max_playoffs=1)
+    director, players, result = run_stub_game(tmp_path, game, {})
+    assert [log.is_playoff for log in result.match_logs] == [False, True]
+    assert result.playoff_cap_hit
+    assert players[0].phases == ["opening_speech", "opening_plan", "match_1_speech", "match_1_memory",
+                                 "match_1_plan", "final_speech", "final_summary"]
+
+
+def test_run_publishes_each_match_and_new_match_resets_coins(tmp_path, capsys):
+    game = replace(TEST_GAME, daily_pool=(1, 1), regular_matches=2, max_playoffs=2)
+    table = {(1, 2): {"甲": (1, None)}, (2, 2): {"乙": (1, None)}, (3, 2): {"甲": (1, None)}}
+    director, players, result = run_stub_game(tmp_path, game, table)
+    published = [json.loads(director.paths.match(index).read_text(encoding="utf-8")) for index in (1, 2, 3)]
+    # 已发布的排名停在那一局结束时，不随之后的局变化。
+    assert [{entry["player"]: entry["total_score"] for entry in payload["standings_after_match"]}
+            for payload in published] == [{"甲": 1, "乙": 0, "丙": 0}, {"甲": 1, "乙": 1, "丙": 0},
+                                          {"甲": 2, "乙": 1, "丙": 0}]
+    assert director.paths.matches_report.read_text(encoding="utf-8").count("\n## 第 ") == 3
+    output = capsys.readouterr().out
+    assert output.count("===== 第 3 局（加赛）第 2 天 =====") == 1
+    # 甲第 1 局花了 1 金币，第 2 局第 2 天仍是初始金币加一天工资，排名含第 1 局的分数。
+    jia = next(obs for obs in players[0].observations if obs.match_index == 2)
+    assert jia.my_coins == game.initial_coins + game.daily_salary
+    assert {entry.player: entry.total_score for entry in jia.standings} == {"甲": 1, "乙": 0, "丙": 0}

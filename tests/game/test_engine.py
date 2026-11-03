@@ -9,13 +9,12 @@ import pytest
 
 from tests.support.factories import (
     TEST_GAME,
-    ScriptedPlayer,
     constant_by_name,
     constant_strategies,
     run_one_match,
     run_scenario,
 )
-from auction_game.game.engine import run_match, settle_day
+from auction_game.game.engine import settle_day
 from auction_game.game.settings import GameSettings
 from auction_game.configuration import load_game_settings
 
@@ -213,11 +212,11 @@ class TestConfiguredMatch:
             captured[obs.my_name].append(obs)
             return bids[obs.my_name][obs.day - 1]
 
-        players = [
-            ScriptedPlayer(name, strategy, lambda obs: supers.get(obs.my_name, {}).get(obs.day))
-            for name in names
-        ]
-        log = run_match(players, 1, False, [], game)
+        def super_strategy(obs):
+            return supers.get(obs.my_name, {}).get(obs.day)
+
+        log = run_one_match({name: strategy for name in names}, game=game, names=names,
+                            super_strategies={name: super_strategy for name in names})
 
         assert len(log.days) == 3
         assert [day.pool for day in log.days] == [2, 3, 4]

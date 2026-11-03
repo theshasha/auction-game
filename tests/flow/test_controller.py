@@ -1,5 +1,6 @@
 """控制器命令、闸门，以及轮级并发执行的暂停、补跑和回滚。"""
 
+import json
 import threading
 import time
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ from tests.support.factories import (
     TEST_GAME,
     bid_reply,
     fake_task_runner,
+    init_run_dir,
     text_reply,
     make_ai_obs,
     make_player,
@@ -55,13 +57,12 @@ def running(controller, fn, *release_events):
 
 
 @pytest.mark.parametrize("failure", [False, True], ids=["paused-success", "failed-task"])
-@pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
+# 暂停和失败都会切回单步模式，继续时按 c，之后的终局各轮不再等确认。
+@pytest.mark.parametrize("command", ["c", "q"], ids=["resume", "quit"])
 def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, capsys, failure, command, tmp_path):
     from auction_game.game import engine
-    from auction_game.game.tournament import run_tournament
-    from auction_game.reporting.run_output import print_day_result
 
-    # 第 1 天全员出 0 流局，直接结算；第 2 天的出价轮暂停或失败。
+    # 第 1 天按规划全员出 0 流局，直接结算；第 2 天的出价轮暂停或失败。
     game = replace(TEST_GAME, daily_pool=(1, 3), super_hit_score=1, regular_matches=1, max_playoffs=0)
     gate = threading.Event()
     controller = Controller(mode="continuous", max_concurrency=1,
@@ -71,58 +72,52 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         controller.offer_command("p")
         return bid_reply(2)
 
-    alpha = make_player(fake_task_runner([bid_reply(1, 2)]), tmp_path, name="Alpha", game=game)
-    bravo = make_player(fake_task_runner(
-        [ModelAPIError("offline", "unavailable"), bid_reply(2)] if failure else [pause_and_reply],
-    ), tmp_path, name="Bravo", game=game)
-    before = [player.checkpoint() for player in (alpha, bravo)]
-    settlements, published, day_reports = [], [], []
-    settle = engine.settle_day
+    day2 = [ModelAPIError("offline", "unavailable"), bid_reply(2)] if failure else [pause_and_reply]
+    ending = [speech_reply("感言"), "总结"]
+    alpha = make_player(fake_task_runner([speech_reply("开局"), bid_reply(0), bid_reply(1, 2), *ending]),
+                        tmp_path, name="Alpha", game=game)
+    bravo = make_player(fake_task_runner([speech_reply("开局"), bid_reply(0), *day2, *ending]),
+                        tmp_path, name="Bravo", game=game)
+    settlements, round_start = [], {}
+    settle, run_round = engine.settle_day, controller.run_round
 
     def count_settlement(*args, **kwargs):
         settlements.append(True)
         return settle(*args, **kwargs)
 
-    def collect(observations):
-        if observations[0][1].day == 1:
-            return [(0, None) for _ in observations]
-        tasks = [RoundTask(player.name, lambda p=player, o=obs: p.decide_bid(o), player)
-                 for player, obs in observations]
-        results = controller.run_round(tasks, "测试出价")
-        return [results[player.name] for player, _ in observations]
-
-    def report_day(log, standings, coins):
-        day_reports.append((log.days[-1], standings, coins))
-        print_day_result(log, standings, coins)
+    def record_round_start(tasks, label):
+        if label == "第 1 局第 2 天出价":
+            round_start.update((task.key, task.participant.checkpoint()) for task in tasks)
+        return run_round(tasks, label)
 
     monkeypatch.setattr(engine, "settle_day", count_settlement)
-    with running(controller, lambda: run_tournament(
-        [alpha, bravo], game, bid_collector=collect,
-        on_match_end=lambda log, standings: published.append(log),
-        on_day_end=report_day,
-    )) as (thread, outcome):
+    monkeypatch.setattr(controller, "run_round", record_round_start)
+    director = AIDirector([alpha, bravo], controller, init_run_dir(tmp_path, ["Alpha", "Bravo"]), game=game)
+    match_file = director.paths.match(1)
+    with running(controller, director.run) as (thread, outcome):
         assert gate.wait(timeout=5)
-        assert len(settlements) == len(day_reports) == 1 and published == []
-        capsys.readouterr()  # 第 1 天的战报
+        assert len(settlements) == 1 and not match_file.exists()
+        output = capsys.readouterr().out
+        assert "===== 第 1 局（正赛）第 1 天 =====" in output and "第 2 天 =====" not in output
         controller.offer_command(command)
         thread.join(timeout=5)
         assert not thread.is_alive()
         if command == "q":
             assert isinstance(outcome.get("error"), TournamentAborted)
-            assert len(settlements) == len(day_reports) == 1 and published == []
+            assert len(settlements) == 1 and not match_file.exists()
             assert capsys.readouterr().out == ""
-            assert [player.checkpoint() for player in (alpha, bravo)] == before
+            assert {player.name: player.checkpoint() for player in (alpha, bravo)} == round_start
         else:
             assert len(settlements) == 2
-            assert len(published) == 1
-            assert published[0].scores == {"Alpha": 4, "Bravo": 0}
+            assert json.loads(match_file.read_text(encoding="utf-8"))["match"]["scores"] == {"Alpha": 4, "Bravo": 0}
             assert outcome["result"].final_standings[0].total_score == 4
-            assert len(day_reports) == 2
             output = capsys.readouterr().out
             assert output.count("===== 第 1 局（正赛）第 2 天 =====") == 1
             assert "超级出价命中：Alpha +1 分" in output
-        assert len(alpha.task_runner.calls) == 1
-        assert len(bravo.task_runner.calls) == (2 if failure and command != "q" else 1)
+        # 开局发言、规划和第 2 天出价各一次，继续后再有最终感言和观众总结；Bravo 的失败请求补跑一次。
+        finished = 2 if command != "q" else 0
+        assert len(alpha.task_runner.calls) == 3 + finished
+        assert len(bravo.task_runner.calls) == 3 + finished + (1 if failure and command != "q" else 0)
 
 
 @pytest.mark.parametrize("command", ["", "q"], ids=["resume-only-failed-memory", "abort-restores-context"])
@@ -175,9 +170,8 @@ def test_rerun_sees_round_start_letters_and_new_letters_wait_for_next_round(tmp_
     director = AIDirector([alpha, bravo], controller, tmp_path, game=TEST_GAME)
 
     def play():
-        director.on_opening()
-        for day in (1, 2):
-            director.collect_bids([(p, make_ai_obs(day=day, name=p.name)) for p in (alpha, bravo)])
+        director.opening()
+        director.bid_round({p.name: make_ai_obs(name=p.name) for p in (alpha, bravo)})
 
     with running(controller, play) as (thread, outcome):
         assert gate.wait(timeout=5)  # Alpha 的规划失败，Bravo 的规划已成功
@@ -209,7 +203,7 @@ def test_quit_leaves_mailbox_as_at_round_start(paused, tmp_path):
     bravo = make_player(fake_task_runner([{**speech_reply("B"), "letters": [OPENING_LETTER]},
                                           {**bid_reply(1), "letters": [PLAN_LETTER]}]), tmp_path, name="Bravo")
     director = AIDirector([alpha, bravo], controller, tmp_path, game=TEST_GAME)
-    with running(controller, director.on_opening) as (thread, outcome):
+    with running(controller, director.opening) as (thread, outcome):
         assert gate.wait(timeout=5)  # 规划轮已收集完，等用户确认
         assert len(bravo.task_runner.calls) == 2
         controller.offer_command("q")
@@ -589,7 +583,7 @@ class TestParallelRound:
         runner = TaskRunner(replace(h.factory, signals=controller.signals))
         player = make_player(runner, tmp_path, name="Alpha")
         before = player.checkpoint()
-        tasks = [RoundTask("Alpha", lambda: player.decide_bid(make_ai_obs(day=2)), player)]
+        tasks = [RoundTask("Alpha", lambda: player.bid(make_ai_obs(day=2), {})[0], player)]
         with running(controller, lambda: controller.run_round(tasks, "出价")) as (thread, outcome):
             deadline = time.monotonic() + 5
             while not h.requests and time.monotonic() < deadline:
@@ -687,8 +681,8 @@ class TestParallelRound:
         bravo_chat = fake_task_runner([*failures, bid_reply(2)])
         bravo = make_player(bravo_chat, tmp_path, name="Bravo")
         tasks = [
-            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
-            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
+            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.bid(make_ai_obs(), {})[0]),
+            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.bid(make_ai_obs(), {})[0]),
         ]
         with running(controller, lambda: controller.run_round(tasks, "测试轮")) as (thread, outcome):
             assert gate.wait(timeout=5)
@@ -748,8 +742,8 @@ class TestParallelRound:
         bravo = make_player(fake_task_runner([bravo_chat, bravo_chat]), tmp_path, name="Bravo")
         checkpoints = [p.checkpoint() for p in (alpha, bravo)]
         tasks = [
-            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.decide_bid(make_ai_obs())),
-            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.decide_bid(make_ai_obs())),
+            RoundTask(key="Alpha", participant=alpha, fn=lambda: alpha.bid(make_ai_obs(), {})[0]),
+            RoundTask(key="Bravo", participant=bravo, fn=lambda: bravo.bid(make_ai_obs(), {})[0]),
         ]
         with running(controller, lambda: controller.run_round(tasks, "测试轮"),
                      release_bravo) as (thread, outcome):

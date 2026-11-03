@@ -9,11 +9,12 @@ import pytest
 
 from auction_game.agent import prompts
 from auction_game.game import tables
+from auction_game.game.engine import compute_standings
+from auction_game.game.models import MatchLog
 from auction_game.game.rules import render_rules
-from auction_game.game.tournament import run_tournament
-from auction_game.reporting.run_output import (initialize_run, make_publish, print_day_result, print_final_result,
+from auction_game.reporting.run_output import (initialize_run, print_day_result, print_final_result, publish_match,
                                                write_readme)
-from tests.support.factories import NAMES, TEST_GAME, ScriptedPlayer, bids_by_day, make_standings, run_scenario
+from tests.support.factories import NAMES, TEST_GAME, bids_by_day, make_standings, run_one_match, run_scenario
 
 
 def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(capsys):
@@ -22,16 +23,12 @@ def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(c
     strategy = bids_by_day({1: [4, 4, 9, 2, 1, 0], 2: [2, 2, 1, 1, 0, 0], 3: [0] * 6})
     supers = {"丁": lambda obs: {1: 4, 2: 2}.get(obs.day),
               "己": lambda obs: 4 if obs.day == 1 else None}
-    players = [ScriptedPlayer(name, strategy, supers.get(name)) for name in NAMES]
+    log = run_one_match({name: strategy for name in NAMES}, super_strategies=supers, game=game)
     reports = []
-
-    def report(log, standings, coins):
-        before = deepcopy(log.to_dict())
-        print_day_result(log, standings, coins)
-        assert log.to_dict() == before
+    for count in range(1, len(log.days) + 1):
+        settled = MatchLog(log.match_index, log.is_playoff, game, log.days[:count])
+        print_day_result(settled, compute_standings(NAMES, [], settled))
         reports.append(capsys.readouterr().out)
-
-    run_tournament(players, game, on_day_end=report)
     first, second, last = reports
     assert "第 1 局（正赛）第 1 天" in first
     assert "奖池 1 分；丙 以 9 金币获胜。" in first
@@ -106,23 +103,25 @@ def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):
 
 def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):
     game = replace(TEST_GAME, daily_pool=(1, 2), regular_matches=2, max_playoffs=1)
-    # 每局全员出同一个价，天天撞车流局，正赛后并列，加赛一局到上限。
-    players = [ScriptedPlayer(name, lambda obs: obs.match_index) for name in NAMES]
     paths = initialize_run(
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": game.to_dict(),
          "players": [{"name": name} for name in NAMES]},
         render_rules(game, NAMES),
     )
-    result = run_tournament(players, game, on_match_end=make_publish(paths.root))
+    # 每局全员出同一个价，天天撞车流局；第 3 局是加赛。
+    logs = []
+    for index in (1, 2, 3):
+        logs.append(run_one_match({name: lambda obs: obs.match_index for name in NAMES}, index, index > 2, game=game))
+        publish_match(paths, logs[-1], compute_standings(NAMES, logs))
 
     sections = paths.matches_report.read_text(encoding="utf-8").split("\n## ")[1:]
     assert [section.split("\n", 1)[0] for section in sections] == [
         "第 1 局（正赛）", "第 2 局（正赛）", "第 3 局（加赛）"]
-    for section, log in zip(sections, result.match_logs):
+    for section, log in zip(sections, logs):
         assert tables.render_match_log(log) in section
     assert sections[-1].endswith(
-        f"截至本局的累计排名：\n\n{tables.render_standings(result.final_standings)}\n")
+        f"截至本局的累计排名：\n\n{tables.render_standings(compute_standings(NAMES, logs))}\n")
     assert "[逐局结果](matches.md)" in (paths.root / "README.md").read_text(encoding="utf-8")
 
 
@@ -147,7 +146,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
          "players": [{"name": name} for name in NAMES]},
         render_rules(game, NAMES),
     )
-    make_publish(paths.root)(log, standings)
+    publish_match(paths, log, standings)
 
     report = paths.matches_report.read_text(encoding="utf-8")
     assert "[本场规则](RULES.md)" in report

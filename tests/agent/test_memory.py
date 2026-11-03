@@ -80,7 +80,7 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         assert "encrypted_old_reasoning" in audit and "resp_1" in audit
     if protocol == "anthropic":
         assert "signed_old_reasoning" in audit and "redacted_old_reasoning" in audit
-    player.decide_bid(make_ai_obs())
+    player.bid(make_ai_obs(), {})[0]
     before = player.checkpoint()
     assert player.final_summary("audience review") == "audience"
     assert player.checkpoint() == before
@@ -200,7 +200,7 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
                               scores_history={"Alpha": [3 if next_is_playoff else 2] * match_index,
                                               "Bravo": [3] * match_index})
     logs = [*make_logs(match_index - 1, game=game), make_log(match_index=match_index, is_playoff=playoff, game=game)]
-    director.on_match_end(logs, standings)
+    day1_bids = director.match_end(logs, standings)
     for p in players:
         text = encoded(p.task_runner.calls[-1])
         assert "private-" + p.name in text
@@ -217,5 +217,5 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
                      "今日奖池为 2 分", "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
                      "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
-        assert director.day1_bids[p.name] == (1, 6)
+        assert day1_bids[p.name] == (1, 6)
     assert "private-" not in (tmp_path / "speeches.md").read_text(encoding="utf-8")

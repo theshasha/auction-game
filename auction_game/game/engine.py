@@ -1,10 +1,10 @@
-"""单局规则引擎，只依赖 Player 接口。"""
+"""单局规则：判定和结算一天的出价、累计排名，以及进行中一局的状态。"""
 
 from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
-from typing import Callable, Optional
+from typing import Optional
 
 from auction_game.game.settings import GameSettings, validate_submission
 from auction_game.game.models import (
@@ -14,10 +14,8 @@ from auction_game.game.models import (
     PlayerDayResult,
     StandingsEntry,
 )
-from auction_game.game.players import Player
 
 
-DayEndCallback = Callable[[MatchLog, list[StandingsEntry], dict[str, int]], None]
 Submission = tuple[str, int, Optional[int]]  # (玩家, 正常出价, 超级出价或 None)
 
 
@@ -97,71 +95,62 @@ def compute_standings(names: list[str], logs: list[MatchLog], current: MatchLog 
     return entries
 
 
-def run_match(
-    players: list[Player],
-    match_index: int,
-    is_playoff: bool,
-    finished_logs: list[MatchLog],
-    game: GameSettings,
-    bid_collector=None,
-    *,
-    on_day_end: DayEndCallback | None = None,
-) -> MatchLog:
-    """运行一局（正赛和加赛规则相同），返回局日志。
+class MatchState:
+    """进行中的一局：每名玩家的金币和已结算的天，按 start_day、settle 交替推进。"""
 
-    finished_logs：已结束的各局，用于累计排名。
-    bid_collector：list[(player, obs)] -> list[(正常出价, 超级出价)]，顺序对齐；
-    AI 模式用它并行收集，默认逐个调用 decide_bid。
-    on_day_end：每天结算后收到局日志、累计排名和余额快照，只给观众看。
-    出价不符合规则时抛出 ValueError：AI 的违规在代理层纠错，到这里就是程序错误。
-    """
-    names = [player.name for player in players]
-    coins = {name: game.initial_coins for name in names}
-    log = MatchLog(match_index=match_index, is_playoff=is_playoff, game=game)
+    def __init__(self, names: list[str], match_index: int, is_playoff: bool,
+                 finished_logs: list[MatchLog], game: GameSettings):
+        """finished_logs 是已结束的各局，只用于累计排名。"""
+        self.names = list(names)
+        self.finished_logs = list(finished_logs)
+        self.game = game
+        self.coins = {name: game.initial_coins for name in names}
+        self.log = MatchLog(match_index=match_index, is_playoff=is_playoff, game=game)
 
-    def observe(day: int, pool: int) -> list[tuple[Player, Observation]]:
-        """当天开始时每名玩家能看到的信息，全员共用同一份排名、余额和本局记录。"""
+    def standings(self) -> list[StandingsEntry]:
+        """含本局已结算部分的累计排名。"""
+        return compute_standings(self.names, self.finished_logs, self.log)
+
+    def start_day(self) -> dict[str, Observation]:
+        """开始下一天，第 2 天起先发工资；返回每名玩家当天能看到的信息，按座位顺序。
+
+        全员共用同一份排名、余额和本局记录。
+        """
+        day = len(self.log.days) + 1
+        if day >= 2:
+            for name in self.coins:
+                self.coins[name] += self.game.daily_salary
         # 全员余额第 2 天起公布，取发工资后的值；复制一份，当天结算不会改动它。
-        all_coins = dict(coins) if day >= 2 else None
-        standings = compute_standings(names, finished_logs, log)
-        history = list(log.days)
-        match_scores = log.scores
-        return [(player, Observation(
-            my_name=player.name,
-            my_coins=coins[player.name],
-            my_match_score=match_scores.get(player.name, 0),
-            match_index=match_index,
+        all_coins = dict(self.coins) if day >= 2 else None
+        standings = self.standings()
+        history = list(self.log.days)
+        match_scores = self.log.scores
+        return {name: Observation(
+            my_name=name,
+            my_coins=self.coins[name],
+            my_match_score=match_scores.get(name, 0),
+            match_index=self.log.match_index,
             day=day,
-            today_pool=pool,
+            today_pool=self.game.daily_pool[day - 1],
             today_history=history,
             standings=standings,
-            game=game,
+            game=self.game,
             all_coins=all_coins,
-        )) for player in players]
+        ) for name in self.names}
 
-    for day in range(1, game.max_days + 1):
-        if day >= 2:
-            for name in coins:
-                coins[name] += game.daily_salary
-        pool = game.daily_pool[day - 1]
-        observations = observe(day, pool)
+    def settle(self, submissions: dict[str, tuple[int, Optional[int]]]) -> DayResult:
+        """结算 start_day 开始的这一天：submissions 是玩家到 (正常出价, 超级出价)。
 
-        if bid_collector is None:
-            submissions = [player.decide_bid(obs) for player, obs in observations]
-        else:
-            submissions = bid_collector(observations)
-        entries = [(player.name, bid, super_bid)
-                   for (player, _), (bid, super_bid) in zip(observations, submissions)]
+        出价不符合规则时抛出 ValueError：AI 的违规在代理层纠错，到这里就是程序错误。
+        """
+        day = len(self.log.days) + 1
+        entries = [(name, *submissions[name]) for name in self.names]
         for name, bid, super_bid in entries:
-            reason = validate_submission(bid, super_bid, coins[name], game)
+            reason = validate_submission(bid, super_bid, self.coins[name], self.game)
             if reason is not None:
                 raise ValueError(f"{name} 的出价不符合规则：{reason}")
-
-        result = settle_day(day, pool, entries, game)
+        result = settle_day(day, self.game.daily_pool[day - 1], entries, self.game)
         for player_result in result.players:
-            coins[player_result.player] += player_result.coins_delta
-        log.days.append(result)
-        if on_day_end is not None:
-            on_day_end(log, compute_standings(names, finished_logs, log), dict(coins))
-
-    return log
+            self.coins[player_result.player] += player_result.coins_delta
+        self.log.days.append(result)
+        return result

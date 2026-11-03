@@ -35,7 +35,7 @@ def test_player_passes_prompt_switches_into_native_request(enable_predictions, e
         enable_predictions=enable_predictions, enable_personas=enable_personas,
         writing_style=writing_style,
     )
-    assert player.decide_bid(make_ai_obs()) == (1, None)
+    assert player.bid(make_ai_obs(), {})[0] == (1, None)
     system = next(part.content for message in runner.calls[0] for part in message.parts
                   if isinstance(part, SystemPromptPart))
     for marker in ("【赛前预测】", "Bravo 73%", "专家"):
@@ -53,7 +53,7 @@ def test_player_passes_prompt_switches_into_native_request(enable_predictions, e
 def test_invalid_output_uses_one_shared_correction(invalid, tmp_path):
     runner = fake_task_runner([invalid, bid_reply(2)])
     player = make_player(runner, tmp_path)
-    assert player.decide_bid(make_ai_obs(coins=4)) == (2, None)
+    assert player.bid(make_ai_obs(coins=4), {})[0] == (2, None)
     assert len(runner.calls) == 2
     assert any(isinstance(p, RetryPromptPart) for m in runner.calls[-1] for p in m.parts)
     assert any(isinstance(p, RetryPromptPart) for m in player.messages for p in m.parts)
@@ -64,7 +64,7 @@ def test_format_then_business_error_does_not_reset_budget(tmp_path):
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
-        player.decide_bid(make_ai_obs(day=2, coins=3))
+        player.bid(make_ai_obs(day=2, coins=3), {})[0]
     assert len(runner.calls) == 2 and player.messages == before
     entry = task_entries(player.log.path)[-1]
     assert entry["status"] == "failed" and entry["error"]["type"] == "OutputFailedError"
@@ -83,7 +83,7 @@ def test_custom_game_and_realtime_balance_use_shared_rules(tmp_path):
     runner = fake_task_runner([bid_reply(5), bid_reply(1, 9), bid_reply(8, 9), bid_reply(7, 9)])
     player = make_player(runner, tmp_path, game=game)
     assert player.plan_strategy(prompts.opening_plan_request({}, game), "opening_plan") == ((1, 9), [])
-    assert player.decide_bid(make_ai_obs(coins=10, game=game)) == (7, 9)
+    assert player.bid(make_ai_obs(coins=10, game=game), {})[0] == (7, 9)
     assert len(runner.calls) == 4
     assert "超过当前余额 4" in ModelMessagesTypeAdapter.dump_json(runner.calls[1]).decode()
     assert "合计超过当前余额 10" in ModelMessagesTypeAdapter.dump_json(runner.calls[3]).decode()
@@ -92,11 +92,11 @@ def test_custom_game_and_realtime_balance_use_shared_rules(tmp_path):
 def test_business_history_and_original_audit_survive_rollback(tmp_path):
     player = make_player(fake_task_runner([bid_reply(1), bid_reply(2)]), tmp_path)
     prefix = deepcopy(player.messages)
-    player.decide_bid(make_ai_obs())
+    player.bid(make_ai_obs(), {})[0]
     assert player.messages[:len(prefix)] == prefix
     checkpoint = player.checkpoint()
     middle = deepcopy(player.messages)
-    player.decide_bid(make_ai_obs(day=2))
+    player.bid(make_ai_obs(day=2), {})[0]
     assert player.messages[:len(middle)] == middle
     player.rollback(checkpoint)
     assert player.messages == middle
@@ -116,7 +116,7 @@ def test_program_errors_propagate_without_retry_or_state_change(tmp_path):
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(RuntimeError, match="program defect"):
-        player.decide_bid(make_ai_obs())
+        player.bid(make_ai_obs(), {})[0]
     assert len(runner.calls) == 1 and player.messages == before
 
 
@@ -157,7 +157,7 @@ def test_plan_has_full_format_and_bids_get_one_line(tmp_path):
     runner = fake_task_runner([bid_reply(1), bid_reply(1)])
     player = make_player(runner, tmp_path)
     player.plan_strategy("请规划", "opening_plan")
-    player.decide_bid(make_ai_obs())
+    player.bid(make_ai_obs(), {})[0]
     assert request_text(runner, 0) == "请规划\n\n" + output_requirement("plan", LETTERS)
     assert request_text(runner, 1).endswith("\n\n" + BRIEF_BID_FORMAT)
     # 只附一句时也写明送达时机。
@@ -167,7 +167,7 @@ def test_plan_has_full_format_and_bids_get_one_line(tmp_path):
 def test_format_error_after_one_line_prompt_gets_full_format(tmp_path):
     runner = fake_task_runner(["随手写的出价", bid_reply(1)])
     player = make_player(runner, tmp_path)
-    assert player.decide_bid(make_ai_obs(day=2)) == (1, None)
+    assert player.bid(make_ai_obs(day=2), {})[0] == (1, None)
     assert retry_text(runner, 1) == ("必须先依次提交 strategy 与 decision 两块，标签各占一行且各出现一次，私信块放在最后。\n"
                                      + output_requirement("bid", LETTERS))
 
