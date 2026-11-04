@@ -1,0 +1,25 @@
+# 团队赛阵容：正好 2 个阵营，每个阵营 3 名玩家；玩家按这里的顺序编号，同一阵营相邻。
+# 玩家字段的含义同 players.yaml；团队赛没有预测夺冠率，不写 predicted_win_rate。
+teams:
+  - name: 红队
+    players:
+      - model: gpt_astra
+        persona_title: "无"
+        persona_text: "无"
+      - model: gemini_argon
+        persona_title: "无"
+        persona_text: "无"
+      - model: grok
+        persona_title: "无"
+        persona_text: "无"
+  - name: 蓝队
+    players:
+      - model: claude_opus
+        persona_title: "无"
+        persona_text: "无"
+      - model: glm_pro
+        persona_title: "无"
+        persona_text: "无"
+      - model: deepseek_flash
+        persona_title: "无"
+        persona_text: "无"

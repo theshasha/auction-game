@@ -8,6 +8,7 @@ import yaml
 from auction_game.cli import check_llm
 from auction_game import runners
 from auction_game.configuration import ConfigurationError, load_configuration
+from auction_game.game.lineup import Lineup
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS
 from tests.support.factories import CHANNELS
 
@@ -181,6 +182,47 @@ def test_duplicate_names(config_files, file_index, change):
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value) == f"{players_path}：players[1] 名字重复：'甲'；同一个模型放多名玩家时，给每人写 name"
+
+
+def test_teams_load_in_seat_order(config_files, teams_file):
+    _, players = load_configuration(*config_files, team=True, teams_path=teams_file)
+    assert [(player.profile.name, player.profile.team, player.identity.key) for player in players] == [
+        ("甲", "红队", "first"), ("乙", "红队", "second"), ("丙", "红队", "substitute"),
+        ("丁", "蓝队", "first"), ("戊", "蓝队", "second"), ("己", "蓝队", "substitute")]
+    assert all(player.profile.predicted_win_rate is None for player in players)
+    assert all(player.execution == player.identity for player in players)
+
+
+def test_team_test_model_replaces_only_execution(config_files, teams_file):
+    config, regular = load_configuration(*config_files, team=True, teams_path=teams_file)
+    _, testing = load_configuration(*config_files, team=True, teams_path=teams_file, test_model=True)
+    for original, replaced in zip(regular, testing, strict=True):
+        assert (replaced.profile, replaced.identity) == (original.profile, original.identity)
+        assert replaced.execution == config["models"]["substitute"]
+
+
+@pytest.mark.parametrize("change,message", [
+    (lambda data: data["teams"].pop(), "teams 必须是正好 2 个阵营的列表"),
+    (lambda data: data["teams"].append({**data["teams"][1], "name": "绿队"}), "teams 必须是正好 2 个阵营的列表"),
+    (lambda data: data["teams"][0]["players"].pop(), "teams[0].players 必须是正好 3 名玩家的列表"),
+    (lambda data: data["teams"][1].update(name=" "), "teams[1].name 必须是非空字符串"),
+    (lambda data: data["teams"][1].update(name="红队"), "teams[1].name 阵营名重复：'红队'"),
+    (lambda data: data["teams"][0].update(color="red"), "teams[0] 不支持字段：color"),
+    (lambda data: data["teams"][0]["players"][0].update(predicted_win_rate=10),
+     "teams[0].players[0] 不支持字段：predicted_win_rate"),
+    (lambda data: data["teams"][1]["players"][0].update(name="甲"), "teams[1].players[0] 名字重复：'甲'"),
+], ids=["one-team", "three-teams", "two-players", "empty-team-name", "duplicate-team-name", "unknown-team-field",
+        "prediction", "duplicate-player-name"])
+def test_invalid_teams(config_files, teams_file, change, message):
+    rewrite(teams_file, change)
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files, team=True, teams_path=teams_file)
+    assert str(exc.value).startswith(f"{teams_file}：{message}")
+
+
+def test_default_teams_file_has_two_teams_of_three():
+    _, players = load_configuration(team=True)
+    assert [len(members) for members in Lineup(tuple(player.profile for player in players)).teams.values()] == [3, 3]
 
 
 @pytest.mark.parametrize("field", ["reasoning_efort", "key"])

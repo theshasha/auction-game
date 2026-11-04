@@ -50,3 +50,18 @@ def config_files(tmp_path, monkeypatch):
     ]
     players_path.write_text(yaml.safe_dump({"players": players}), encoding="utf-8")
     return config_path, players_path, models_path
+
+
+@pytest.fixture
+def teams_file(config_files):
+    """和 config_files 同一目录的合成团队赛阵容：红队前两人用目录里的角色名，其余写 name。"""
+    path = config_files[0].parent / "teams.yaml"
+
+    def player(model, name=None):
+        return {"model": model, "persona_title": "无", "persona_text": "无", **({"name": name} if name else {})}
+
+    path.write_text(yaml.safe_dump({"teams": [
+        {"name": "红队", "players": [player("first"), player("second"), player("substitute", "丙")]},
+        {"name": "蓝队", "players": [player("first", "丁"), player("second", "戊"), player("substitute", "己")]},
+    ]}, allow_unicode=True), encoding="utf-8")
+    return path
