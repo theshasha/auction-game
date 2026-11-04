@@ -13,6 +13,7 @@ from auction_game.game.models import (
     Observation,
     PlayerDayResult,
     StandingsEntry,
+    TeamStandingsEntry,
 )
 
 
@@ -83,10 +84,12 @@ def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSet
     return DayResult(day=day, pool=pool, players=tuple(results))
 
 
-def compute_standings(names: list[str], logs: list[MatchLog], current: MatchLog | None = None) -> list[StandingsEntry]:
+def compute_standings(names: list[str], logs: list[MatchLog], current: MatchLog | None = None,
+                      team_of: dict[str, str] | None = None) -> list[StandingsEntry]:
     """按累计总分排名，同分并列；logs 是已结束的局，进行中的 current 只计入累计值。
 
-    各局明细只包含已结束的局，拍卖分单独保留，不用于破同分。
+    各局明细只包含已结束的局，拍卖分单独保留，不用于破同分。团队赛时每条带上 team_of 里的阵营，
+    阵营排名由 team_standings 从这份排名汇总。
     """
     current_scores = current.scores if current is not None else {}
     current_auction_scores = current.auction_scores if current is not None else {}
@@ -96,16 +99,37 @@ def compute_standings(names: list[str], logs: list[MatchLog], current: MatchLog 
             total_score=sum(log.scores[name] for log in logs) + current_scores.get(name, 0),
             total_auction_score=sum(log.auction_scores[name] for log in logs) + current_auction_scores.get(name, 0),
             scores_per_match=[log.scores[name] for log in logs],
+            team=team_of[name] if team_of is not None else None,
         )
         for name in names
     ]
     entries.sort(key=lambda entry: (-entry.total_score, entry.player))
+    _assign_ranks(entries)
+    return entries
+
+
+def team_standings(standings: list[StandingsEntry]) -> list[TeamStandingsEntry] | None:
+    """把个人排名按阵营汇总成阵营排名，同分并列、按阵营名排；个人赛的排名没有阵营，返回 None。"""
+    if standings[0].team is None:
+        return None
+    teams: dict[str, TeamStandingsEntry] = {}
+    for entry in standings:
+        team = teams.setdefault(entry.team, TeamStandingsEntry(entry.team, 0, 0, [0] * len(entry.scores_per_match)))
+        team.total_score += entry.total_score
+        team.total_auction_score += entry.total_auction_score
+        team.scores_per_match = [total + score for total, score in zip(team.scores_per_match, entry.scores_per_match)]
+    entries = sorted(teams.values(), key=lambda entry: (-entry.total_score, entry.team))
+    _assign_ranks(entries)
+    return entries
+
+
+def _assign_ranks(entries: list[StandingsEntry] | list[TeamStandingsEntry]) -> None:
+    """entries 已按总分降序排好；同分的名次相同，下一名跳过并列的人数。"""
     for index, entry in enumerate(entries):
         if index > 0 and entry.total_score == entries[index - 1].total_score:
             entry.rank = entries[index - 1].rank
         else:
             entry.rank = index + 1
-    return entries
 
 
 class MatchState:
@@ -123,7 +147,7 @@ class MatchState:
 
     def standings(self) -> list[StandingsEntry]:
         """含本局已结算部分的累计排名。"""
-        return compute_standings(self.names, self.finished_logs, self.log)
+        return compute_standings(self.names, self.finished_logs, self.log, self.team_of)
 
     def start_day(self) -> dict[str, Observation]:
         """开始下一天，第 2 天起先发工资；返回每名玩家当天能看到的信息，按座位顺序。

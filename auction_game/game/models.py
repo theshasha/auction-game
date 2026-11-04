@@ -126,6 +126,18 @@ class StandingsEntry:
     total_auction_score: int     # 含当前局已结算部分的累计拍卖分
     scores_per_match: list[int]  # 仅含已完成各局分数
     rank: int = 0
+    team: Optional[str] = None   # 团队赛的阵营名，个人赛为 None
+
+
+@dataclass
+class TeamStandingsEntry:
+    """团队赛按阵营总分排名，各项是队员的 StandingsEntry 之和；同分保持并列。"""
+
+    team: str
+    total_score: int
+    total_auction_score: int
+    scores_per_match: list[int]
+    rank: int = 0
 
 
 @dataclass

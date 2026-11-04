@@ -332,6 +332,25 @@ def test_run_stops_at_playoff_cap_and_keeps_tied_champions(tmp_path):
                                  "第 2 局策略规划（含首日出价）", "最终感言", "观众总结（仅观众可见）"]
 
 
+def test_team_run_plays_playoffs_until_team_totals_differ(tmp_path):
+    game = replace(TEST_GAME, daily_pool=(1, 1), regular_matches=2, max_playoffs=2)
+    team_of = {"甲": "红队", "乙": "红队", "丙": "蓝队", "丁": "蓝队"}
+    # 正赛红队甲、蓝队丙各赢一天，两队同分进加赛；加赛红队乙赢，个人还是三人并列第一，按阵营总分结束。
+    table = {(1, 2): {"甲": (1, None)}, (2, 2): {"丙": (1, None)}, (3, 2): {"乙": (1, None)}}
+    players = [StubPlayer(name, table) for name in team_of]
+    director = director_module.AIDirector(players, continuous_controller(), init_run_dir(tmp_path, list(team_of)),
+                                          game=game, team_of=team_of)
+    result = director.run()
+    assert [log.is_playoff for log in result.match_logs] == [False, False, True]
+    assert not result.playoff_cap_hit
+    assert {entry.player: (entry.team, entry.total_score) for entry in result.final_standings} == {
+        "甲": ("红队", 1), "乙": ("红队", 1), "丙": ("蓝队", 1), "丁": ("蓝队", 0)}
+    # 出价时看到的排名和发布的局日志都带阵营。
+    assert {entry.player: entry.team for entry in players[0].observations[0].standings} == team_of
+    published = json.loads(director.paths.match(3).read_text(encoding="utf-8"))
+    assert {entry["player"]: entry["team"] for entry in published["standings_after_match"]} == team_of
+
+
 def test_run_publishes_each_match_and_new_match_resets_coins(tmp_path, capsys):
     game = replace(TEST_GAME, daily_pool=(1, 1), regular_matches=2, max_playoffs=2)
     table = {(1, 2): {"甲": (1, None)}, (2, 2): {"乙": (1, None)}, (3, 2): {"甲": (1, None)}}

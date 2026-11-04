@@ -22,11 +22,14 @@ Bid = tuple[int, int | None]  # (正常出价, 超级出价或 None)
 class AIDirector:
     """每个环节由全员并发完成一轮任务，经过 controller 的单步与暂停控制。"""
 
-    def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path, *, game: GameSettings):
+    def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path, *, game: GameSettings,
+                 team_of: dict[str, str] | None = None):
+        """team_of 是团队赛的玩家到阵营，交给结算和排名；个人赛为 None。"""
         self.players = players
         self.controller = controller
         self.paths = RunPaths(log_dir)
         self.game = game
+        self.team_of = team_of
         # 待送达的信：收件人到 {写信人: 正文}，写信人按配置顺序。
         self.mailbox: dict[str, dict[str, str]] = {}
 
@@ -40,13 +43,14 @@ class AIDirector:
         logs: list[MatchLog] = []
         day1_bids = self.opening()
         while True:
-            match = MatchState(names, len(logs) + 1, len(logs) >= self.game.regular_matches, logs, self.game)
+            match = MatchState(names, len(logs) + 1, len(logs) >= self.game.regular_matches, logs, self.game,
+                               team_of=self.team_of)
             for day in range(1, self.game.max_days + 1):
                 observations = match.start_day()
                 match.settle(day1_bids if day == 1 else self.bid_round(observations))
                 print_day_result(match.log, match.standings())
             logs.append(match.log)
-            standings = compute_standings(names, logs)
+            standings = compute_standings(names, logs, team_of=self.team_of)
             publish_match(self.paths, match.log, standings)
             if not has_next_match(logs, standings, self.game):
                 break

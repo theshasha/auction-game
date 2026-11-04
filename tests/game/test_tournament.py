@@ -71,3 +71,41 @@ def test_result_counts_playoffs_and_keeps_tied_champions_at_cap(matches, playoff
     result = TournamentResult(logs, compute_standings(NAMES, logs))
     assert result.playoff_count == playoffs
     assert result.playoff_cap_hit is cap_hit
+
+
+TEAMS = {"甲": "红队", "乙": "红队", "丙": "蓝队", "丁": "蓝队"}
+# 一局里各人的总分，按 TEAMS 的顺序。
+RED, BLUE, EVEN = [3, 0, 0, 0], [0, 0, 3, 0], [1, 0, 1, 0]
+
+
+def team_result(*matches, game=GAME):
+    """matches 是各局按 TEAMS 顺序的总分；返回是否还有下一局和比赛结果。"""
+    names = list(TEAMS)
+    logs = [scored_log(index, dict.fromkeys(names, 0), dict(zip(names, scores)), game=game,
+                       is_playoff=index > game.regular_matches)
+            for index, scores in enumerate(matches, 1)]
+    standings = compute_standings(names, logs, team_of=TEAMS)
+    return has_next_match(logs, standings, game), TournamentResult(logs, standings)
+
+
+@pytest.mark.parametrize("matches, expected", [
+    ((RED, RED), False),
+    ((RED, BLUE), True),
+    ((RED, BLUE, RED), False),
+    ((RED, BLUE, EVEN), True),
+], ids=["regular-unique", "regular-tied", "playoff-decides", "tie-persists"])
+def test_team_playoffs_continue_while_team_totals_tie(matches, expected):
+    assert team_result(*matches)[0] is expected
+
+
+def test_team_tie_at_playoff_cap_is_a_draw():
+    has_next, result = team_result(RED, BLUE, EVEN, EVEN)
+    assert not has_next and result.playoff_count == 2 and result.playoff_cap_hit
+
+
+@pytest.mark.parametrize("scores, expected", [
+    ([3, 1, 3, 0], False),  # 甲、丙个人并列第一，阵营 4:3
+    ([4, 0, 2, 2], True),   # 甲个人独占第一，阵营 4:4
+], ids=["players-tied-teams-not", "teams-tied-players-not"])
+def test_team_ties_ignore_individual_ranks(scores, expected):
+    assert team_result(scores, [0, 0, 0, 0])[0] is expected

@@ -3,6 +3,8 @@
 from dataclasses import replace
 
 from tests.support.factories import (
+    NAMES,
+    TEAM_OF,
     TEST_GAME,
     constant_strategies,
     run_one_match,
@@ -10,7 +12,7 @@ from tests.support.factories import (
     scored_log,
     super_by_day,
 )
-from auction_game.game.engine import compute_standings
+from auction_game.game.engine import compute_standings, team_standings
 
 
 class TestDayHistoryObservation:
@@ -182,3 +184,32 @@ class TestComputeStandings:
             ("Alpha", 3, 9, 3),
             ("Delta", 0, 0, 4),
         ]
+
+
+class TestTeamStandings:
+    """TEAM_OF 里甲乙丙是红队，丁戊己是蓝队。"""
+
+    def test_entries_carry_team_and_teams_sum_members(self):
+        logs = [scored_log(1, dict(zip(NAMES, [2, 0, 0, 1, 0, 0])), dict(zip(NAMES, [4, 2, 0, 3, 3, 0]))),
+                scored_log(2, dict(zip(NAMES, [0, 0, 1, 0, 0, 0])), dict(zip(NAMES, [0, 0, 2, 0, 0, 1])))]
+        standings = compute_standings(NAMES, logs, team_of=TEAM_OF)
+        assert {entry.player: entry.team for entry in standings} == TEAM_OF
+        assert [(team.team, team.total_score, team.total_auction_score, team.scores_per_match, team.rank)
+                for team in team_standings(standings)] == [("红队", 8, 3, [6, 2], 1), ("蓝队", 7, 1, [6, 1], 2)]
+
+    def test_live_match_counts_toward_team_totals(self):
+        current = scored_log(1, dict.fromkeys(NAMES, 0), dict(zip(NAMES, [0, 0, 0, 0, 0, 2])))
+        teams = team_standings(compute_standings(NAMES, [], current, team_of=TEAM_OF))
+        assert [(team.team, team.total_score, team.scores_per_match) for team in teams] == [
+            ("蓝队", 2, []), ("红队", 0, [])]
+
+    def test_tied_teams_share_rank_and_sort_by_name(self):
+        # 座位靠前的阵营叫蓝队：同分时按阵营名排，"红"的码位小于"蓝"，红队在前。
+        team_of = {name: "蓝队" if team == "红队" else "红队" for name, team in TEAM_OF.items()}
+        logs = [scored_log(1, dict.fromkeys(NAMES, 0), dict(zip(NAMES, [1, 0, 0, 0, 0, 1])))]
+        teams = team_standings(compute_standings(NAMES, logs, team_of=team_of))
+        assert [(team.team, team.total_score, team.rank) for team in teams] == [("红队", 1, 1), ("蓝队", 1, 1)]
+
+    def test_individual_standings_have_no_team_ranking(self):
+        standings = compute_standings(NAMES, [])
+        assert all(entry.team is None for entry in standings) and team_standings(standings) is None
