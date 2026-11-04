@@ -20,12 +20,23 @@ Submission = tuple[str, int, Optional[int]]  # (玩家, 正常出价, 超级出�
 
 
 def resolve_bids(
-    normal_bids: Iterable[tuple[str, int]], super_values: Iterable[int],
-) -> tuple[Optional[str], set[int], set[int]]:
-    """判定当天结果，返回获胜者、撞车价位和超级出价命中的价位；只有正常出价能获胜。"""
+    normal_bids: Iterable[tuple[str, int]], super_bids: Iterable[tuple[str, int]],
+    team_of: dict[str, str] | None = None,
+) -> tuple[Optional[str], set[int], set[int], set[str]]:
+    """判定当天结果，返回获胜者、撞车价位、被命中的价位和命中的玩家；只有正常出价能获胜。
+
+    super_bids 是 (玩家, 狙击的价位)。价位上有其他阵营的正常出价，这笔超级出价才命中；被命中的价位上，
+    正常出价全部撞车，包括狙击者队友的。team_of 是玩家到阵营，None 时每人自成一个阵营：
+    规则禁止超级出价和自己的正常出价相同，所以和"价位上有正常出价就命中"的判定相同。
+    """
     normal_bids = list(normal_bids)
+    side = (lambda player: player) if team_of is None else team_of.__getitem__
+    sides_at: dict[int, set[str]] = {}
+    for player, bid in normal_bids:
+        sides_at.setdefault(bid, set()).add(side(player))
+    hits = [(player, value) for player, value in super_bids if sides_at.get(value, set()) - {side(player)}]
+    sniped_values = {value for _, value in hits}
     normal_counts = Counter(bid for _, bid in normal_bids)
-    sniped_values = {value for value in super_values if value in normal_counts}
     burned_values = {
         value for value, count in normal_counts.items() if count >= 2 or value in sniped_values
     }
@@ -34,18 +45,20 @@ def resolve_bids(
         key=lambda item: item[1],
         default=(None, None),
     )[0]
-    return winner, burned_values, sniped_values
+    return winner, burned_values, sniped_values, {player for player, _ in hits}
 
 
-def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSettings) -> DayResult:
-    """按规则结算一天的出价，出价须已通过校验。
+def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSettings,
+               team_of: dict[str, str] | None = None) -> DayResult:
+    """按规则结算一天的出价，出价须已通过校验；命中按 team_of 的阵营判定，见 resolve_bids。
 
     获胜和撞车的正常出价全额扣除，其余退还；超级出价每次扣固定成本，命中各领一份悬赏和命中分。
     获胜者取得当天奖池的拍卖分，流局时奖池作废。
     """
-    winner, burned_values, sniped_values = resolve_bids(
+    winner, burned_values, sniped_values, hitters = resolve_bids(
         ((player, bid) for player, bid, _ in submissions),
-        (super_bid for _, _, super_bid in submissions if super_bid is not None),
+        ((player, super_bid) for player, _, super_bid in submissions if super_bid is not None),
+        team_of,
     )
     results = []
     for player, bid, super_bid in submissions:
@@ -55,7 +68,7 @@ def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSet
             outcome = "collided"
         else:
             outcome = "refunded"
-        super_hit = super_bid in sniped_values
+        super_hit = player in hitters
         coins_delta = 0 if outcome == "refunded" else -bid
         score = pool if outcome == "won" else 0
         if super_bid is not None:
@@ -99,11 +112,12 @@ class MatchState:
     """进行中的一局：每名玩家的金币和已结算的天，按 start_day、settle 交替推进。"""
 
     def __init__(self, names: list[str], match_index: int, is_playoff: bool,
-                 finished_logs: list[MatchLog], game: GameSettings):
-        """finished_logs 是已结束的各局，只用于累计排名。"""
+                 finished_logs: list[MatchLog], game: GameSettings, *, team_of: dict[str, str] | None = None):
+        """finished_logs 是已结束的各局，只用于累计排名；team_of 是玩家到阵营，个人赛为 None。"""
         self.names = list(names)
         self.finished_logs = list(finished_logs)
         self.game = game
+        self.team_of = team_of
         self.coins = {name: game.initial_coins for name in names}
         self.log = MatchLog(match_index=match_index, is_playoff=is_playoff, game=game)
 
@@ -149,7 +163,7 @@ class MatchState:
             reason = validate_submission(bid, super_bid, self.coins[name], self.game)
             if reason is not None:
                 raise ValueError(f"{name} 的出价不符合规则：{reason}")
-        result = settle_day(day, self.game.daily_pool[day - 1], entries, self.game)
+        result = settle_day(day, self.game.daily_pool[day - 1], entries, self.game, self.team_of)
         for player_result in result.players:
             self.coins[player_result.player] += player_result.coins_delta
         self.log.days.append(result)

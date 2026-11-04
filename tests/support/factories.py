@@ -20,6 +20,8 @@ from auction_game.game.settings import GameSettings
 from auction_game.game.models import DayResult, MatchLog, Observation, PlayerDayResult
 
 NAMES = ["甲", "乙", "丙", "丁", "戊", "己"]
+# NAMES 分成两个阵营：前三人红队，后三人蓝队。
+TEAM_OF = {name: "红队" if index < 3 else "蓝队" for index, name in enumerate(NAMES)}
 TEST_GAME = GameSettings(
     initial_coins=7, daily_salary=3, daily_pool=(4,) * 6, max_bid=7,
     super_cost=2, super_bounty=3, super_hit_score=2,
@@ -34,11 +36,12 @@ CHANNELS = {
 
 # ---------- 数据对象 ----------
 
-def make_day(day, bids, pool=1, super_bids=None, game=TEST_GAME):
+def make_day(day, bids, pool=1, super_bids=None, game=TEST_GAME, team_of=None):
     """用引擎结算一天。bids 是按 NAMES 顺序的正常出价，人数可少于六人；
-    super_bids 是 {玩家: 超级出价}。获胜、撞车和命中都由引擎判定。"""
+    super_bids 是 {玩家: 超级出价}，team_of 是玩家到阵营。获胜、撞车和命中都由引擎判定。"""
     super_bids = super_bids or {}
-    return settle_day(day, pool, [(name, bid, super_bids.get(name)) for name, bid in zip(NAMES, bids)], game)
+    return settle_day(day, pool, [(name, bid, super_bids.get(name)) for name, bid in zip(NAMES, bids)], game,
+                      team_of)
 
 
 def make_log(match_index=1, is_playoff=False, days=None, game=TEST_GAME):
@@ -113,11 +116,11 @@ def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, po
 # ---------- 引擎场景：策略只依赖 obs.day 和 obs.my_name，全员可共用 ----------
 
 def run_one_match(strategies, match_index=1, is_playoff=False, super_strategies=None, game=TEST_GAME, *,
-                  names=NAMES, finished_logs=()):
+                  names=NAMES, finished_logs=(), team_of=None):
     """用 {名字: 策略函数} 跑一局，返回 MatchLog。strategy(obs) 返回正常出价；super_strategies 可选，
     其中的函数返回超级出价或 None。每天按座位顺序先调正常出价策略，再调超级出价策略。"""
     super_strategies = super_strategies or {}
-    match = MatchState(names, match_index, is_playoff, list(finished_logs), game)
+    match = MatchState(names, match_index, is_playoff, list(finished_logs), game, team_of=team_of)
     for _ in range(game.max_days):
         observations = match.start_day()
         submissions = {}
@@ -159,11 +162,11 @@ def super_by_day(table):
     return lambda obs: table.get(obs.day)
 
 
-def run_scenario(table, default=0, super_strategies=None, capture=None, game=TEST_GAME):
+def run_scenario(table, default=0, super_strategies=None, capture=None, game=TEST_GAME, team_of=None):
     """最常见场景：全员共用一张按天出价表（表内按名字区分出价），跑一局返回 MatchLog。"""
     strategy = bids_by_day(table, default=default, capture=capture)
     return run_one_match(
-        {name: strategy for name in NAMES}, super_strategies=super_strategies, game=game
+        {name: strategy for name in NAMES}, super_strategies=super_strategies, game=game, team_of=team_of
     )
 
 

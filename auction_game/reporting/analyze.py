@@ -95,7 +95,7 @@ def collect_player_stats(matches: list[dict]) -> dict:
                     for result in super_results
                 )
                 # 固定当天正常出价，移除全部超级出价后重新判定，只比较当天结果。
-                without_super, _, _ = resolve_bids(((result["player"], result["bid"]) for result in results), ())
+                without_super = resolve_bids(((result["player"], result["bid"]) for result in results), ())[0]
                 if without_super != day["winner"]:
                     super_changed_days += 1
             for result in results:
