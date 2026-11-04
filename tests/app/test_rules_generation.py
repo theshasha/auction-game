@@ -12,7 +12,7 @@ from auction_game.cli import rules as rules_command
 from auction_game import runners
 from auction_game.cli import offline_demo
 from auction_game.game.lineup import PlayerProfile
-from tests.support.factories import TEST_GAME
+from tests.support.factories import TEST_GAME, make_lineup
 
 
 def configured_players(names):
@@ -20,15 +20,40 @@ def configured_players(names):
     return [(PlayerProfile(name, "人设", "正文", 0), "unused") for name in names]
 
 
-@pytest.mark.parametrize("changed_input", [
-    "game.yaml", "daily_pool", "super_hit_score", "players.yaml", "models.yaml", "RULES.template.md",
+PARAMETER_LINES = (
+    "金币：{initial_coins}/{daily_salary}，出价：{max_bid}，超级：{super_cost}/{super_bounty}\n"
+    "命中分：{super_hit_score}\n"
+    "正赛：{regular_matches}，加赛：{max_playoffs}，天数：{max_days}\n"
+    "{pool_description}\n"
+)
+RENDERED_PARAMETERS = (
+    "金币：11/4，出价：9，超级：3/5\n"
+    "命中分：2\n"
+    "正赛：2，加赛：4，天数：3\n"
+    "各日奖池依次为：第 1 天 2 分、第 2 天 1 分、第 3 天 3 分。"
+    "每局奖池合计 6 分。\n"
+)
+
+
+@pytest.mark.parametrize("changed_input,stale", [
+    ("game.yaml", "RULES.md、RULES_TEAM.md"),
+    ("daily_pool", "RULES.md、RULES_TEAM.md"),
+    ("super_hit_score", "RULES.md、RULES_TEAM.md"),
+    ("models.yaml", "RULES.md、RULES_TEAM.md"),
+    ("players.yaml", "RULES.md"),
+    ("RULES.template.md", "RULES.md"),
+    ("teams.yaml", "RULES_TEAM.md"),
+    ("RULES_TEAM.template.md", "RULES_TEAM.md"),
 ])
-def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input):
+def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, capsys, changed_input, stale):
     game_path = tmp_path / "game.yaml"
     players_path = tmp_path / "players.yaml"
+    teams_path = tmp_path / "teams.yaml"
     models_path = tmp_path / "models.yaml"
     template_path = tmp_path / "RULES.template.md"
+    team_template_path = tmp_path / "RULES_TEAM.template.md"
     document_path = tmp_path / "RULES.md"
+    team_document_path = tmp_path / "RULES_TEAM.md"
     game = {
         "initial_coins": 11,
         "daily_salary": 4,
@@ -46,44 +71,39 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     ]
     game_path.write_text(yaml.safe_dump(game), encoding="utf-8")
     players_path.write_text(yaml.safe_dump({"players": players}), encoding="utf-8")
+    teams = [{"name": "甲队", "players": players},
+             {"name": "乙队", "players": [{**player, "name": name} for player, name in zip(
+                 players, ["隔离丁", "隔离戊", "隔离己"])]}]
+    teams_path.write_text(yaml.safe_dump({"teams": teams}), encoding="utf-8")
     catalog = {p["model"]: {"name": p["model"], "model": "unused", "provider": "offline",
                             "protocol": "chat", "models_dev": {"provider": "offline", "model": "source"}}
                for p in players}
     models_path.write_text(yaml.safe_dump({"models": catalog}), encoding="utf-8")
-    template_path.write_text(
-        "{player_count}人：{player_names}\n"
-        "金币：{initial_coins}/{daily_salary}，出价：{max_bid}，超级：{super_cost}/{super_bounty}\n"
-        "命中分：{super_hit_score}\n"
-        "正赛：{regular_matches}，加赛：{max_playoffs}，天数：{max_days}\n"
-        "{pool_description}\n",
-        encoding="utf-8",
-    )
+    template_path.write_text("{player_count}人：{player_names}\n" + PARAMETER_LINES, encoding="utf-8")
+    team_template_path.write_text("{player_count}人分两队：{team_lineup}，每队 {team_size} 人\n" + PARAMETER_LINES,
+                                  encoding="utf-8")
     monkeypatch.setattr(rules, "TEMPLATE_PATH", template_path)
+    monkeypatch.setattr(rules, "TEAM_TEMPLATE_PATH", team_template_path)
     monkeypatch.setattr(rules_command, "RULES_PATH", document_path)
+    monkeypatch.setattr(rules_command, "TEAM_RULES_PATH", team_document_path)
     monkeypatch.setattr(rules_command, "load_game_settings", lambda: configuration.load_game_settings(game_path))
     monkeypatch.setattr(rules_command, "load_players",
                         lambda: configuration.load_players(players_path, configuration.load_model_entries(models_path)))
+    monkeypatch.setattr(rules_command, "load_teams",
+                        lambda: configuration.load_teams(teams_path, configuration.load_model_entries(models_path)))
     monkeypatch.setattr(sys, "argv", ["rules.py"])
 
     assert rules_command.main() == 0
     assert document_path.read_text(encoding="utf-8") == (
-        rules.GENERATED_NOTE
-        + "3人：隔离甲、隔离乙、隔离丙\n"
-        "金币：11/4，出价：9，超级：3/5\n"
-        "命中分：2\n"
-        "正赛：2，加赛：4，天数：3\n"
-        "各日奖池依次为：第 1 天 2 分、第 2 天 1 分、第 3 天 3 分。"
-        "每局奖池合计 6 分。\n"
-    )
-    generated = document_path.read_bytes()
-    body = rules.render_rules(
-        configuration.load_game_settings(game_path), ["隔离甲", "隔离乙", "隔离丙"], include_note=False,
-    )
-    assert document_path.read_text(encoding="utf-8") == rules.GENERATED_NOTE + body
-    assert "<!--" not in body
+        rules.GENERATED_NOTE + "3人：隔离甲、隔离乙、隔离丙\n" + RENDERED_PARAMETERS)
+    assert team_document_path.read_text(encoding="utf-8") == (
+        rules.TEAM_GENERATED_NOTE
+        + "6人分两队：甲队有 隔离甲、隔离乙、隔离丙，乙队有 隔离丁、隔离戊、隔离己，每队 3 人\n" + RENDERED_PARAMETERS)
+    generated = document_path.read_bytes(), team_document_path.read_bytes()
     monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
     assert rules_command.main() == 0
-    assert document_path.read_bytes() == generated
+    assert (document_path.read_bytes(), team_document_path.read_bytes()) == generated
+    capsys.readouterr()
 
     path = tmp_path / changed_input
     if changed_input == "game.yaml":
@@ -98,13 +118,17 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     elif changed_input == "players.yaml":
         players.reverse()
         path.write_text(yaml.safe_dump({"players": players}), encoding="utf-8")
+    elif changed_input == "teams.yaml":
+        teams.reverse()
+        path.write_text(yaml.safe_dump({"teams": teams}), encoding="utf-8")
     elif changed_input == "models.yaml":
         catalog[players[0]["model"]]["name"] = "隔离新玩家"
         path.write_text(yaml.safe_dump({"models": catalog}), encoding="utf-8")
     else:
         path.write_text("新规则\n{player_names}\n", encoding="utf-8")
     assert rules_command.main() == 1
-    assert document_path.read_bytes() == generated
+    assert capsys.readouterr().err.startswith(f"{stale} 已过期")
+    assert (document_path.read_bytes(), team_document_path.read_bytes()) == generated
 
 
 def test_max_bid_below_example_bids_fails_generation(tmp_path, monkeypatch):
@@ -115,7 +139,7 @@ def test_max_bid_below_example_bids_fails_generation(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["rules.py"])
     assert rules_command.main() == 1
     assert not document.exists()
-    rules.render_rules(replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID), ["配置甲", "配置乙"])
+    rules.render_rules(replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID), make_lineup(["配置甲", "配置乙"]))
 
 
 @pytest.mark.parametrize("entry,module", [(runners.run_ai, runners), (offline_demo.generate_demo, offline_demo)])
@@ -155,7 +179,7 @@ def test_all_starts_sync_rules_before_logs_or_models(entry, kwargs, module, boun
         pass
 
     def stop_before_side_effect(*args, **kwargs):
-        assert document.read_text(encoding="utf-8") == rules.render_rules(TEST_GAME, names)
+        assert document.read_text(encoding="utf-8") == rules.render_rules(TEST_GAME, make_lineup(names))
         raise StartStopped
 
     monkeypatch.setattr(module, boundary, stop_before_side_effect)

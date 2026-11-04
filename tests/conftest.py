@@ -14,6 +14,7 @@ from auction_game.cli import rules
 def isolated_root_rules(tmp_path, monkeypatch):
     """生产启动同步仍真实执行，测试写入各自临时根规则。"""
     monkeypatch.setattr(rules, "RULES_PATH", tmp_path / "root-RULES.md")
+    monkeypatch.setattr(rules, "TEAM_RULES_PATH", tmp_path / "root-RULES_TEAM.md")
 
 @pytest.fixture
 def config_files(tmp_path, monkeypatch):

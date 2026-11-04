@@ -15,6 +15,7 @@ from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.flow.controller import Controller
 from auction_game.agent.tasks import Task, TaskRunner
 from auction_game.agent.text_output import LetterNames
+from auction_game.game.lineup import Lineup
 from auction_game.game.settings import GameSettings
 from auction_game.runners import make_task_runners, play_ai
 from auction_game.reporting.run_output import make_run_dir
@@ -159,7 +160,7 @@ def generate_demo(output: Path | None = None, *, test_model=False):
     game = load_game_settings(test_model=test_model)
     sync_root_rules(load_game_settings())
     names = [pc.profile.name for pc in configs]
-    rules = render_rules(game, names)
+    rules = render_rules(game, Lineup(tuple(pc.profile for pc in configs)))
     factories = []
 
     def factory(**kwargs):

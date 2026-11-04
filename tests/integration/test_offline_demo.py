@@ -14,6 +14,7 @@ from auction_game.cli import offline_demo
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.cli.offline_demo import generate_demo
 from auction_game.agent import prompts
+from auction_game.game.lineup import Lineup
 from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_paths import RunPaths
 from tests.support.factories import task_entries, text_reply
@@ -93,7 +94,8 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         assert identity.model != execution.model
     assert all(f.settings["max_tokens"] == configs[0].execution.max_tokens for f in factories)
     assert all(f.settings["openai_reasoning_effort"] == "medium" for f in factories)
-    assert (run_dir / "RULES.md").read_text(encoding="utf-8") == prompts.render_rules(game, names)
+    assert (run_dir / "RULES.md").read_text(encoding="utf-8") == prompts.render_rules(
+        game, Lineup(tuple(pc.profile for pc in configs)))
 
     system = json.loads(paths.player(1).read_text(encoding="utf-8").splitlines()[0])
     assert system["task"] == "system"

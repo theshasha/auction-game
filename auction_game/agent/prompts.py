@@ -35,7 +35,7 @@ def build_system_prompt(
     names = lineup.names
     others = "、".join(lineup.others(profile.name))
     text = (
-        f"{render_rules(game, names, include_note=False)}\n"
+        f"{render_rules(game, lineup, include_note=False)}\n"
         f"【你的身份】\n你叫 {profile.name}，其他 {len(names) - 1} 位玩家是：{others}。\n"
     )
     if enable_personas:

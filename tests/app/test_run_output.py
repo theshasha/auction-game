@@ -14,7 +14,8 @@ from auction_game.game.models import MatchLog
 from auction_game.game.rules import render_rules
 from auction_game.reporting.run_output import (initialize_run, print_day_result, print_final_result, publish_match,
                                                write_readme)
-from tests.support.factories import NAMES, TEST_GAME, bids_by_day, make_standings, run_one_match, run_scenario
+from tests.support.factories import (NAMES, TEST_GAME, bids_by_day, make_lineup, make_standings, run_one_match,
+                                     run_scenario)
 
 
 def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(capsys):
@@ -80,7 +81,7 @@ def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected)
         {"run_type": run_type, "mode": mode, "game": TEST_GAME.to_dict(),
          "players": [{"name": name, "identity_model": {"model": "identity"},
                       "execution_model": {"protocol": "chat", "model": "execution"}} for name in NAMES]},
-        render_rules(TEST_GAME, NAMES),
+        render_rules(TEST_GAME, make_lineup()),
     )
     assert expected in (paths.root / "README.md").read_text(encoding="utf-8")
 
@@ -90,7 +91,7 @@ def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(),
          "players": [{"name": name} for name in NAMES]},
-        render_rules(TEST_GAME, NAMES),
+        render_rules(TEST_GAME, make_lineup()),
     )
     readme = paths.root / "README.md"
     assert "speeches.md" not in readme.read_text(encoding="utf-8")
@@ -107,7 +108,7 @@ def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": game.to_dict(),
          "players": [{"name": name} for name in NAMES]},
-        render_rules(game, NAMES),
+        render_rules(game, make_lineup()),
     )
     # 每局全员出同一个价，天天撞车流局；第 3 局是加赛。
     logs = []
@@ -144,7 +145,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": game.to_dict(),
          "players": [{"name": name} for name in NAMES]},
-        render_rules(game, NAMES),
+        render_rules(game, make_lineup()),
     )
     publish_match(paths, log, standings)
 

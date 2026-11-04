@@ -47,7 +47,7 @@ class TestSystemPrompt:
         for marker in ("【你的人设】", "独特人设标题", "独特人设正文", "人设", "认真思考"):
             assert (marker in text) is enable_personas
         assert "你叫 甲" in text and "乙、丙、丁、戊、己" in text
-        assert text.startswith(render_rules(TEST_GAME, NAMES, include_note=False))
+        assert text.startswith(render_rules(TEST_GAME, lineup, include_note=False))
 
     @pytest.mark.parametrize("enable_personas", [False, True])
     @pytest.mark.parametrize("writing_style", [None, "【写作要求】\n独特写作要求。\n"])

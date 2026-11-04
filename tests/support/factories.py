@@ -233,6 +233,11 @@ def make_lineup(names=NAMES, rates=None, persona=("人设", "正文")):
     return Lineup(tuple(PlayerProfile(name, *persona, rate) for name, rate in zip(names, rates, strict=True)))
 
 
+def make_team_lineup(team_of=TEAM_OF, persona=("人设", "正文")):
+    """团队赛阵容：team_of 是按座位的玩家到阵营，全员人设相同，没有预测胜率。"""
+    return Lineup(tuple(PlayerProfile(name, *persona, None, team) for name, team in team_of.items()))
+
+
 ALL_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
 TEST_LINEUP = make_lineup(ALL_NAMES, persona=("测试人设", "测试人设正文"))
 

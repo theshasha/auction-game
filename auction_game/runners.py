@@ -44,7 +44,7 @@ def run_ai(test_model: bool = False) -> int:
         game = load_game_settings(test_model=test_model)
         sync_root_rules(load_game_settings())
         # 根规则按生产参数生成；测试模式的覆盖参数只用于本场，要单独生成一次。
-        rules = render_rules(game, [pc.profile.name for pc in player_configs])
+        rules = render_rules(game, Lineup(tuple(pc.profile for pc in player_configs)))
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
         task_runners = make_task_runners(config, player_configs, make_model_factory,
                                          signals=controller.signals)
