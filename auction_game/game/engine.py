@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Iterable
 from typing import Optional
 
@@ -23,30 +22,33 @@ Submission = tuple[str, int, Optional[int]]  # (玩家, 正常出价, 超级出�
 def resolve_bids(
     normal_bids: Iterable[tuple[str, int]], super_bids: Iterable[tuple[str, int]],
     team_of: dict[str, str] | None = None,
-) -> tuple[Optional[str], set[int], set[int], set[str]]:
-    """判定当天结果，返回获胜者、撞车价位、被命中的价位和命中的玩家；只有正常出价能获胜。
+) -> tuple[Optional[str], set[int], set[str], set[str]]:
+    """判定当天结果，返回获胜者、撞车价位、正常出价被命中的玩家和超级出价命中的玩家；只有正常出价能获胜。
 
-    super_bids 是 (玩家, 狙击的价位)。价位上有其他阵营的正常出价，这笔超级出价才命中；被命中的价位上，
-    正常出价全部撞车，包括狙击者队友的。team_of 是玩家到阵营，None 时每人自成一个阵营：
-    规则禁止超级出价和自己的正常出价相同，所以和"价位上有正常出价就命中"的判定相同。
+    super_bids 是 (玩家, 狙击的价位)。超级出价只命中其他阵营的正常出价：价位上有其他阵营的正常出价，
+    这笔超级出价就命中，那些出价撞车。同价位上狙击者队友的出价不算被命中，但和对方同价，照样撞车。
+    team_of 是玩家到阵营，None 时每人自成一个阵营：规则禁止超级出价和自己的正常出价相同，
+    所以和"价位上有正常出价就命中，这个价位的出价都被命中"的判定相同。
     """
     normal_bids = list(normal_bids)
     side = (lambda player: player) if team_of is None else team_of.__getitem__
-    sides_at: dict[int, set[str]] = {}
+    bidders_at: dict[int, list[str]] = {}
     for player, bid in normal_bids:
-        sides_at.setdefault(bid, set()).add(side(player))
-    hits = [(player, value) for player, value in super_bids if sides_at.get(value, set()) - {side(player)}]
-    sniped_values = {value for _, value in hits}
-    normal_counts = Counter(bid for _, bid in normal_bids)
-    burned_values = {
-        value for value, count in normal_counts.items() if count >= 2 or value in sniped_values
-    }
+        bidders_at.setdefault(bid, []).append(player)
+    sniped, hitters = set(), set()
+    for shooter, value in super_bids:
+        targets = [player for player in bidders_at.get(value, []) if side(player) != side(shooter)]
+        if targets:
+            sniped.update(targets)
+            hitters.add(shooter)
+    burned_values = {value for value, bidders in bidders_at.items() if len(bidders) >= 2}
+    burned_values |= {bid for player, bid in normal_bids if player in sniped}
     winner = max(
         ((player, bid) for player, bid in normal_bids if bid not in burned_values),
         key=lambda item: item[1],
         default=(None, None),
     )[0]
-    return winner, burned_values, sniped_values, {player for player, _ in hits}
+    return winner, burned_values, sniped, hitters
 
 
 def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSettings,
@@ -56,7 +58,7 @@ def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSet
     获胜和撞车的正常出价全额扣除，其余退还；超级出价每次扣固定成本，命中各领一份悬赏和命中分。
     获胜者取得当天奖池的拍卖分，流局时奖池作废。
     """
-    winner, burned_values, sniped_values, hitters = resolve_bids(
+    winner, burned_values, sniped, hitters = resolve_bids(
         ((player, bid) for player, bid, _ in submissions),
         ((player, super_bid) for player, _, super_bid in submissions if super_bid is not None),
         team_of,
@@ -78,7 +80,7 @@ def settle_day(day: int, pool: int, submissions: list[Submission], game: GameSet
             coins_delta += game.super_bounty
             score += game.super_hit_score
         results.append(PlayerDayResult(
-            player=player, bid=bid, super_bid=super_bid, outcome=outcome, sniped=bid in sniped_values,
+            player=player, bid=bid, super_bid=super_bid, outcome=outcome, sniped=player in sniped,
             super_hit=super_hit, coins_delta=coins_delta, score=score,
         ))
     return DayResult(day=day, pool=pool, players=tuple(results))

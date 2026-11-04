@@ -20,7 +20,7 @@ def super_uses(day):
 
 def test_resolve_bids_with_and_without_supers():
     normal_bids = list(zip(NAMES, [0, 4, 3, 2, 2, 1]))
-    assert resolve_bids(normal_bids, [("甲", 4), ("丙", 4), ("己", 7)]) == ("丙", {2, 4}, {4}, {"甲", "丙"})
+    assert resolve_bids(normal_bids, [("甲", 4), ("丙", 4), ("己", 7)]) == ("丙", {2, 4}, {"乙"}, {"甲", "丙"})
     # 统计里的反事实判定：去掉超级出价后只按正常出价重判。
     assert resolve_bids(normal_bids, []) == ("乙", {2}, set(), set())
 
@@ -34,25 +34,26 @@ class TestTeamSnipe:
         snipe = {"甲": super_by_day({1: 5})}
         day = run_scenario(table, super_strategies=snipe, team_of=TEAM_OF).days[0]
         assert super_uses(day) == [("甲", 5, False)]
-        assert day.winner == "乙" and day.collision_values == []
+        assert day.winner == "乙" and day.collision_values == [] and not day.result_of("乙").sniped
         assert day.result_of("甲").coins_delta == -TEST_GAME.super_cost
         # 个人赛里同样的出价算命中，乙撞车。
         individual = run_scenario(table, super_strategies=snipe).days[0]
         assert super_uses(individual) == [("甲", 5, True)] and individual.winner == "己"
 
-    def test_hit_on_opponent_also_burns_teammate_at_same_value(self):
-        # 5 上有红队乙和蓝队戊；蓝队丁狙 5，命中乙，同价位上丁的队友戊一起撞车。
+    def test_hit_marks_only_opponent_and_teammate_collides_by_shared_value(self):
+        # 5 上有红队乙和蓝队戊；蓝队丁狙 5，命中乙。戊是丁的队友，没有被命中，但和乙同价，照样撞车。
         day = make_day(1, [0, 5, 1, 2, 5, 3], super_bids={"丁": 5}, team_of=TEAM_OF)
         assert super_uses(day) == [("丁", 5, True)]
         assert [(day.result_of(name).outcome, day.result_of(name).sniped) for name in ("乙", "戊")] == [
-            ("collided", True)] * 2
+            ("collided", True), ("collided", False)]
         assert day.winner == "己" and day.result_of("丁").score == TEST_GAME.super_hit_score
 
     def test_value_burns_when_opponent_hits_even_if_teammate_misses(self):
-        # 乙独占 5，队友甲和蓝队丁都狙 5：甲落空、丁命中，乙照样撞车。
+        # 乙独占 5，队友甲和蓝队丁都狙 5：甲落空、丁命中，乙被命中撞车。
         day = make_day(1, [0, 5, 1, 2, 3, 4], super_bids={"甲": 5, "丁": 5}, team_of=TEAM_OF)
         assert super_uses(day) == [("甲", 5, False), ("丁", 5, True)]
-        assert day.result_of("乙").outcome == "collided" and day.winner == "己"
+        assert (day.result_of("乙").outcome, day.result_of("乙").sniped) == ("collided", True)
+        assert day.winner == "己"
 
     def test_two_teammates_sniping_same_opponent_value_both_hit(self):
         day = make_day(1, [0, 5, 1, 2, 3, 4], super_bids={"丁": 5, "戊": 5}, team_of=TEAM_OF)

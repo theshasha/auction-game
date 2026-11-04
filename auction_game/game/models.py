@@ -16,7 +16,7 @@ class PlayerDayResult:
     bid: int                     # 正常出价
     super_bid: Optional[int]     # 超级出价，未使用为 None
     outcome: Literal["won", "collided", "refunded"]  # 正常出价获胜、撞车或退还；获胜和撞车全额扣款
-    sniped: bool                 # 正常出价所在价位被超级出价命中；此时 outcome 为 collided，可能同时与他人互撞
+    sniped: bool                 # 正常出价被超级出价命中，团队赛只算对方阵营的狙击；此时 outcome 为 collided，可能同时与他人互撞
     super_hit: bool              # 超级出价是否命中；未使用为 False
     coins_delta: int             # 当天结算的金币变化：正常出价扣款、超级出价成本和悬赏，不含工资
     score: int                   # 当日得分：拍卖分加命中分
