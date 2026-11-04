@@ -1,4 +1,4 @@
-"""加载比赛配置、组装 AI 玩家并启动个人赛。"""
+"""加载比赛配置、组装 AI 玩家并启动个人赛或团队赛。"""
 
 from __future__ import annotations
 
@@ -37,12 +37,12 @@ def make_task_runners(config, player_configs, model_factory, runner=TaskRunner, 
     )) for pc in player_configs}
 
 
-def run_ai(test_model: bool = False) -> int:
-    """真实模型比赛；配置、规则或密钥有误时在创建场次目录前停止。"""
+def run_ai(test_model: bool = False, team: bool = False) -> int:
+    """真实模型比赛，team 时是团队赛；配置、规则或密钥有误时在创建场次目录前停止。"""
     try:
-        config, player_configs = load_configuration(test_model=test_model)
+        config, player_configs = load_configuration(test_model=test_model, team=team)
         game = load_game_settings(test_model=test_model)
-        sync_root_rules(load_game_settings())
+        sync_root_rules(load_game_settings(), team=team)
         # 根规则按生产参数生成；测试模式的覆盖参数只用于本场，要单独生成一次。
         rules = render_rules(game, Lineup(tuple(pc.profile for pc in player_configs)))
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
@@ -51,7 +51,7 @@ def run_ai(test_model: bool = False) -> int:
     except (ConfigurationError, RulesError, MissingApiKeyError) as exc:
         print(f"[配置错误] {exc}")
         return 1
-    run_type = "ai-test" if test_model else "ai"
+    run_type = ("team" if team else "ai") + ("-test" if test_model else "")
     run_dir = make_run_dir(run_type)
     if test_model:
         test_key = config["test_model"]
@@ -113,7 +113,11 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
     ]
     print(f"并发上限：{controller.max_concurrency}")
     prompt_options = config["prompts"]
-    print(f"提示设置：赛前预测{'开启' if prompt_options['enable_predictions'] else '关闭'}，"
+    if lineup.teams:
+        predictions = "不用于团队赛"
+    else:
+        predictions = "开启" if prompt_options["enable_predictions"] else "关闭"
+    print(f"提示设置：赛前预测{predictions}，"
           f"人设{'开启' if prompt_options['enable_personas'] else '关闭'}，"
           f"写作要求{'开启' if prompt_options['enable_writing_style'] else '关闭'}")
     if start_reader:
@@ -121,7 +125,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
         print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=退出比赛")
 
     try:
-        result = AIDirector(players, controller, run_dir, game=game).run()
+        result = AIDirector(players, controller, run_dir, game=game, team_of=lineup.team_of).run()
     except TournamentAborted:
         print("\n已退出比赛。")
         return 0

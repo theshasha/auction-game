@@ -10,6 +10,7 @@ from auction_game import runners
 from auction_game.configuration import ConfigurationError, load_configuration
 from auction_game.game.lineup import Lineup
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS
+from auction_game.reporting.run_paths import RunPaths
 from tests.support.factories import CHANNELS
 
 
@@ -289,6 +290,45 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
         assert all(player.execution.model_settings == {} for player in testing)
         assert config["models"]["substitute"].model_settings == {"openai_reasoning_effort": "low"}
     assert load_configuration(*config_files)[1] == regular
+
+
+def test_team_entry_reports_teams_errors_before_logs(config_files, teams_file, monkeypatch, capsys):
+    rewrite(teams_file, lambda data: data["teams"].pop())
+    monkeypatch.setattr(runners, "load_configuration",
+                        lambda **kwargs: load_configuration(*config_files, teams_path=teams_file, **kwargs))
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("配置错误时不应创建客户端"))
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: pytest.fail("配置错误时不应创建日志"))
+    assert runners.run_ai(team=True) == 1
+    assert f"[配置错误] {teams_file}：teams 必须是正好 2 个阵营的列表" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("test_model", [False, True])
+def test_team_startup_records_teams_and_hands_them_to_director(
+        config_files, teams_file, monkeypatch, tmp_path, capsys, test_model):
+    monkeypatch.setattr(runners, "load_configuration",
+                        lambda **kwargs: load_configuration(*config_files, teams_path=teams_file, **kwargs))
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
+    monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / mode)
+    monkeypatch.setattr(runners.Controller, "start_stdin_reader", lambda self: None)
+    directors = []
+
+    def stop(director):
+        directors.append(director)
+        raise runners.TournamentAborted
+
+    monkeypatch.setattr(runners.AIDirector, "run", stop)
+    assert runners.run_ai(test_model=test_model, team=True) == 0
+    assert "提示设置：赛前预测不用于团队赛，" in capsys.readouterr().out
+    run_type = "team-test" if test_model else "team"
+    paths = RunPaths(tmp_path / run_type)
+    snapshot = paths.read_config()
+    team_of = {"甲": "红队", "乙": "红队", "丙": "红队", "丁": "蓝队", "戊": "蓝队", "己": "蓝队"}
+    assert snapshot["run_type"] == run_type
+    assert {pc["name"]: pc["team"] for pc in snapshot["players"]} == team_of
+    assert directors[0].team_of == team_of
+    assert "红队有 甲、乙、丙，蓝队有 丁、戊、己" in (paths.root / "RULES.md").read_text(encoding="utf-8")
+    system = json.loads(paths.player(1).read_text(encoding="utf-8").splitlines()[0])["content"]
+    assert "你叫 甲，属于红队，队友是乙、丙；对方是蓝队：丁、戊、己。" in system
 
 
 def test_missing_key_stops_before_logs(config_files, monkeypatch, capsys):

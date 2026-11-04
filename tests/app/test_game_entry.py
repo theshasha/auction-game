@@ -8,14 +8,16 @@ import main
 from auction_game import runners
 
 
-@pytest.mark.parametrize("args,test_model", [([], False), (["--test-model"], True)])
+@pytest.mark.parametrize("args,test_model,team", [
+    ([], False, False), (["--test-model"], True, False), (["--team"], False, True), (["--team", "--test-model"], True, True),
+])
 @pytest.mark.parametrize("status", [0, 1])
-def test_main_dispatches_to_ai_run(monkeypatch, args, test_model, status):
+def test_main_dispatches_to_ai_run(monkeypatch, args, test_model, team, status):
     calls = []
     monkeypatch.setattr(runners, "run_ai", lambda **kwargs: calls.append(kwargs) or status)
     monkeypatch.setattr(sys, "argv", ["main.py", *args])
     assert main.main() == status
-    assert calls == [{"test_model": test_model}]
+    assert calls == [{"test_model": test_model, "team": team}]
 
 
 @pytest.mark.parametrize("args", [["--unknown"], ["extra"]])
