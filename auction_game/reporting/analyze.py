@@ -1,4 +1,4 @@
-"""统计场次。默认选最新的真实 AI 场次（ai 或 ai-test），也可显式指定其他类型。
+"""统计场次。默认选最新的真实 AI 场次（ai、ai-test、team 或 team-test），也可显式指定其他类型。
 
 用法：
     python -m auction_game.reporting.analyze
@@ -13,12 +13,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from auction_game.game.engine import resolve_bids
+from auction_game.game.engine import resolve_bids, team_standings
+from auction_game.game.models import StandingsEntry
 from auction_game.game.settings import GameSettings
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TYPES
 
-RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(?:-test)?(_\d+)?$")  # 时间戳场次目录，排除 archive 等归档目录
+# 真实 AI 场次的时间戳目录，排除离线赛和 archive 等归档目录；目录名的类型取自场次的 run_type。
+RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_(?:ai|team)(?:-test)?(_\d+)?$")
 TASK_LABELS = {"speech": "发言", "plan": "规划", "bid": "出价", "memory": "记忆", "summary": "观众总结"}
 
 
@@ -26,7 +28,7 @@ def find_latest_ai_run() -> Path:
     candidates = [path for path in (LOG_DIR.iterdir() if LOG_DIR.exists() else ())
                   if RUN_DIR_PATTERN.match(path.name) and any((path / "data" / "matches").glob("*.json"))]
     if not candidates:
-        sys.exit("logs/ 下没有已完成至少一局的真实 AI 场次（ai 或 ai-test）；离线模拟赛请显式指定目录")
+        sys.exit("logs/ 下没有已完成至少一局的真实 AI 场次（ai、ai-test、team 或 team-test）；离线模拟赛请显式指定目录")
     return max(candidates, key=lambda path: (path.name[:15], int(path.name.rsplit('_', 1)[1])
                                            if path.name.rsplit('_', 1)[1].isdigit() else 1))
 
@@ -171,6 +173,23 @@ def print_player_stats(stats: dict) -> None:
         print(f"  正常出价为零：{row['zero_bids']}次")
 
 
+def print_team_totals(snapshot: dict, matches: list[dict], match_labels: list[str]) -> None:
+    """团队赛的阵营总分，用最后一局日志里的累计排名汇总，和 README、终端同一个汇总函数。
+
+    快照里玩家的 team 有值才是团队赛；个人赛不输出，也不读累计排名，较早的个人赛快照没有 team 这个键。
+    """
+    if not any(pc.get("team") for pc in snapshot["players"]):
+        return
+    teams = team_standings([StandingsEntry(**entry) for entry in matches[-1]["standings_after_match"]])
+    print("阵营总分")
+    print(f"  各局顺序：{' / '.join(match_labels)}")
+    for team in teams:
+        print(f"  {team.team}：{team.total_score} 分（拍卖 {team.total_auction_score} 分，"
+              f"命中 {team.total_score - team.total_auction_score} 分），"
+              f"各局 {' / '.join(str(score) for score in team.scores_per_match)}")
+    print()
+
+
 def collect_usage(run_dir: Path, players: list[dict]) -> dict:
     """逐条累加任务日志中模型回复的用量，含纠错往返和失败、取消任务里已收到的回复。
 
@@ -292,6 +311,7 @@ def analyze(run_dir: Path) -> None:
     print(f"局数：{len(matches)}（正赛 {len(matches) - playoff_count} + 加赛 {playoff_count}）")
     print(f"总拍卖天数：{total_days}，其中流局 {void_days} 天（{void_days / total_days:.1%}）")
     print()
+    print_team_totals(snapshot, matches, player_stats["match_labels"])
 
     print("经济与超级出价")
     print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
@@ -334,7 +354,7 @@ def analyze(run_dir: Path) -> None:
     print(f"出 0 共 {zero_bids} 笔（含流局日和超级出价），其中 0 价获胜 {zero_bid_wins} 次")
 
     # 离线赛的用量是假模型估算的。
-    if snapshot["run_type"] in ("ai", "ai-test"):
+    if not offline:
         print()
         print_usage(collect_usage(run_dir, snapshot["players"]))
 

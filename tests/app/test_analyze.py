@@ -23,7 +23,7 @@ import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, RetryPromptPart, TextPart, UserPromptPart
 from pydantic_ai.usage import RequestUsage
 
-from tests.support.factories import TEST_GAME, make_day, make_log, make_standings
+from tests.support.factories import TEAM_OF, TEST_GAME, make_day, make_log, make_standings
 
 from auction_game.llm.execution import CallFailedError, ExecutionResult
 from auction_game.agent.log import AgentLog
@@ -253,14 +253,17 @@ def test_super_result_days_do_not_simulate_future():
     assert stats["super_changed_days"] == 0
 
 
-def write_matches(run_dir, matches, *, run_type="offline", players=None):
+def write_matches(run_dir, matches, *, run_type="offline", players=None, team_of=None):
+    """team_of 是团队赛的玩家到阵营，写进快照和每局的累计排名。"""
     first = matches[0]["match"]
     roster = deepcopy(players) if players is not None else [{"name": name} for name in first["auction_scores"]]
     for player in roster:
         player.setdefault("identity_model", {"model": "synthetic-identity"})
         player.setdefault("execution_model", {"protocol": "chat", "model": "synthetic-execution"})
+        if team_of is not None:
+            player["team"] = team_of[player["name"]]
     paths = initialize_run(run_dir, {"run_type": run_type,
-                                     "mode": "test_model" if run_type == "ai-test" else "regular",
+                                     "mode": "test_model" if run_type.endswith("-test") else "regular",
                                      "game": first["game"], "players": roster}, "test rules")
     # 模型玩家创建时就写下系统提示，每人都有任务日志。
     for pc in paths.read_config()["players"]:
@@ -273,7 +276,7 @@ def write_matches(run_dir, matches, *, run_type="offline", players=None):
             auction_scores_history[name].append(payload["match"]["auction_scores"].get(name, 0))
             scores_history[name].append(payload["match"]["scores"].get(name, 0))
         payload["standings_after_match"] = [asdict(entry) for entry in make_standings(
-            auction_scores_history, scores_history=scores_history)]
+            auction_scores_history, scores_history=scores_history, team_of=team_of)]
         paths.match(payload["match"]["match_index"]).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
@@ -349,13 +352,16 @@ def test_usage_lists_failed_only_task_without_largest_input(tmp_path, capsys):
     assert "  观众总结：请求 0 次，输入 0，输出 0；另有 1 次请求失败\n" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("latest_type,older_type", [("ai-test", "ai"), ("ai", "ai-test")])
+@pytest.mark.parametrize("latest_type,older_type", [
+    ("ai-test", "ai"), ("ai", "ai-test"), ("team", "ai"), ("team-test", "team"), ("ai", "team-test"),
+])
 def test_default_analysis_selects_latest_real_ai(tmp_path, monkeypatch, latest_type, older_type):
     monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
     write_matches(tmp_path / f"20261016_110000_{older_type}", make_matches(), run_type=older_type)
     latest = tmp_path / f"20261016_120000_{latest_type}"
     write_matches(latest, make_matches(), run_type=latest_type)
     write_matches(tmp_path / "20261016_130000_offline", make_matches())
+    write_matches(tmp_path / "20261016_130000_team-offline", make_matches(), run_type="team-offline")
     (tmp_path / "20261016_140000_ai").mkdir()  # 还没有完成的局
     write_matches(tmp_path / "archive_20261016_160000_ai", make_matches(), run_type="ai")
     assert find_latest_ai_run() == latest
@@ -386,8 +392,20 @@ def test_default_cli_keeps_test_run_type_and_actual_models(tmp_path, monkeypatch
 def test_default_analysis_rejects_only_offline(tmp_path, monkeypatch):
     monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
     write_matches(tmp_path / "20261016_120000_offline", make_matches())
-    with pytest.raises(SystemExit, match="没有.*ai 或 ai-test"):
+    write_matches(tmp_path / "20261016_120000_team-offline", make_matches(), run_type="team-offline")
+    with pytest.raises(SystemExit, match="没有.*ai、ai-test、team 或 team-test"):
         find_latest_ai_run()
+
+
+def test_team_run_reports_team_totals_and_usage(tmp_path, capsys):
+    # 红队甲乙丙：第 1 局乙 3 分，第 2 局乙 1 分；蓝队丁戊己：第 1 局己 1 分，第 2 局戊 1 分。
+    write_matches(tmp_path / "20260909_120000_team", make_matches(), run_type="team", team_of=TEAM_OF)
+    analyze(tmp_path / "20260909_120000_team")
+    output = capsys.readouterr().out
+    assert ("\n\n阵营总分\n  各局顺序：正赛第 1 局 / 正赛第 2 局\n"
+            "  红队：4 分（拍卖 2 分，命中 2 分），各局 3 / 1\n"
+            "  蓝队：2 分（拍卖 2 分，命中 0 分），各局 1 / 1\n\n经济与超级出价\n") in output
+    assert "运行类型：团队赛常规真实 AI" in output and "模型用量（token）" in output
 
 
 def test_cli_reports_run_without_matches(tmp_path, monkeypatch):
