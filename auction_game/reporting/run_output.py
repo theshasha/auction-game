@@ -7,10 +7,11 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
+from auction_game.game.engine import team_standings
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.game.tables import render_match_log, render_standings
 from auction_game.paths import LOG_DIR
-from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
+from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TYPES
 
 # 节标题是写信的环节，说明送达时机，免得读成收信的时候。
 LETTERS_HEADER = "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
@@ -92,14 +93,16 @@ def initialize_run(run_dir, snapshot, rules):
 
 
 def write_readme(paths, standings=None):
+    """团队赛看快照里玩家的 team：标题写团队赛，私人对话按阵营分组。"""
     config = paths.read_config()
-    if config["run_type"] == "offline":
+    team = any(pc.get("team") for pc in config["players"])
+    if config["run_type"] in OFFLINE_RUN_TYPES:
         model_note = "全员使用假模型，无真实调用。"
     elif config["mode"] == "test_model":
         model_note = "全员调用测试模型，角色身份不变。"
     else:
         model_note = "各玩家使用配置中的模型。"
-    lines = ["# 拍卖个人赛", f"运行类型：{RUN_TYPES[config['run_type']]}。",
+    lines = [f"# 拍卖{'团队赛' if team else '个人赛'}", f"运行类型：{RUN_TYPES[config['run_type']]}。",
              model_note,
              "[本场规则](RULES.md)",
              "本场配置见 [配置快照](data/run_config.json)，统计以此为准。"]
@@ -113,7 +116,16 @@ def write_readme(paths, standings=None):
     private = [pc for pc in config["players"] if paths.player(pc["number"], readable=True).exists()]
     if private:
         lines.append("## 私人对话（含私有策略，仅供赛后阅读）")
-        lines.extend(f"- [{pc['name']}](players/{pc['number']:03d}.md)" for pc in private)
+
+        def links(players):
+            return [f"- [{pc['name']}](players/{pc['number']:03d}.md)" for pc in players]
+
+        if team:
+            for team_name in dict.fromkeys(pc["team"] for pc in private):
+                lines.append(f"### {team_name}")
+                lines.extend(links(pc for pc in private if pc["team"] == team_name))
+        else:
+            lines.extend(links(private))
     (paths.root / "README.md").write_text("\n\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -130,6 +142,9 @@ def print_day_result(log: MatchLog, standings: list[StandingsEntry]) -> None:
     print(f"奖池 {day.pool} 分；{outcome}。")
     hits = [f"{result.player} +{log.game.super_hit_score} 分" for result in day.players if result.super_hit]
     print("超级出价命中：" + ("；".join(hits) if hits else "无") + "。")
+    teams = team_standings(standings)
+    if teams is not None:
+        print("阵营累计总分：" + "、".join(f"{team.team} {team.total_score} 分" for team in teams) + "。")
     print("| 排名 | 玩家 | 累计总分 | 金币（结算后） |")
     print("| --- | --- | --- | --- |")
     for entry in standings:
@@ -137,12 +152,20 @@ def print_day_result(log: MatchLog, standings: list[StandingsEntry]) -> None:
 
 
 def print_final_result(result) -> None:
+    """团队赛宣布获胜阵营；结束时两个阵营仍同分，只会是加赛到了上限，算平局。"""
     regular_count = sum(not log.is_playoff for log in result.match_logs)
     print(f"\n共进行 {len(result.match_logs)} 局（正赛 {regular_count} 局 + 加赛 {result.playoff_count} 局）")
+    teams = team_standings(result.final_standings)
     if result.playoff_cap_hit:
-        print("加赛已达上限，保留并列冠军。")
+        print("加赛已达上限，保留并列冠军。" if teams is None else "加赛已达上限，算平局。")
     print("\n===== 最终排名 =====")
     print(render_standings(result.final_standings))
+    if teams is not None:
+        if result.playoff_cap_hit:
+            print(f"\n平局: {'、'.join(team.team for team in teams)}各 {teams[0].total_score} 分")
+        else:
+            print(f"\n获胜阵营: {teams[0].team}（{teams[0].total_score} 比 {teams[1].total_score}）")
+        return
     champions = [e for e in result.final_standings if e.rank == 1]
     if len(champions) > 1:
         names = "、".join(e.player for e in champions)

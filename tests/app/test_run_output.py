@@ -14,8 +14,8 @@ from auction_game.game.models import MatchLog
 from auction_game.game.rules import render_rules
 from auction_game.reporting.run_output import (initialize_run, print_day_result, print_final_result, publish_match,
                                                write_readme)
-from tests.support.factories import (NAMES, TEST_GAME, bids_by_day, make_lineup, make_standings, run_one_match,
-                                     run_scenario)
+from tests.support.factories import (NAMES, TEAM_OF, TEST_GAME, bids_by_day, make_day, make_lineup, make_log,
+                                     make_standings, make_team_lineup, run_one_match, run_scenario)
 
 
 def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(capsys):
@@ -70,10 +70,38 @@ def test_final_result_counts_actual_regular_matches_and_reports_scores(capsys, t
         assert "加赛已达上限" not in output
 
 
+def test_daily_report_lists_team_totals_before_players(capsys):
+    # 甲以 5 获胜：红队 4 分，蓝队 0 分。
+    log = make_log(days=[make_day(1, [5, 4, 3, 2, 1, 0], pool=4, team_of=TEAM_OF)])
+    print_day_result(log, compute_standings(NAMES, [], log, team_of=TEAM_OF))
+    output = capsys.readouterr().out
+    assert "超级出价命中：无。\n阵营累计总分：红队 4 分、蓝队 0 分。\n| 排名 | 玩家 | 累计总分 | 金币（结算后） |" in output
+
+
+@pytest.mark.parametrize("cap_hit", [False, True])
+def test_final_result_announces_winning_team_or_draw(capsys, cap_hit):
+    # 红队甲 3、乙 1；蓝队丁 2，己 1 或 2。
+    standings = make_standings({name: [0] for name in NAMES}, team_of=TEAM_OF,
+                               scores_history=dict(zip(NAMES, [[3], [1], [0], [2], [0], [2 if cap_hit else 1]])))
+    result = SimpleNamespace(match_logs=[SimpleNamespace(is_playoff=False)], playoff_count=0,
+                             playoff_cap_hit=cap_hit, final_standings=standings)
+    print_final_result(result)
+    output = capsys.readouterr().out
+    assert tables.render_standings(standings) in output
+    assert "冠军" not in output
+    if cap_hit:
+        assert "加赛已达上限，算平局。" in output and "平局: 红队、蓝队各 4 分" in output
+    else:
+        assert "获胜阵营: 红队（4 比 3）" in output and "加赛已达上限" not in output
+
+
 @pytest.mark.parametrize("run_type,mode,expected", [
     ("offline", "test_model", "全员使用假模型，无真实调用。"),
     ("ai-test", "test_model", "全员调用测试模型，角色身份不变。"),
     ("ai", "regular", "各玩家使用配置中的模型。"),
+    ("team-offline", "test_model", "全员使用假模型，无真实调用。"),
+    ("team-test", "test_model", "全员调用测试模型，角色身份不变。"),
+    ("team", "regular", "各玩家使用配置中的模型。"),
 ])
 def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected):
     paths = initialize_run(
@@ -84,6 +112,22 @@ def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected)
         render_rules(TEST_GAME, make_lineup()),
     )
     assert expected in (paths.root / "README.md").read_text(encoding="utf-8")
+
+
+def test_team_readme_title_and_private_links_grouped_by_team(tmp_path):
+    paths = initialize_run(
+        tmp_path / "run",
+        {"run_type": "team-offline", "mode": "regular", "game": TEST_GAME.to_dict(),
+         "players": [{"name": name, "team": team} for name, team in TEAM_OF.items()]},
+        render_rules(TEST_GAME, make_team_lineup()),
+    )
+    for number in (1, 2, 4):
+        paths.player(number, readable=True).write_text("对话", encoding="utf-8")
+    write_readme(paths)
+    readme = (paths.root / "README.md").read_text(encoding="utf-8")
+    assert readme.startswith("# 拍卖团队赛\n\n运行类型：团队赛离线模拟。\n\n全员使用假模型，无真实调用。")
+    assert readme.endswith("## 私人对话（含私有策略，仅供赛后阅读）\n\n### 红队\n\n- [甲](players/001.md)\n\n"
+                           "- [乙](players/002.md)\n\n### 蓝队\n\n- [丁](players/004.md)\n")
 
 
 def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):

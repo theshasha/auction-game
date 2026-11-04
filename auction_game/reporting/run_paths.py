@@ -4,7 +4,10 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-RUN_TYPES = {"ai": "常规真实 AI", "ai-test": "测试模型真实 AI（收费）", "offline": "离线模拟"}
+RUN_TYPES = {"ai": "常规真实 AI", "ai-test": "测试模型真实 AI（收费）", "offline": "离线模拟",
+             "team": "团队赛常规真实 AI", "team-test": "团队赛测试模型真实 AI（收费）", "team-offline": "团队赛离线模拟"}
+# 全员用假模型、没有真实调用的场次类型。
+OFFLINE_RUN_TYPES = ("offline", "team-offline")
 
 
 @dataclass(frozen=True)
