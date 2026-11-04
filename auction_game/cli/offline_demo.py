@@ -56,6 +56,41 @@ def demo_submission(game, index, player_count, match_index, day, coins):
         if day == 2:
             bid = 2 if index == player_count - 1 else bid
             super_bid = 2 if index in (0, 1) else None
+    return _within_rules(game, bid, super_bid, coins)
+
+
+def demo_team_submission(game, index, match_index, day, coins):
+    """团队赛的离线出价脚本，前 3 个座位是一队，按局和天给出确定的出价。
+
+    每局首日全员出 0 流局，首位玩家的超级出价落空。次日每队第 1 人独占一个价（前一队 2、后一队 3），
+    第 2 人狙这个价，只有队友出了，落空；第 3 人狙对方第 1 人的价，命中，两队的命中分相同。
+    本局赢的一队由第 2 人从次日起每天以 1 独得。正赛两队轮流赢，局数为奇数时最后一局谁都不赢，
+    所以正赛打完两队同分、进入加赛，加赛由前一队赢。金币够用时这些阶段都会出现；
+    否则出价截断到规则允许的范围，只保证合法。
+    """
+    team, seat = divmod(index, 3)
+    super_bid = None
+    if day == 1:
+        bid, super_bid = 0, 1 if index == 0 else None
+    else:
+        if match_index > game.regular_matches:
+            winner = 0
+        elif game.regular_matches % 2 and match_index == game.regular_matches:
+            winner = None
+        else:
+            winner = (match_index - 1) % 2
+        bid = int(team == winner and seat == 1)
+        if day == 2:
+            own, other = (2, 3) if team == 0 else (3, 2)
+            if seat == 0:
+                bid = own
+            else:
+                super_bid = own if seat == 1 else other
+    return _within_rules(game, bid, super_bid, coins)
+
+
+def _within_rules(game, bid, super_bid, coins):
+    """把脚本的出价截断到规则允许的范围；超级出价不合法时不出。"""
     bid = min(bid, game.max_bid, coins)
     if super_bid is not None and (super_bid > game.max_bid or super_bid == bid
                                   or bid + game.super_cost > coins):
@@ -101,6 +136,7 @@ class DemoFactory:
     index: int
     settings: dict
     player_count: int = 2
+    team: bool = False  # 团队赛用 demo_team_submission 出价
     opened: int = 0
     closed: int = 0
     calls: int = 0
@@ -121,8 +157,12 @@ class DemoFactory:
         current = self.current
         task = current.task
         if task in ("bid", "plan"):
-            bid, super_bid = demo_submission(current.game, self.index, self.player_count,
-                                            current.match_index, current.day, current.coins)
+            if self.team:
+                bid, super_bid = demo_team_submission(current.game, self.index, current.match_index, current.day,
+                                                      current.coins)
+            else:
+                bid, super_bid = demo_submission(current.game, self.index, self.player_count,
+                                                current.match_index, current.day, current.coins)
             strategy = f"模拟策略：当前可用 {current.coins} 金币，本次正常出价 {bid}。"
             if super_bid is not None:
                 strategy += f"提交超级出价 {super_bid}，固定成本 {current.game.super_cost}；命中以实际结算为准。"
@@ -154,11 +194,11 @@ class DemoFactory:
             self.closed += 1
 
 
-def generate_demo(output: Path | None = None, *, test_model=False):
-    """返回场次目录和各玩家的假模型工厂。"""
-    config, configs = load_configuration(test_model=test_model)
+def generate_demo(output: Path | None = None, *, test_model=False, team=False):
+    """返回场次目录和各玩家的假模型工厂；team 时跑团队赛。"""
+    config, configs = load_configuration(test_model=test_model, team=team)
     game = load_game_settings(test_model=test_model)
-    sync_root_rules(load_game_settings())
+    sync_root_rules(load_game_settings(), team=team)
     names = [pc.profile.name for pc in configs]
     rules = render_rules(game, Lineup(tuple(pc.profile for pc in configs)))
     factories = []
@@ -168,29 +208,31 @@ def generate_demo(output: Path | None = None, *, test_model=False):
         item = DemoFactory(names[index], index,
                            {**kwargs["model_settings"], "timeout": kwargs["timeout"],
                             "max_tokens": kwargs["max_tokens"]},
-                           player_count=len(names))
+                           player_count=len(names), team=team)
         factories.append(item)
         return item
 
     task_runners = make_task_runners(config, configs, factory, runner=OfflineTaskRunner)
+    run_type = "team-offline" if team else "offline"
     if output is None:
-        output = make_run_dir("offline")
+        output = make_run_dir(run_type)
     else:
         print(f"本场日志目录：{output}")
     print("离线演示：全员使用假模型，不调用真实服务，不收费。")
     controller = OfflineController(mode="continuous", max_concurrency=config["llm"]["max_concurrency"])
     with override_allow_model_requests(False):
         play_ai(config, configs, game, task_runners, controller,
-                run_dir=output, run_type="offline", test_model=test_model, rules=rules)
+                run_dir=output, run_type=run_type, test_model=test_model, rules=rules)
     return output, factories
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--team", action="store_true", help="团队赛，阵容读 configs/teams.yaml")
     parser.add_argument("--test-model", action="store_true", help="用假模型验证测试配置，不调用真实服务，不收费")
-    parser.add_argument("--output", type=Path, help="全新输出目录，默认 logs/<时间戳>_offline")
+    parser.add_argument("--output", type=Path, help="全新输出目录，默认 logs/<时间戳>_offline 或 _team-offline")
     args = parser.parse_args()
-    generate_demo(args.output, test_model=args.test_model)
+    generate_demo(args.output, test_model=args.test_model, team=args.team)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ from auction_game.agent import prompts
 from auction_game.game.lineup import Lineup
 from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.factories import task_entries, text_reply
+from tests.support.factories import TEAM_OF, task_entries, text_reply
 
 
 def super_uses(day):
@@ -202,6 +202,74 @@ def test_current_game_configuration_smoke(tmp_path, demo_configuration):
     assert game.regular_matches <= len(matches) <= game.regular_matches + game.max_playoffs
     assert all(payload["match"]["game"] == game.to_dict() for payload in matches)
     assert all(factory.opened == factory.closed for factory in factories)
+
+
+@pytest.fixture
+def team_demo_configuration(monkeypatch, config_files, teams_file):
+    """团队假模型赛读合成的 teams.yaml，阵营和 TEAM_OF 相同：红队甲乙丙，蓝队丁戊己。"""
+    monkeypatch.setattr(offline_demo, "load_configuration",
+                        lambda **kwargs: load_configuration(*config_files, teams_path=teams_file, **kwargs))
+
+
+def assert_team_phases(matches, regular_matches):
+    """每局第 2 天都有只狙到队友价位的落空和跨阵营命中；正赛打完两队同分，加赛分出胜负。"""
+    totals = dict.fromkeys(TEAM_OF.values(), 0)
+    for number, payload in enumerate(matches, 1):
+        match = payload["match"]
+        bidders = {}
+        for result in match["days"][1]["players"]:
+            bidders.setdefault(result["bid"], set()).add(TEAM_OF[result["player"]])
+        supers = [(TEAM_OF[player], bidders.get(value, set()), hit) for player, value, hit in super_uses(match["days"][1])]
+        assert any(not hit and teams == {team} for team, teams, hit in supers)
+        assert any(hit and teams - {team} for team, teams, hit in supers)
+        for name, score in match["scores"].items():
+            totals[TEAM_OF[name]] += score
+        if number == regular_matches:
+            assert len(set(totals.values())) == 1
+    assert matches[-1]["match"]["is_playoff"] and len(set(totals.values())) == 2
+
+
+def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_configuration):
+    game = GameSettings(
+        initial_coins=12, daily_salary=6, daily_pool=(3, 3, 3), max_bid=10,
+        super_cost=3, super_bounty=5, super_hit_score=1,
+        regular_matches=3, max_playoffs=5,
+    )
+    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
+    run_dir = tmp_path / "20261016_120000_team-offline"
+    _, factories = generate_demo(run_dir, test_model=True, team=True)
+    matches = analyze.load_match_logs(run_dir)
+    assert [payload["match"]["is_playoff"] for payload in matches] == [False] * game.regular_matches + [True]
+    assert_team_phases(matches, game.regular_matches)
+    # 第 2 天起由本局赢的一队第 2 人独得：正赛红队乙、蓝队戊轮流，第 3 局是奇数局数的最后一局正赛，谁都不赢。
+    assert [[day["winner"] for day in payload["match"]["days"]] for payload in matches] == [
+        [None, "乙", "乙"], [None, "戊", "戊"], [None, None, None], [None, "乙", "乙"]]
+    expected_calls = 2 + len(matches) * (game.max_days - 1) + 3 * (len(matches) - 1) + 2
+    assert all(f.opened == f.closed == f.calls == expected_calls for f in factories)
+
+    paths = RunPaths(run_dir)
+    snapshot = paths.read_config()
+    assert snapshot["run_type"] == "team-offline"
+    assert {pc["name"]: pc["team"] for pc in snapshot["players"]} == TEAM_OF
+    assert "红队有 甲、乙、丙，蓝队有 丁、戊、己" in (run_dir / "RULES.md").read_text(encoding="utf-8")
+    readme = (run_dir / "README.md").read_text(encoding="utf-8")
+    assert readme.startswith("# 拍卖团队赛") and "### 红队" in readme and "### 蓝队" in readme
+    assert all((run_dir / link).exists() for link in re.findall(r"\]\(([^)]+)\)", readme))
+    analyze.analyze(run_dir)
+    output = capsys.readouterr().out
+    assert "获胜阵营: 红队" in output
+    assert "运行类型：团队赛离线模拟" in output and "离线假模型结果：实际执行为假模型，无真实模型调用" in output
+
+
+@pytest.mark.parametrize("test_model", [False, True], ids=["production", "test-model-overrides"])
+def test_current_game_configuration_shows_team_phases(tmp_path, team_demo_configuration, test_model):
+    """当前 game.yaml 的生产参数和测试覆盖参数下，团队假模型赛都出现脚本设计的各个阶段。"""
+    game = load_game_settings(test_model=test_model)
+    run_dir = tmp_path / "current"
+    generate_demo(run_dir, test_model=test_model, team=True)
+    matches = analyze.load_match_logs(run_dir)
+    assert all(payload["match"]["game"] == game.to_dict() for payload in matches)
+    assert_team_phases(matches, game.regular_matches)
 
 
 def test_offline_refuses_non_empty_output(tmp_path, demo_configuration):

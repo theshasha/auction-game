@@ -16,7 +16,7 @@ from pathlib import Path
 from auction_game.game.engine import resolve_bids
 from auction_game.game.settings import GameSettings
 from auction_game.paths import LOG_DIR
-from auction_game.reporting.run_paths import RunPaths, RUN_TYPES
+from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TYPES
 
 RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_ai(?:-test)?(_\d+)?$")  # 时间戳场次目录，排除 archive 等归档目录
 TASK_LABELS = {"speech": "发言", "plan": "规划", "bid": "出价", "memory": "记忆", "summary": "观众总结"}
@@ -238,12 +238,13 @@ def analyze(run_dir: Path) -> None:
     print("比赛概况")
     print(f"场次目录：{run_dir.name}")
     print(f"运行类型：{RUN_TYPES[snapshot['run_type']]}")
-    if snapshot["run_type"] == "offline":
+    offline = snapshot["run_type"] in OFFLINE_RUN_TYPES
+    if offline:
         print("离线假模型结果：实际执行为假模型，无真实模型调用")
     else:
         print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
     for pc in snapshot["players"]:
-        execution_label = "配置模型" if snapshot["run_type"] == "offline" else "实际"
+        execution_label = "配置模型" if offline else "实际"
         print(f"  {pc['name']}：身份 {pc['identity_model']['model']} → {execution_label} "
               f"{pc['execution_model']['protocol']} / {pc['execution_model']['model']}")
 
