@@ -122,3 +122,20 @@ class TestRenderStandings:
         standings = make_standings({"甲": [], "乙": []})
         text = tables.render_standings(standings)
         assert text.splitlines()[0] == "| 排名 | 玩家 | 总分 | 拍卖分 | 命中分 |"
+
+    def test_team_standings_list_teams_first_and_add_team_column(self):
+        standings = make_standings({"甲": [2], "乙": [0], "丁": [1], "戊": [0]},
+                                   scores_history={"甲": [3], "乙": [1], "丁": [4], "戊": [2]},
+                                   team_of={"甲": "红队", "乙": "红队", "丁": "蓝队", "戊": "蓝队"})
+        assert tables.render_standings(standings) == (
+            "| 排名 | 阵营 | 总分 | 第1局 | 拍卖分 | 命中分 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| 1 | 蓝队 | 6 | 6 | 1 | 5 |\n"
+            "| 2 | 红队 | 4 | 4 | 2 | 2 |\n\n"
+            "| 排名 | 玩家 | 阵营 | 总分 | 第1局 | 拍卖分 | 命中分 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| 1 | 丁 | 蓝队 | 4 | 4 | 1 | 3 |\n"
+            "| 2 | 甲 | 红队 | 3 | 3 | 2 | 1 |\n"
+            "| 3 | 戊 | 蓝队 | 2 | 2 | 0 | 2 |\n"
+            "| 4 | 乙 | 红队 | 1 | 1 | 0 | 1 |"
+        )

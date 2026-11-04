@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 
+from auction_game.game.engine import team_standings
 from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
@@ -30,17 +31,19 @@ def build_system_prompt(
     """保留规则与身份，按独立开关加入人设和全员公开的赛前预测，写作要求放在最后。
 
     人设只影响发言和私信的口吻；分析出价和规划策略时仍需认真思考。
-    赛前预测按座位列出阵容里每人的 predicted_win_rate。
+    赛前预测按座位列出阵容里每人的 predicted_win_rate；团队赛没有预测，不看 enable_predictions。
     """
-    names = lineup.names
-    others = "、".join(lineup.others(profile.name))
-    text = (
-        f"{render_rules(game, lineup, include_note=False)}\n"
-        f"【你的身份】\n你叫 {profile.name}，其他 {len(names) - 1} 位玩家是：{others}。\n"
-    )
+    teams = lineup.teams
+    if teams:
+        teammates = "、".join(name for name in teams[profile.team] if name != profile.name)
+        opponent, opponents = next((team, members) for team, members in teams.items() if team != profile.team)
+        identity = f"你叫 {profile.name}，属于{profile.team}，队友是{teammates}；对方是{opponent}：{'、'.join(opponents)}。"
+    else:
+        identity = f"你叫 {profile.name}，其他 {len(lineup.names) - 1} 位玩家是：{'、'.join(lineup.others(profile.name))}。"
+    text = f"{render_rules(game, lineup, include_note=False)}\n【你的身份】\n{identity}\n"
     if enable_personas:
         text += f"【你的人设】\n{profile.persona_title}：{profile.persona_text}\n"
-    if enable_predictions:
+    if enable_predictions and not teams:
         prediction_text = "、".join(f"{player.name} {player.predicted_win_rate}%" for player in lineup.profiles)
         text += f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
     if enable_personas:
@@ -81,9 +84,16 @@ def _remaining_scores_info(game: GameSettings, match_index: int, day: int, today
 
 
 def _total_scores_line(standings: list[StandingsEntry]) -> str:
-    """使用每日结算后的累计分数。"""
-    return "全员累计总分：" + "、".join(
-        f"{entry.player} {entry.total_score} 分" for entry in standings
+    """使用每日结算后的累计分数；团队赛按阵营排名分组，每个阵营后面括号里是队员，按个人排名。"""
+    teams = team_standings(standings)
+    if teams is None:
+        return "全员累计总分：" + "、".join(
+            f"{entry.player} {entry.total_score} 分" for entry in standings
+        ) + "。"
+    return "累计总分：" + "，".join(
+        f"{team.team} {team.total_score} 分（"
+        + "、".join(f"{entry.player} {entry.total_score} 分" for entry in standings if entry.team == team.team) + "）"
+        for team in teams
     ) + "。"
 
 
@@ -129,19 +139,25 @@ def _my_last_day_line(obs: Observation) -> str:
         segments.append("正常出价没有撞车，但也没有获胜，金币全额退还")
 
     if mine.super_bid is not None:
-        segments.append(f"超级出价花费 {obs.game.super_cost} 金币")
+        segment = f"超级出价花费 {obs.game.super_cost} 金币"
+        # 落空而价位上有正常出价，只会是团队赛里这个价只有队友出了；照规则例子的说法写明原因。
+        teammates = [result.player for result in yesterday.players if result.bid == mine.super_bid]
+        if not mine.super_hit and teammates:
+            segment += f"。{mine.super_bid} 上只有你的队友{'、'.join(teammates)}，所以落空"
+        segments.append(segment)
         if mine.super_hit:
             segments.append(f"获得 {obs.game.super_bounty} 金币悬赏")
     return "昨日你的金币结算：\n\n" + "\n".join(f"- {segment}。" for segment in segments)
 
 
 def _yesterday_bids_table(obs: Observation) -> str:
-    """昨日出价与当前余额按玩家对齐；正常出价结果与局末出价日志的写法一致。"""
-    headers = ["玩家", "正常出价", "正常出价结果", "超级出价", "命中情况", "当前金币"]
+    """昨日出价与当前余额按玩家对齐；正常出价结果与局末出价日志的写法一致。团队赛在玩家后加一列阵营。"""
+    team_of = {entry.player: entry.team for entry in obs.standings if entry.team is not None}
+    headers = ["玩家", *(["阵营"] if team_of else []), "正常出价", "正常出价结果", "超级出价", "命中情况", "当前金币"]
     lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
     for result in obs.today_history[-1].players:
-        cells = [result.player, str(result.bid), OUTCOME_TEXT[result.outcome], *super_cells(result),
-                 str(obs.all_coins[result.player])]
+        cells = [result.player, *([team_of[result.player]] if team_of else []), str(result.bid),
+                 OUTCOME_TEXT[result.outcome], *super_cells(result), str(obs.all_coins[result.player])]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -191,9 +207,10 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], *,
         f"本局完整出价日志：\n\n{render_match_log(log)}",
         f"截至当前的累计排名与分数明细：\n\n{render_standings(standings)}",
     ]
-    # 正赛打完后还有下一局，说明第一名并列，进入加赛。
+    # 正赛打完后还有下一局，说明第一名并列，进入加赛；团队赛的第一名并列就是两个阵营同分。
     if log.match_index >= log.game.regular_matches:
-        lines.append("第一名总分并列，全员进入加赛。")
+        lines.append("第一名总分并列，全员进入加赛。" if team_standings(standings) is None
+                     else "两个阵营总分相同，全员进入加赛。")
     lines.extend(_received_letters(received, LAST_DAY_LETTERS))
     lines.append("请向全体玩家发表你的局末发言（不超过 300 字）。")
     return "\n\n".join(lines)
@@ -224,15 +241,19 @@ def memory_request(others_speeches: dict[str, str], match_index: int, *,
 def next_match_plan_request(past_logs: list[MatchLog], standings: list[StandingsEntry], game: GameSettings) -> str:
     """past_logs 是已结束的全部局。整理记忆清空了旧对话，这里补回各局出价日志，留在新一局的对话里。
 
-    加赛局写明并列第一的玩家：进入加赛的消息只在局末发言请求里，整理记忆后就看不到了。
+    加赛局写明并列第一的玩家，团队赛写两个阵营同分：进入加赛的消息只在局末发言请求里，整理记忆后就看不到了。
     """
     match_index = len(past_logs) + 1
     logs_text = "\n\n".join(f"{match_title(log)}：\n\n{render_match_log(log)}" for log in past_logs)
     playoff_note = ""
     if match_index > game.regular_matches:
-        leaders = [entry for entry in standings if entry.rank == 1]
-        playoff_note = (f"第 {match_index} 局是加赛局。目前第一名总分并列："
-                        f"{'、'.join(entry.player for entry in leaders)}各 {leaders[0].total_score} 分。\n\n")
+        teams = team_standings(standings)
+        if teams is None:
+            leaders = [entry for entry in standings if entry.rank == 1]
+            playoff_note = (f"第 {match_index} 局是加赛局。目前第一名总分并列："
+                            f"{'、'.join(entry.player for entry in leaders)}各 {leaders[0].total_score} 分。\n\n")
+        else:
+            playoff_note = f"第 {match_index} 局是加赛局。目前两个阵营总分相同，各 {teams[0].total_score} 分。\n\n"
     return (
         playoff_note
         + f"之前各局的完整出价日志：\n\n{logs_text}\n\n"

@@ -8,8 +8,9 @@ import pytest
 
 from auction_game.agent import prompts
 from auction_game.game import tables
-from tests.support.factories import (NAMES, TEST_GAME, make_day, make_lineup, make_log, make_logs, make_obs,
-                                     make_standings)
+from auction_game.game.rules import render_rules
+from tests.support.factories import (NAMES, TEAM_OF, TEST_GAME, make_day, make_lineup, make_log, make_logs, make_obs,
+                                     make_standings, make_team_lineup)
 
 
 class TestSystemPrompt:
@@ -35,8 +36,6 @@ class TestSystemPrompt:
     @pytest.mark.parametrize("enable_predictions", [False, True])
     @pytest.mark.parametrize("enable_personas", [False, True])
     def test_independent_switches_remove_entire_sections(self, enable_predictions, enable_personas):
-        from auction_game.game.rules import render_rules
-
         lineup = make_lineup(rates=[10, 73, 10, 10, 10, 10], persona=("独特人设标题", "独特人设正文"))
         text = prompts.build_system_prompt(
             lineup.profiles[0], lineup, TEST_GAME,
@@ -61,6 +60,17 @@ class TestSystemPrompt:
             assert "【写作要求】" not in text
         else:
             assert text.endswith("\n" + writing_style)
+
+    @pytest.mark.parametrize("enable_personas", [False, True])
+    def test_team_identity_names_teammates_and_opponents_without_predictions(self, enable_personas):
+        lineup = make_team_lineup(persona=("独特人设标题", "独特人设正文"))
+        for seat, identity in [(1, "你叫 乙，属于红队，队友是甲、丙；对方是蓝队：丁、戊、己。"),
+                               (3, "你叫 丁，属于蓝队，队友是戊、己；对方是红队：甲、乙、丙。")]:
+            text = prompts.build_system_prompt(lineup.profiles[seat], lineup, TEST_GAME,
+                                               enable_predictions=True, enable_personas=enable_personas)
+            assert text.startswith(render_rules(TEST_GAME, lineup, include_note=False) + f"\n【你的身份】\n{identity}\n")
+            assert "【赛前预测】" not in text
+            assert ("独特人设正文" in text) is enable_personas
 
 
 class TestSpeechFields:
@@ -169,6 +179,17 @@ class TestPlayoffNotice:
         text = prompts.next_match_plan_request(make_logs(match_index - 1, game), standings, game)
         notice = f"第 {match_index} 局是加赛局。目前第一名总分并列：乙、甲各 9 分。\n\n之前各局的完整出价日志"
         assert text.startswith(notice) is (match_index > game.regular_matches)
+
+    def test_team_playoff_notices_say_teams_tied(self):
+        # 红队甲 2、丙 1，蓝队丁 3：两个阵营各 3 分。
+        game = replace(TEST_GAME, regular_matches=1)
+        standings = make_standings({name: [0] for name in NAMES},
+                                   scores_history=dict(zip(NAMES, [[2], [0], [1], [3], [0], [0]])), team_of=TEAM_OF)
+        speech = prompts.match_end_speech_request(make_log(game=game), standings)
+        assert "两个阵营总分相同，全员进入加赛。" in speech and "第一名总分并列" not in speech
+        plan = prompts.next_match_plan_request(make_logs(1, game), standings, game)
+        assert plan.startswith("第 2 局是加赛局。目前两个阵营总分相同，各 3 分。\n\n之前各局的完整出价日志")
+        assert "| 排名 | 阵营 | 总分 |" in speech and "| 排名 | 阵营 | 总分 |" in plan
 
 
 class TestPlanBidMerge:

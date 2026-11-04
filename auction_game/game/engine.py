@@ -112,7 +112,7 @@ def compute_standings(names: list[str], logs: list[MatchLog], current: MatchLog 
 
 def team_standings(standings: list[StandingsEntry]) -> list[TeamStandingsEntry] | None:
     """把个人排名按阵营汇总成阵营排名，同分并列、按阵营名排；个人赛的排名没有阵营，返回 None。"""
-    if standings[0].team is None:
+    if not standings or standings[0].team is None:
         return None
     teams: dict[str, TeamStandingsEntry] = {}
     for entry in standings:

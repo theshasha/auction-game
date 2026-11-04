@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from auction_game.game.models import MatchLog, PlayerDayResult, StandingsEntry
+from auction_game.game.engine import team_standings
+from auction_game.game.models import MatchLog, PlayerDayResult, StandingsEntry, TeamStandingsEntry
 
 # 正常出价结果在出价表里的写法；被狙也写作撞车。
 OUTCOME_TEXT = {"won": "获胜", "collided": "撞车", "refunded": "退款"}
@@ -53,25 +54,31 @@ def render_match_log(log: MatchLog) -> str:
 def render_standings(standings: list[StandingsEntry]) -> str:
     """按总分展示累计排名及已结束局分数，拍卖分和命中分作为辅助信息。
 
-    总分只由拍卖分和命中分组成，命中分用两者之差得出。
+    总分只由拍卖分和命中分组成，命中分用两者之差得出。团队赛先列阵营排名，玩家表多一列阵营。
     """
     match_count = max((len(entry.scores_per_match) for entry in standings), default=0)
-    match_headers = [f"第{i + 1}局" for i in range(match_count)]
-    header = "| 排名 | 玩家 | 总分 |"
-    if match_headers:
-        header += " " + " | ".join(match_headers) + " |"
-    header += " 拍卖分 | 命中分 |"
-    separator = "|" + " --- |" * (5 + match_count)
-    rows = []
-    for entry in standings:
-        row = f"| {entry.rank} | {entry.player} | {entry.total_score} |"
-        if match_count:
-            cells = [str(score) for score in entry.scores_per_match]
-            cells += [""] * (match_count - len(cells))
-            row += " " + " | ".join(cells) + " |"
-        row += f" {entry.total_auction_score} | {entry.total_score - entry.total_auction_score} |"
-        rows.append(row)
-    return "\n".join([header, separator, *rows])
+    score_headers = ["总分", *(f"第{i + 1}局" for i in range(match_count)), "拍卖分", "命中分"]
+
+    def score_cells(entry: StandingsEntry | TeamStandingsEntry) -> list[str]:
+        cells = [str(score) for score in entry.scores_per_match]
+        cells += [""] * (match_count - len(cells))
+        return [str(entry.total_score), *cells, str(entry.total_auction_score),
+                str(entry.total_score - entry.total_auction_score)]
+
+    teams = team_standings(standings)
+    if teams is None:
+        return _table(["排名", "玩家", *score_headers],
+                      [[str(entry.rank), entry.player, *score_cells(entry)] for entry in standings])
+    team_table = _table(["排名", "阵营", *score_headers],
+                        [[str(team.rank), team.team, *score_cells(team)] for team in teams])
+    player_table = _table(["排名", "玩家", "阵营", *score_headers],
+                          [[str(entry.rank), entry.player, entry.team, *score_cells(entry)] for entry in standings])
+    return f"{team_table}\n\n{player_table}"
+
+
+def _table(headers: list[str], rows: list[list[str]]) -> str:
+    lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
+    return "\n".join([*lines, *("| " + " | ".join(row) + " |" for row in rows)])
 
 
 def match_title(log: MatchLog) -> str:

@@ -6,7 +6,7 @@ import pytest
 
 from auction_game.agent import prompts
 from tests.support.factories import (
-    NAMES, TEST_GAME, make_day, make_logs, make_obs, make_standings, run_scenario, super_by_day,
+    NAMES, TEAM_OF, TEST_GAME, make_day, make_logs, make_obs, make_standings, run_scenario, super_by_day,
 )
 
 BIDS = [4, 5, 3, 2, 1, 0]  # 乙以唯一最高的 5 获胜，其余退款
@@ -199,6 +199,37 @@ class TestMyLastDayLine:
     def test_earlier_day_has_no_final_day_reminder(self):
         text = prompts.bid_request(make_prompt_obs(day=2, today_history=[make_day(1, BIDS)]))
         assert "结束后金币清零" not in text
+
+
+def team_obs(bids, super_bids=None):
+    """甲视角的团队赛出价请求依据：昨天按 TEAM_OF 结算，累计蓝队 6 分、红队 4 分。"""
+    obs = make_prompt_obs(day=2, today_history=[make_day(1, bids, super_bids=super_bids, team_of=TEAM_OF)])
+    obs.standings = make_standings({name: [0] for name in NAMES},
+                                   scores_history=dict(zip(NAMES, [[3], [1], [0], [4], [2], [0]])), team_of=TEAM_OF)
+    return obs
+
+
+class TestTeamBidRequest:
+    """团队赛：累计总分按阵营分组，昨日明细多一列阵营，只狙到队友价位的落空写明原因。TEAM_OF 里甲乙丙是红队。"""
+
+    def test_totals_grouped_by_team_and_table_has_team_column(self):
+        text = prompts.bid_request(team_obs(BIDS))
+        assert "\n\n累计总分：蓝队 6 分（丁 4 分、戊 2 分、己 0 分），红队 4 分（甲 3 分、乙 1 分、丙 0 分）。" in text
+        assert "全员累计总分" not in text
+        lines = text.splitlines()
+        assert "| 玩家 | 阵营 | 正常出价 | 正常出价结果 | 超级出价 | 命中情况 | 当前金币 |" in lines
+        assert "| 甲 | 红队 | 4 | 退款 | — | — | 7 |" in lines
+        assert "| 丁 | 蓝队 | 2 | 退款 | — | — | 7 |" in lines
+
+    @pytest.mark.parametrize("bids, super_bid, expected", [
+        ([0, 5, 1, 2, 3, 4], 5, "- 超级出价花费 2 金币。5 上只有你的队友乙，所以落空。"),
+        ([0, 5, 5, 2, 3, 4], 5, "- 超级出价花费 2 金币。5 上只有你的队友乙、丙，所以落空。"),
+        ([0, 5, 1, 2, 3, 4], 6, "- 超级出价花费 2 金币。"),
+        ([0, 5, 1, 2, 3, 4], 2, "- 超级出价花费 2 金币。\n- 获得 3 金币悬赏。"),
+    ], ids=["one-teammate", "two-teammates", "nobody-there", "hit-opponent"])
+    def test_miss_on_teammates_only_value_names_them(self, bids, super_bid, expected):
+        text = prompts.bid_request(team_obs(bids, {"甲": super_bid}))
+        assert f"\n{expected}\n\n今日状态：" in text
 
 
 class TestEngineScorePrompts:

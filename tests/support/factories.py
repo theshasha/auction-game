@@ -77,8 +77,9 @@ def scored_log(match_index, auction_scores, scores=None, game=TEST_GAME, *, is_p
     return MatchLog(match_index=match_index, is_playoff=is_playoff, game=game, days=days)
 
 
-def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None):
-    """通过生产路径排名；每名玩家的历史一样长，第 i 项是第 i 局。不给 scores_history 时总分只含拍卖分。"""
+def make_standings(auction_scores_history: dict[str, list[int]], *, scores_history=None, team_of=None):
+    """通过生产路径排名；每名玩家的历史一样长，第 i 项是第 i 局。不给 scores_history 时总分只含拍卖分。
+    team_of 是玩家到阵营，给了就是团队赛的排名。"""
     if scores_history is None:
         scores_history = auction_scores_history
     names = list(auction_scores_history)
@@ -86,7 +87,7 @@ def make_standings(auction_scores_history: dict[str, list[int]], *, scores_histo
     logs = [scored_log(index + 1, {name: auction_scores_history[name][index] for name in names},
                        {name: scores_history[name][index] for name in names})
             for index in range(match_count)]
-    return compute_standings(names, logs)
+    return compute_standings(names, logs, team_of=team_of)
 
 
 def make_obs(my_name="甲", day=1, today_history=None, total_auction_score=0, pool=1, coins=7,
