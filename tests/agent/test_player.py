@@ -146,8 +146,8 @@ def test_plan_has_full_format_and_bids_get_one_line(tmp_path):
     player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     assert request_text(runner, 0) == "请规划\n\n" + output_requirement(DECISION, LETTERS)
     assert request_text(runner, 1).endswith("\n\n" + BRIEF_BID_FORMAT)
-    # 只附一句时也写明送达时机。
-    assert "收件人下一次行动时才收到" in request_text(runner, 1)
+    # 送达时机写在任务提示后面，只附一句格式时也有。
+    assert "现在写的私信，收件人明天出价时才收到" in request_text(runner, 1)
 
 
 def test_format_error_after_one_line_prompt_gets_full_format(tmp_path):

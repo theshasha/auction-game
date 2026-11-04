@@ -141,6 +141,42 @@ def test_received_letters_sit_between_facts_and_task(kind):
     assert "写给你的私信" not in build(None)
 
 
+NEXT_DAY = "现在写的私信，收件人明天出价时才收到，影响不了对方今天的出价。"
+LAST_DAY = "现在写的私信，收件人在局末发言时才收到，本局不再出价。"
+LAST_DAY_MAY_END = "现在写的私信，收件人在局末发言时才收到，本局不再出价；比赛就此结束时，在最终感言时收到。"
+
+
+@pytest.mark.parametrize("kind, match_index, day, days, expected", [
+    ("plan", 1, 1, 4, NEXT_DAY),
+    ("bid", 2, 3, 4, NEXT_DAY),
+    ("bid", 2, 4, 4, LAST_DAY),
+    ("bid", 3, 4, 4, LAST_DAY_MAY_END),  # 最后一局正赛
+    ("bid", 4, 4, 4, LAST_DAY_MAY_END),  # 加赛
+    ("plan", 2, 1, 1, LAST_DAY),  # 一天一局
+    ("plan", 3, 1, 1, LAST_DAY_MAY_END),
+], ids=["plan", "bid", "bid-last-day", "bid-last-regular", "bid-playoff", "plan-single-day",
+        "plan-single-day-last-regular"])
+def test_planning_and_bidding_say_when_letters_arrive(kind, match_index, day, days, expected):
+    """规划和出价在任务提示后写明这次的信什么时候送到；正赛 3 局，每局 days 天。"""
+    game = replace(TEST_GAME, regular_matches=3, daily_pool=(1,) * days)
+    if kind == "bid":
+        obs = make_obs(day=day, match_index=match_index, game=game,
+                       today_history=[make_day(number, [0, 1], game=game) for number in range(1, day)])
+        text = prompts.bid_request(obs)
+        assert text.endswith(f"{prompts.BID_HINT}\n\n{expected}")
+    elif match_index == 1:
+        assert prompts.opening_plan_request({}, game).endswith(f"\n\n{expected}")
+    else:
+        assert prompts.next_match_plan_request(make_logs(match_index - 1, game), [], game).endswith(f"\n\n{expected}")
+
+
+def test_speeches_say_when_letters_arrive():
+    """开局发言的信在第 1 天出价时送到，局末发言的信在整理记忆时送到；最终感言不能写信。"""
+    assert prompts.opening_speech_request().endswith("\n\n现在写的私信，收件人在第 1 天出价时收到。")
+    match_end = prompts.match_end_speech_request(make_log(), make_standings({"甲": [1], "乙": [0]}))
+    assert match_end.endswith("局末发言（不超过 300 字）。\n\n现在写的私信，收件人整理记忆时收到，信的原文不会带到下一局。")
+
+
 class TestPlayoffNotice:
     """局末发言只在还有下一局时发出；正赛打完后还有下一局就预告加赛，加赛局的规划请求写明并列第一的玩家。"""
 

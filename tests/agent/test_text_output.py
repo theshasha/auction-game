@@ -142,7 +142,7 @@ def test_without_letter_names_name_tags_are_plain_text():
 @pytest.mark.parametrize("second", [DECISION, SPEECH])
 def test_letter_format_lists_recipients_and_ends_with_letter_block(second):
     text = output_requirement(second, LETTERS)
-    assert ("私信块可以不写，最多 2 块。标签是收件人的名字，可以写给乙、丙、丁，每人最多 1 封，每封 200 字左右。"
-            "收件人下一次行动时才收到，影响不了对方这一次的出价或发言。") in text
+    assert ("私信块可以不写，最多 2 块。标签是收件人的名字，可以写给乙、丙、丁，每人最多 1 封，每封 200 字左右。\n"
+            in text)
     assert text.endswith("\n<收件人名字>\n只有收件人能看到的私信。\n</收件人名字>")
     assert "收件人" not in output_requirement(second)

@@ -19,6 +19,9 @@ from auction_game.game.tables import OUTCOME_TEXT, match_title, render_match_log
 BID_HINT = "请分析局势并提交今日出价。"
 # 局末发言和最终感言收到的信写于本局最后一天出价时；一天一局时就是规划，规划请求同时交了这一天的出价。
 LAST_DAY_LETTERS = "在本局最后一天出价时"
+# 可以写信的请求在任务提示后写明这次的信什么时候送到，原因见 docs/letters.md 的"写信时的提醒"。
+OPENING_LETTER_DELIVERY = "现在写的私信，收件人在第 1 天出价时收到。"
+MATCH_END_LETTER_DELIVERY = "现在写的私信，收件人整理记忆时收到，信的原文不会带到下一局。"
 
 
 def build_system_prompt(
@@ -54,7 +57,18 @@ def build_system_prompt(
 
 
 def opening_speech_request() -> str:
-    return "比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。"
+    return f"比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。\n\n{OPENING_LETTER_DELIVERY}"
+
+
+def _letter_delivery(game: GameSettings, match_index: int, day: int) -> str:
+    """规划或出价时写的信什么时候送到；day 是这次交的是第几天的出价，规划交的是第 1 天。"""
+    if day < game.max_days:
+        return "现在写的私信，收件人明天出价时才收到，影响不了对方今天的出价。"
+    text = "现在写的私信，收件人在局末发言时才收到，本局不再出价"
+    # 最后一局正赛和加赛打完，比赛可能就此结束，这时没有局末发言。
+    if match_index >= game.regular_matches:
+        text += "；比赛就此结束时，在最终感言时收到"
+    return text + "。"
 
 
 def _quoted(title: str, texts: dict[str, str]) -> str:
@@ -115,6 +129,7 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
         "请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
         + _day1_constant_info(game)
         + "\n\n全员累计总分：全员 0 分。",
+        _letter_delivery(game, 1, 1),
     ])
 
 
@@ -176,7 +191,8 @@ def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> 
     status_line += "\n\n" + _total_scores_line(obs.standings)
     status_line += _remaining_scores_info(obs.game, obs.match_index, obs.day, obs.today_pool)
     # 第 2 天收到的是规划时写的信，规划请求同时交了第 1 天的出价，所以也是昨天出价时写的。
-    task = "\n\n".join([*_received_letters(received, "昨天出价时"), BID_HINT])
+    task = "\n\n".join([*_received_letters(received, "昨天出价时"), BID_HINT,
+                        _letter_delivery(obs.game, obs.match_index, obs.day)])
     yesterday = obs.today_history[-1]
     if yesterday.is_void:
         announcement = f"昨日公布：流局，奖池 {yesterday.pool} 分作废。"
@@ -212,7 +228,7 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], *,
         lines.append("第一名总分并列，全员进入加赛。" if team_standings(standings) is None
                      else "两个阵营总分相同，全员进入加赛。")
     lines.extend(_received_letters(received, LAST_DAY_LETTERS))
-    lines.append("请向全体玩家发表你的局末发言（不超过 300 字）。")
+    lines.extend(["请向全体玩家发表你的局末发言（不超过 300 字）。", MATCH_END_LETTER_DELIVERY])
     return "\n\n".join(lines)
 
 
@@ -260,6 +276,7 @@ def next_match_plan_request(past_logs: list[MatchLog], standings: list[Standings
         f"截至当前的最新累计成绩：\n\n{render_standings(standings)}\n\n"
         f"请结合之前整理的记忆，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)
+        + f"\n\n{_letter_delivery(game, match_index, 1)}"
     )
 
 
