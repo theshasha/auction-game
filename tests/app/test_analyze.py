@@ -16,6 +16,7 @@
 """
 
 import json
+from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, replace
 
@@ -28,7 +29,8 @@ from tests.support.factories import TEAM_OF, TEST_GAME, make_day, make_log, make
 from auction_game.llm.execution import CallFailedError, ExecutionResult
 from auction_game.agent.log import AgentLog
 from auction_game.agent.tasks import BidOutput, SpeechOutput, SummaryOutput
-from auction_game.reporting.analyze import analyze, collect_player_stats, find_latest_ai_run, load_match_logs, main
+from auction_game.reporting.analyze import (analyze, collect_player_stats, collect_team_stats, find_latest_ai_run,
+                                             load_match_logs, main)
 from auction_game.reporting.run_output import initialize_run
 from auction_game.reporting.run_paths import RunPaths
 
@@ -170,6 +172,7 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "含正常出价及超级出价的价位" in output
     assert "获胜价平均" in output
     assert "模型用量" not in output  # 离线赛的用量是假模型估算的，不输出
+    assert "阵营" not in output
 
 
 @pytest.mark.parametrize("bids,super_bids,winner,winning_bid,collisions,changed,collision_hits,"
@@ -404,8 +407,50 @@ def test_team_run_reports_team_totals_and_usage(tmp_path, capsys):
     output = capsys.readouterr().out
     assert ("\n\n阵营总分\n  各局顺序：正赛第 1 局 / 正赛第 2 局\n"
             "  红队：4 分（拍卖 2 分，命中 2 分），各局 3 / 1\n"
-            "  蓝队：2 分（拍卖 2 分，命中 0 分），各局 1 / 1\n\n经济与超级出价\n") in output
+            "  蓝队：2 分（拍卖 2 分，命中 0 分），各局 1 / 1\n\n阵营配合\n") in output
     assert "运行类型：团队赛常规真实 AI" in output and "模型用量（token）" in output
+
+
+def make_team_match() -> dict:
+    """按阵营结算的一局，甲乙丙红队、丁戊己蓝队。
+
+    第 1 天：出价 [3,3,5,5,5,1]；甲乙同出 3，红队队内撞车；丁戊同出 5，另有红队丙，蓝队也算队内撞车。
+              丙狙 3 只狙到队友，丁狙 6 是空位，己狙 5 命中丙；己以 1 获胜。
+    第 2 天：出价 [2,2,2,0,3,6]；红队三人同出 2，算一次队内撞车。甲狙 3 命中戊，戊狙 6 只狙到队友己；己以 6 获胜。
+    """
+    days = [
+        make_day(1, [3, 3, 5, 5, 5, 1], super_bids={"丙": 3, "丁": 6, "己": 5}, game=ANALYZE_GAME, team_of=TEAM_OF),
+        make_day(2, [2, 2, 2, 0, 3, 6], super_bids={"甲": 3, "戊": 6}, game=ANALYZE_GAME, team_of=TEAM_OF),
+    ]
+    return make_log(days=days, game=ANALYZE_GAME).to_dict()
+
+
+def test_team_run_reports_team_play(tmp_path, capsys):
+    match = make_team_match()
+    # 场景本身由引擎按阵营结算，这里确认它就是 make_team_match 描述的那种情况。
+    assert [{result["player"]: result["super_hit"] for result in day["players"] if result["super_bid"] is not None}
+            for day in match["days"]] == [{"丙": False, "丁": False, "己": True}, {"甲": True, "戊": False}]
+    assert [day["winner"] for day in match["days"]] == ["己", "己"]
+    assert collect_team_stats([{"match": match}], TEAM_OF) == {
+        "红队": Counter(team_collisions=2, super_uses=2, super_hits=1, teammate_only_misses=1),
+        "蓝队": Counter(team_collisions=1, super_uses=3, super_hits=1, teammate_only_misses=1),
+    }
+    write_matches(tmp_path, [{"match": match}], run_type="team-offline", team_of=TEAM_OF)
+    analyze(tmp_path)
+    # 阵营顺序同阵营总分：蓝队己两天获胜并命中一次，排在前面。
+    assert ("\n\n阵营配合\n"
+            "  队内撞车按天和价位计次：同一价位有 2 笔及以上队友的正常出价就算一次，另有对方出价也算\n"
+            "  蓝队：队内撞车 1 次；超级出价 3 次，命中 1 次（33%），只狙到队友 1 次\n"
+            "  红队：队内撞车 2 次；超级出价 2 次，命中 1 次（50%），只狙到队友 1 次\n"
+            "\n经济与超级出价\n") in capsys.readouterr().out
+
+
+def test_team_play_without_supers_omits_hit_rate(tmp_path, capsys):
+    match = make_log(days=[make_day(1, [0, 1, 2, 3, 4, 5], game=ANALYZE_GAME, team_of=TEAM_OF)],
+                     game=ANALYZE_GAME).to_dict()
+    write_matches(tmp_path, [{"match": match}], run_type="team-offline", team_of=TEAM_OF)
+    analyze(tmp_path)
+    assert "  红队：队内撞车 0 次；超级出价 0 次，命中 0 次，只狙到队友 0 次\n" in capsys.readouterr().out
 
 
 def test_cli_reports_run_without_matches(tmp_path, monkeypatch):

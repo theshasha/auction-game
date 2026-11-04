@@ -173,8 +173,33 @@ def print_player_stats(stats: dict) -> None:
         print(f"  正常出价为零：{row['zero_bids']}次")
 
 
-def print_team_totals(snapshot: dict, matches: list[dict], match_labels: list[str]) -> None:
-    """团队赛的阵营总分，用最后一局日志里的累计排名汇总，和 README、终端同一个汇总函数。
+def collect_team_stats(matches: list[dict], team_of: dict[str, str]) -> dict[str, Counter]:
+    """各阵营的队内撞车次数、超级出价的使用和命中次数，以及只狙到队友的落空次数。"""
+    stats = {team: Counter() for team in team_of.values()}
+    for payload in matches:
+        for day in payload["match"]["days"]:
+            results = day["players"]
+            # 一天里一个价位上有 2 笔及以上队友的正常出价算一次，另有对方出价也算。
+            team_bid_counts = Counter((team_of[result["player"]], result["bid"]) for result in results)
+            for (team, _), count in team_bid_counts.items():
+                if count >= 2:
+                    stats[team]["team_collisions"] += 1
+            normal_bid_counts = Counter(result["bid"] for result in results)
+            for result in results:
+                if result["super_bid"] is None:
+                    continue
+                totals = stats[team_of[result["player"]]]
+                totals["super_uses"] += 1
+                if result["super_hit"]:
+                    totals["super_hits"] += 1
+                # 超级出价不能和自己的正常出价相同，落空的价位上还有正常出价，就只能是队友的。
+                elif normal_bid_counts[result["super_bid"]]:
+                    totals["teammate_only_misses"] += 1
+    return stats
+
+
+def print_team_sections(snapshot: dict, matches: list[dict], match_labels: list[str]) -> None:
+    """团队赛的阵营总分和阵营配合。阵营总分用最后一局日志里的累计排名汇总，和 README、终端同一个汇总函数。
 
     快照里玩家的 team 有值才是团队赛；个人赛不输出，也不读累计排名，较早的个人赛快照没有 team 这个键。
     """
@@ -187,6 +212,16 @@ def print_team_totals(snapshot: dict, matches: list[dict], match_labels: list[st
         print(f"  {team.team}：{team.total_score} 分（拍卖 {team.total_auction_score} 分，"
               f"命中 {team.total_score - team.total_auction_score} 分），"
               f"各局 {' / '.join(str(score) for score in team.scores_per_match)}")
+    print()
+
+    team_stats = collect_team_stats(matches, {pc["name"]: pc["team"] for pc in snapshot["players"]})
+    print("阵营配合")
+    print("  队内撞车按天和价位计次：同一价位有 2 笔及以上队友的正常出价就算一次，另有对方出价也算")
+    for team in teams:
+        totals = team_stats[team.team]
+        hit_rate = f"（{totals['super_hits'] / totals['super_uses']:.0%}）" if totals["super_uses"] else ""
+        print(f"  {team.team}：队内撞车 {totals['team_collisions']} 次；超级出价 {totals['super_uses']} 次，"
+              f"命中 {totals['super_hits']} 次{hit_rate}，只狙到队友 {totals['teammate_only_misses']} 次")
     print()
 
 
@@ -311,7 +346,7 @@ def analyze(run_dir: Path) -> None:
     print(f"局数：{len(matches)}（正赛 {len(matches) - playoff_count} + 加赛 {playoff_count}）")
     print(f"总拍卖天数：{total_days}，其中流局 {void_days} 天（{void_days / total_days:.1%}）")
     print()
-    print_team_totals(snapshot, matches, player_stats["match_labels"])
+    print_team_sections(snapshot, matches, player_stats["match_labels"])
 
     print("经济与超级出价")
     print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
