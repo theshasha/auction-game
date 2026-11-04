@@ -9,7 +9,8 @@ from auction_game.agent import prompts
 from auction_game.game import rules
 from auction_game.cli import rules as rules_command
 from auction_game.configuration import load_game_settings, load_players
-from tests.support.factories import NAMES, TEST_GAME
+from auction_game.game.lineup import Lineup
+from tests.support.factories import NAMES, TEST_GAME, make_lineup
 from auction_game.game.rules import render_rules
 
 
@@ -17,13 +18,14 @@ class TestRulesText:
     """规则正文源于模板，生成文档与 system 使用相同渲染函数。"""
 
     def test_generated_rules_matches_configuration(self, tmp_path, monkeypatch):
-        names = [profile.name for profile, _ in load_players()]
+        lineup = Lineup(tuple(profile for profile, _ in load_players()))
+        names = lineup.names
         text = render_rules(load_game_settings(), names)
         document = tmp_path / "RULES.md"
         monkeypatch.setattr(rules_command, "RULES_PATH", document)
         rules_command.sync_root_rules(load_game_settings())
         assert document.read_text(encoding="utf-8") == text
-        system = prompts.build_system_prompt(names[0], "人设", "正文", [], names, load_game_settings())
+        system = prompts.build_system_prompt(lineup.profiles[0], lineup, load_game_settings())
         body = render_rules(load_game_settings(), names, include_note=False)
         assert text == rules.GENERATED_NOTE + body
         assert system.startswith(body)
@@ -53,7 +55,8 @@ class TestRulesText:
         assert "获得 5 金币悬赏和 6 命中分" in text
         assert "最多加赛 4 局" in text
         assert "{" not in text and "}" not in text
-        system = prompts.build_system_prompt("甲", "人设", "正文", [], names, game)
+        lineup = make_lineup(names)
+        system = prompts.build_system_prompt(lineup.profiles[0], lineup, game)
         assert system.startswith(text)
         assert "其他 2 位玩家是：乙、丙" in system
 
@@ -67,9 +70,8 @@ class TestRulesText:
     def test_runtime_render_does_not_read_generated_document(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rules_command, "RULES_PATH", tmp_path / "missing.md")
         text = render_rules(TEST_GAME, NAMES, include_note=False)
-        system = prompts.build_system_prompt(
-            "甲", "人设", "正文", [], NAMES, TEST_GAME
-        )
+        lineup = make_lineup()
+        system = prompts.build_system_prompt(lineup.profiles[0], lineup, TEST_GAME)
         assert system.startswith(text)
 
     def test_check_command_rejects_stale_document_and_keeps_it(self, tmp_path, monkeypatch):

@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from auction_game.flow.director import AIDirector
+from auction_game.agent.log import AgentLog
 from auction_game.agent.player import AIPlayer
+from auction_game.agent.prompts import build_system_prompt
+from auction_game.agent.text_output import LetterNames
 from auction_game.configuration import ConfigurationError, load_configuration, load_game_settings
 from auction_game.flow.controller import Controller, TournamentAborted
 from auction_game.llm.client import MissingApiKeyError, make_model_factory
@@ -77,7 +80,6 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
     rules 是按本场参数生成的规则；入口在创建场次目录前生成它，参数有误时在那里报配置错误。
     """
     lineup = Lineup(tuple(pc.profile for pc in player_configs))
-    predictions = [(profile.name, profile.predicted_win_rate) for profile in lineup.profiles]
     # 本场配置快照，统计和展示只读它。
     snapshot = {
         "run_type": run_type,
@@ -96,17 +98,16 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
     players = [
         AIPlayer(
             name=profile.name,
-            persona_title=profile.persona_title,
-            persona_text=profile.persona_text,
-            predictions=predictions,
-            enable_predictions=config["prompts"]["enable_predictions"],
-            enable_personas=config["prompts"]["enable_personas"],
-            writing_style=config["writing_style"],
-            all_names=lineup.names,
+            system_prompt=build_system_prompt(
+                profile, lineup, game,
+                enable_predictions=config["prompts"]["enable_predictions"],
+                enable_personas=config["prompts"]["enable_personas"],
+                writing_style=config["writing_style"],
+            ),
+            letter_names=LetterNames(profile.name, lineup.others(profile.name)),
             task_runner=task_runners[profile.name],
+            log=AgentLog(profile.name, paths.player(number), readable_path=paths.player(number, readable=True)),
             game=game,
-            log_path=paths.player(number),
-            readable_path=paths.player(number, readable=True),
         )
         for number, profile in enumerate(lineup.profiles, 1)
     ]

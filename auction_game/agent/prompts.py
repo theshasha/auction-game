@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 
+from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
@@ -20,11 +21,8 @@ LAST_DAY_LETTERS = "在本局最后一天出价时"
 
 
 def build_system_prompt(
-    name: str,
-    persona_title: str,
-    persona_text: str,
-    predictions: list[tuple[str, int]],
-    all_names: list[str],
+    profile: PlayerProfile,
+    lineup: Lineup,
     game: GameSettings,
     *, enable_predictions: bool = True, enable_personas: bool = True,
     writing_style: str | None = None,
@@ -32,17 +30,18 @@ def build_system_prompt(
     """保留规则与身份，按独立开关加入人设和全员公开的赛前预测，写作要求放在最后。
 
     人设只影响发言和私信的口吻；分析出价和规划策略时仍需认真思考。
-    predictions 是 players.yaml 中的虚构数字，不是模型的真实表现统计。
+    赛前预测按座位列出阵容里每人的 predicted_win_rate。
     """
-    others = "、".join(n for n in all_names if n != name)
+    names = lineup.names
+    others = "、".join(lineup.others(profile.name))
     text = (
-        f"{render_rules(game, all_names, include_note=False)}\n"
-        f"【你的身份】\n你叫 {name}，其他 {len(all_names) - 1} 位玩家是：{others}。\n"
+        f"{render_rules(game, names, include_note=False)}\n"
+        f"【你的身份】\n你叫 {profile.name}，其他 {len(names) - 1} 位玩家是：{others}。\n"
     )
     if enable_personas:
-        text += f"【你的人设】\n{persona_title}：{persona_text}\n"
+        text += f"【你的人设】\n{profile.persona_title}：{profile.persona_text}\n"
     if enable_predictions:
-        prediction_text = "、".join(f"{player_name} {rate}%" for player_name, rate in predictions)
+        prediction_text = "、".join(f"{player.name} {player.predicted_win_rate}%" for player in lineup.profiles)
         text += f"【赛前预测】\n专家根据各玩家之前的对局表现，给出的夺冠率预测为：{prediction_text}。\n"
     if enable_personas:
         text += "请在游戏过程中认真思考，不要被人设的说话方式影响你的思考。\n"

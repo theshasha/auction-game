@@ -9,8 +9,8 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPrompt
 
 from auction_game.llm.execution import OutputFailedError
 from auction_game.agent.text_output import BRIEF_BID_FORMAT, DECISION, LetterNames, SPEECH, output_requirement
-from tests.support.factories import (ALL_NAMES, TEST_GAME, bid_reply, fake_task_runner, make_ai_obs, make_player,
-                                     request_text, speech_reply, text_reply, task_entries)
+from tests.support.factories import (ALL_NAMES, TEST_GAME, TEST_LINEUP, bid_reply, fake_task_runner, make_ai_obs,
+                                     make_player, request_text, speech_reply, text_reply, task_entries)
 from auction_game.agent import prompts
 
 LETTERS = LetterNames("Alpha", tuple(ALL_NAMES[1:]))
@@ -21,30 +21,16 @@ def retry_text(runner, index):
                 if isinstance(part, RetryPromptPart))
 
 
-@pytest.mark.parametrize("enable_predictions", [False, True])
-@pytest.mark.parametrize("enable_personas", [False, True])
-@pytest.mark.parametrize("writing_style", [None, "【写作要求】独特写作要求"])
-def test_player_passes_prompt_switches_into_native_request(enable_predictions, enable_personas,
-                                                           writing_style, tmp_path):
-    from auction_game.agent.player import AIPlayer
-
+def test_system_prompt_is_sent_and_opens_both_histories(tmp_path):
     runner = fake_task_runner([bid_reply(1)])
-    player = AIPlayer(
-        "Alpha", "独特人设标题", "独特人设正文", [("Bravo", 73)], ["Alpha", "Bravo"],
-        runner, game=TEST_GAME, log_path=tmp_path / "a.jsonl", readable_path=tmp_path / "a.md",
-        enable_predictions=enable_predictions, enable_personas=enable_personas,
-        writing_style=writing_style,
-    )
+    player = make_player(runner, tmp_path)
     assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (1, None)
-    system = next(part.content for message in runner.calls[0] for part in message.parts
-                  if isinstance(part, SystemPromptPart))
-    for marker in ("【赛前预测】", "Bravo 73%", "专家"):
-        assert (marker in system) is enable_predictions
-    for marker in ("【你的人设】", "独特人设标题", "独特人设正文", "认真思考"):
-        assert (marker in system) is enable_personas
-    assert ("独特写作要求" in system) is (writing_style is not None)
-    assert "你叫 Alpha" in system and "Bravo" in system
-    assert player.review_messages[0] == player.messages[0]
+    expected = prompts.build_system_prompt(TEST_LINEUP.profiles[0], TEST_LINEUP, TEST_GAME)
+    sent = [part.content for message in runner.calls[0] for part in message.parts
+            if isinstance(part, SystemPromptPart)]
+    assert sent == [expected]
+    for history in (player.messages, player.review_messages):
+        assert [(type(part), part.content) for part in history[0].parts] == [(SystemPromptPart, expected)]
 
 
 @pytest.mark.parametrize("invalid", [

@@ -1,5 +1,5 @@
 """提示词文案：system 提示词、局末结果、记忆、收到的私信、加赛预告、规划与首日出价合并。
-每日出价消息见 test_prompts_bid_request.py；表格渲染见 test_prompts_render.py；
+每日出价消息见 test_prompts_bid_request.py；表格渲染见 tests/game/test_tables.py；
 规则文本见 tests/game/test_rules.py。"""
 
 from dataclasses import replace
@@ -8,16 +8,16 @@ import pytest
 
 from auction_game.agent import prompts
 from auction_game.game import tables
-from tests.support.factories import NAMES, TEST_GAME, make_day, make_log, make_logs, make_obs, make_standings
+from tests.support.factories import (NAMES, TEST_GAME, make_day, make_lineup, make_log, make_logs, make_obs,
+                                     make_standings)
 
 
 class TestSystemPrompt:
     """system 提示词：规则全文 + 身份 + 人设 + 全员公开的赛前预测 + 人设作用范围。"""
 
     def test_includes_persona_and_scope(self):
-        system = prompts.build_system_prompt(
-            "甲", "傲娇大小姐", "自称本小姐。", [(name, 10) for name in NAMES], NAMES, TEST_GAME
-        )
+        lineup = make_lineup(persona=("傲娇大小姐", "自称本小姐。"))
+        system = prompts.build_system_prompt(lineup.profiles[0], lineup, TEST_GAME)
         assert "你叫 甲" in system
         assert "傲娇大小姐：自称本小姐。" in system
         # 人设只影响说话方式，思考要求保持认真
@@ -25,11 +25,11 @@ class TestSystemPrompt:
         assert "发言和私信中的承诺都不强制履行" in system
 
     def test_predictions_public_to_everyone(self):
-        predictions = [("甲", 50), ("乙", 20), ("丙", 10), ("丁", 10), ("戊", 10), ("己", 0)]
-        for name in NAMES:
-            system = prompts.build_system_prompt(name, "人设", "正文", predictions, NAMES, TEST_GAME)
+        lineup = make_lineup(rates=[50, 20, 10, 10, 10, 0])
+        for profile in lineup.profiles:
+            system = prompts.build_system_prompt(profile, lineup, TEST_GAME)
             assert "甲 50%" in system and "己 0%" in system  # 全员可见，含他人与自己的
-        system = prompts.build_system_prompt("甲", "人设", "正文", predictions, NAMES, TEST_GAME)
+        system = prompts.build_system_prompt(lineup.profiles[0], lineup, TEST_GAME)
         assert "乙、丙、丁、戊、己" in system  # 其他五位玩家名单
 
     @pytest.mark.parametrize("enable_predictions", [False, True])
@@ -37,8 +37,9 @@ class TestSystemPrompt:
     def test_independent_switches_remove_entire_sections(self, enable_predictions, enable_personas):
         from auction_game.game.rules import render_rules
 
+        lineup = make_lineup(rates=[10, 73, 10, 10, 10, 10], persona=("独特人设标题", "独特人设正文"))
         text = prompts.build_system_prompt(
-            "甲", "独特人设标题", "独特人设正文", [("乙", 73)], NAMES, TEST_GAME,
+            lineup.profiles[0], lineup, TEST_GAME,
             enable_predictions=enable_predictions, enable_personas=enable_personas,
         )
         for marker in ("【赛前预测】", "专家", "夺冠率预测", "乙 73%"):
@@ -51,8 +52,9 @@ class TestSystemPrompt:
     @pytest.mark.parametrize("enable_personas", [False, True])
     @pytest.mark.parametrize("writing_style", [None, "【写作要求】\n独特写作要求。\n"])
     def test_writing_style_is_appended_last(self, enable_personas, writing_style):
+        lineup = make_lineup()
         text = prompts.build_system_prompt(
-            "甲", "人设", "正文", [("乙", 10)], NAMES, TEST_GAME,
+            lineup.profiles[0], lineup, TEST_GAME,
             enable_personas=enable_personas, writing_style=writing_style,
         )
         if writing_style is None:

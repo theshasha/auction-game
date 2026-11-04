@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from pathlib import Path
 
 from pydantic_ai.messages import (
     ModelMessage, ModelRequest, ModelResponse, SystemPromptPart, UserPromptPart,
@@ -46,24 +45,17 @@ def completed_history(messages: list[ModelMessage]) -> list[ModelMessage]:
 class AIPlayer:
     """日志成功才提交；快照同时恢复当前上下文、全场回顾和记忆。"""
 
-    def __init__(self, name: str, persona_title: str, persona_text: str,
-                 predictions: list[tuple[str, int]], all_names: list[str],
-                 task_runner: TaskRunner, log_path: Path, *, game: GameSettings,
-                 readable_path: Path,
-                 enable_predictions: bool = True, enable_personas: bool = True,
-                 writing_style: str | None = None):
+    def __init__(self, name: str, system_prompt: str, letter_names: LetterNames,
+                 task_runner: TaskRunner, log: AgentLog, *, game: GameSettings):
+        """系统提示由 prompts.build_system_prompt 按阵容拼好，放在两份对话的第一条。"""
         self.name = name
         self.game = game
-        system_prompt = prompts.build_system_prompt(
-            name, persona_title, persona_text, predictions, all_names, game,
-            enable_predictions=enable_predictions, enable_personas=enable_personas,
-            writing_style=writing_style)
         self.messages: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(system_prompt)])]
         self.review_messages = list(self.messages)
         self.memory = ""
         self.task_runner = task_runner
-        self.letter_names = LetterNames(name, tuple(other for other in all_names if other != name))
-        self.log = AgentLog(name, log_path, readable_path=readable_path)
+        self.letter_names = letter_names
+        self.log = log
         self.log.system_prompt(system_prompt)
 
     def checkpoint(self):

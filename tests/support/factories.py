@@ -8,10 +8,14 @@ import json
 from pydantic_ai.models.function import FunctionModel
 from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput, SummaryOutput, TaskRunner
 
+from auction_game.agent import prompts
+from auction_game.agent.log import AgentLog
 from auction_game.agent.player import AIPlayer
+from auction_game.agent.text_output import LetterNames
 from auction_game.flow.controller import Controller
 from auction_game.reporting.run_output import initialize_run
 from auction_game.game.engine import MatchState, compute_standings, settle_day
+from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import DayResult, MatchLog, Observation, PlayerDayResult
 
@@ -220,8 +224,14 @@ def init_run_dir(tmp_path, names):
 
 # ---------- AI 玩家：只替换模型输出，解析、校验和纠错走生产 Agent ----------
 
+def make_lineup(names=NAMES, rates=None, persona=("人设", "正文")):
+    """按座位的阵容，全员人设相同；rates 是各座位的预测胜率，默认每人 10。"""
+    rates = rates or [10] * len(names)
+    return Lineup(tuple(PlayerProfile(name, *persona, rate) for name, rate in zip(names, rates, strict=True)))
+
+
 ALL_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
-TEST_PREDICTIONS = [(name, 10) for name in ALL_NAMES]
+TEST_LINEUP = make_lineup(ALL_NAMES, persona=("测试人设", "测试人设正文"))
 
 
 def fake_task_runner(script):
@@ -274,10 +284,12 @@ def text_reply(data):
 
 
 def make_player(task_runner, tmp_path, game=TEST_GAME, name="Alpha"):
-    """名单是 ALL_NAMES，name 要在其中。"""
-    return AIPlayer(name, "测试人设", "测试人设正文", TEST_PREDICTIONS, ALL_NAMES,
-                    task_runner, game=game, log_path=tmp_path / f"ai_{name}.jsonl",
-                    readable_path=tmp_path / f"ai_{name}.md")
+    """阵容是 TEST_LINEUP，name 要在 ALL_NAMES 中。"""
+    profile = next(profile for profile in TEST_LINEUP.profiles if profile.name == name)
+    return AIPlayer(name, prompts.build_system_prompt(profile, TEST_LINEUP, game),
+                    LetterNames(name, TEST_LINEUP.others(name)), task_runner,
+                    AgentLog(name, tmp_path / f"ai_{name}.jsonl", readable_path=tmp_path / f"ai_{name}.md"),
+                    game=game)
 
 
 def continuous_controller():
