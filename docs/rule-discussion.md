@@ -1,6 +1,6 @@
 # 规则讨论备忘
 
-本文记录规则设计的取舍和调参时要看的数据。现行规则以 `configs/game.yaml` 和 `RULES.template.md` 为准。文中的参考场次都在 `logs/archive_20261018/` 下。
+本文记录规则设计的取舍和调参时要看的数据。现行规则以 `configs/game.yaml` 和 `RULES.template.md` 为准。文中的规则依据和数据都来自个人赛，参考场次都在 `logs/archive_20261018/` 下；团队赛共用经济参数，规则差异和按阵营重算的命中率见 `docs/team-mode.md`。
 
 ## 当前参数的关系
 

@@ -1,4 +1,4 @@
-# 目录键供 players.yaml 和 config.yaml 的 test_model 引用；models_dev 是该模型在 models.dev 里的条目，可能和渠道的 model ID 不同。
+# 目录键供 players.yaml、teams.yaml 和 config.yaml 的 test_model 引用；models_dev 是该模型在 models.dev 里的条目，可能和渠道的 model ID 不同。
 # 来源没有 medium 档位的模型显式指定 low，其余按能力快照用 medium；见 docs/usage.md。
 models:
   gpt_astra:

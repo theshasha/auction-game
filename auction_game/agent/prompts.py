@@ -1,6 +1,6 @@
 """生成模型提示词。
 
-规则正文维护于 RULES.template.md，使用本场参数与实际名单生成系统提示。
+规则正文维护于 RULES.template.md，团队赛是 RULES_TEAM.template.md，由 game.rules 按本场参数与阵容渲染进系统提示。
 出价表和排名表见 game.tables，文本输出格式见 text_output，业务校验和纠错见 tasks。
 """
 

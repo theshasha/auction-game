@@ -6,7 +6,8 @@
 
 - `configs/game.yaml`：局数、金币、奖池、出价上限和超级出价参数。
 - `configs/models.yaml`：模型目录。每个条目写调用的模型 ID、渠道、协议和 models.dev 来源；`name` 是参赛时默认的角色名。
-- `configs/players.yaml`：参赛阵容、人设和虚构的预测胜率。玩家的 `name` 可以不写，不写时用模型目录里的角色名；同一个模型放多名玩家时，给每人写 `name`。名字不能含空白和 `<`、`>`、`/`，不能是 `strategy`、`decision`、`speech`，同一场不能重名。
+- `configs/players.yaml`：个人赛阵容、人设和虚构的预测胜率。玩家的 `name` 可以不写，不写时用模型目录里的角色名；同一个模型放多名玩家时，给每人写 `name`。名字不能含空白和 `<`、`>`、`/`，不能是 `strategy`、`decision`、`speech`，同一场不能重名。
+- `configs/teams.yaml`：团队赛阵容，正好 2 个阵营、每个 3 人。每个阵营写 `name`（阵营名，不能为空或重复）和 `players`；玩家的字段和名字要求同 `players.yaml`，但没有预测胜率。
 - `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。
 
 密钥写在根目录的 `.env` 里，变量名是渠道的 `api_key_env`，可以照 `.env.example` 写。
@@ -32,30 +33,33 @@ python -m auction_game.cli.sync_models --input "path/to/api.json" --write  # 用
 ## 运行比赛
 
 ```bash
-python -m auction_game.cli.offline_demo  # 假模型完整赛，无需密钥
+python -m auction_game.cli.offline_demo         # 假模型完整赛，无需密钥
+python -m auction_game.cli.offline_demo --team  # 假模型团队赛
 ```
 
-离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空、加赛和私信；假玩家每次能写信时给配置里的下一位写一封。`--test-model` 改用测试模型的配置和测试赛参数，`--output 目录` 指定输出位置。
+离线赛用按脚本回复的假模型，默认配置下会演示流局、超级出价命中与落空、加赛和私信；团队赛还会演示只狙到队友价位的落空和两队同分加赛。假玩家每次能写信时给配置里的下一位写一封。`--test-model` 改用测试模型的配置和测试赛参数，`--output 目录` 指定输出位置。
 
 **以下命令调用真实服务，可能收费：**
 
 ```bash
 python main.py --test-model
 python main.py
+python main.py --team --test-model
+python main.py --team
 ```
 
-`--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。比赛参数改用 `game.yaml` 里 `test_model_overrides` 覆盖后的值，用来缩短局数和天数；离线赛的 `--test-model` 同样生效。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容。
+`--team` 跑团队赛，阵容读 `teams.yaml`，赛制和规则见[团队赛](team-mode.md)。`--test-model` 让全员使用 `config.yaml` 里 `test_model` 指定的模型，角色名、人设和各自的对话历史不变。比赛参数改用 `game.yaml` 里 `test_model_overrides` 覆盖后的值，用来缩短局数和天数；离线赛的 `--test-model` 同样生效。第一次真实比赛先完整跑一场测试模型赛，检查结果没问题后再跑常规阵容；团队赛第一次也一样。
 
-启动时会按 `game.yaml` 的生产参数生成根目录的 `RULES.md`，测试模式也一样；本场实际规则在场次目录的 `RULES.md`。改了 `RULES.template.md`、`game.yaml` 或阵容后也可以手动生成或检查：
+启动时会按 `game.yaml` 的生产参数生成根目录的规则，个人赛是 `RULES.md`，团队赛是 `RULES_TEAM.md`，测试模式也一样；本场实际规则在场次目录的 `RULES.md`。改了 `RULES.template.md`、`RULES_TEAM.template.md`、`game.yaml` 或阵容后，也可以手动生成或检查两份：
 
 ```bash
-python -m auction_game.cli.rules          # 更新 RULES.md
+python -m auction_game.cli.rules          # 更新 RULES.md 和 RULES_TEAM.md
 python -m auction_game.cli.rules --check  # 过期或模板有错时返回非零
 ```
 
 ## 交互控制
 
-比赛默认单步：回车执行下一轮任务（如一轮出价或发言），`c` 切到连续模式，`s` 切回单步，`p` 暂停，`q` 退出。每天结算后终端显示赢家、超级出价命中和累计排名，金币列是当天结算后、发次日工资前的余额。
+比赛默认单步：回车执行下一轮任务（如一轮出价或发言），`c` 切到连续模式，`s` 切回单步，`p` 暂停，`q` 退出。每天结算后终端显示赢家、超级出价命中和累计排名，团队赛还显示阵营累计总分；金币列是当天结算后、发次日工资前的余额。
 
 模型回复格式不对或出价违规时，程序会让它改一次；还不对，这个任务就算失败。请求失败（服务报错、网络中断、输出被截断）时，程序等 10 秒重发，最多重发 3 次。
 
@@ -67,7 +71,7 @@ python -m auction_game.cli.rules --check  # 过期或模板有错时返回非零
 
 ## 阅读场次
 
-每场写在 `logs/<时间>_<ai|ai-test|offline>/`，先打开里面的 `README.md`。
+每场写在 `logs/<时间>_<类型>/`，类型是个人赛的 `ai`、`ai-test`、`offline`，或团队赛的 `team`、`team-test`、`team-offline`。先打开里面的 `README.md`，团队赛的私人对话按阵营分组列出。
 
 - `RULES.md`：本场规则。
 - `speeches.md`：公开发言和观众总结。
@@ -81,7 +85,7 @@ python -m auction_game.cli.rules --check  # 过期或模板有错时返回非零
 ## 分析
 
 ```bash
-python -m auction_game.reporting.analyze                    # 最新的 ai 或 ai-test 场次
+python -m auction_game.reporting.analyze                    # 最新的真实 AI 场次，含团队赛
 python -m auction_game.reporting.analyze "logs/场次目录"   # 指定场次，离线赛要这样指定
 ```
 
@@ -97,11 +101,11 @@ python -m auction_game.cli.check_llm --model 目录键       # 只查指定模�
 python -m auction_game.cli.check_llm                      # 查常规阵容用到的全部模型
 ```
 
-`--max-tokens` 设探测的输出上限，默认 2048，不超过该模型的比赛输出预算。
+`--max-tokens` 设探测的输出上限，默认 2048，不超过该模型的比赛输出预算。不带参数时查的是 `players.yaml` 的阵容；团队赛阵容用到别的模型时，用 `--model` 指定。
 
 ## 常用调整
 
-- 预测：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测。
+- 预测：`config.yaml` 的 `prompts.enable_predictions` 关掉后，模型看不到赛前胜率和专家预测。团队赛没有预测，这个开关不起作用。
 - 人设：`prompts.enable_personas` 关掉后，模型看不到人设。和预测都关时适合做公平对照；目录里的角色名带模型身份，要隐去时，在阵容里另写名字。
 - 写作要求：`prompts.enable_writing_style` 开启时，`configs/writing_style.md` 的全文接在每位玩家系统提示的最后，约束所有输出的文风；文件缺失时启动报配置错误。
 - 并发：`llm.max_concurrency`，1 为串行。

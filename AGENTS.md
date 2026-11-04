@@ -1,6 +1,6 @@
-# 拍卖个人赛
+# 唯一高价拍卖
 
-这是一个用 Python 编写的大模型拍卖游戏，第一名并列时加赛。项目只支持当前规则和当前日志格式，旧日志归档在 `logs/archive_*/`，`analyze` 不读这些归档。
+这是一个用 Python 编写的大模型拍卖游戏，有个人赛和团队赛，第一名并列时加赛。项目只支持当前规则和当前日志格式，旧日志归档在 `logs/archive_*/`，`analyze` 不读这些归档。
 
 ## 编码原则
 
@@ -15,11 +15,11 @@
 
 - `configs/game.yaml`：局数、金币、奖池、出价上限和超级出价参数，以及 `--test-model` 时的覆盖参数。生产默认值只在这里维护。
 - `configs/models.yaml`：模型目录、角色名、协议，以及模型在 models.dev 中的精确来源。
-- `configs/players.yaml`：阵容、人设和虚构预测胜率。玩家名单只在配置中维护，文档和测试使用实际配置或合成名单。
+- `configs/players.yaml`、`configs/teams.yaml`：个人赛和团队赛的阵容和人设，个人赛另有虚构预测胜率。玩家名单和分组只在这两份配置中维护，文档和测试使用实际配置或合成名单。
 - `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。密钥只放在根目录的 `.env` 中。
 - `configs/writing_style.md`：全模型通用的写作要求，开关在 `config.yaml` 的 `prompts.enable_writing_style`。
 
-规则正文以 `RULES.template.md` 为准，改规则时同步改代码。比赛入口在创建日志和请求模型前生成根 `RULES.md`。改规则或经济参数前，先读 `docs/rule-discussion.md`。
+规则正文以 `RULES.template.md` 为准，团队赛另有 `RULES_TEAM.template.md`；改规则时两份模板和代码一起改。比赛入口在创建日志和请求模型前生成根目录的 `RULES.md`，团队赛是 `RULES_TEAM.md`。改规则或经济参数前，先读 `docs/rule-discussion.md`。
 
 ## 按任务查代码
 
@@ -28,6 +28,7 @@
 - 整场流程和各阶段的轮次：修改前读 `auction_game/flow/AGENTS.md`。
 - 模型调用、提示、对话历史和发言：修改前读 `auction_game/agent/AGENTS.md`。
 - 私信：修改前读 `docs/letters.md`。
+- 团队赛：修改前读 `docs/team-mode.md`。
 - 日志和统计：修改前读 `auction_game/reporting/AGENTS.md`。统计口径见 `docs/analyze.md`。
 - 用户命令和日志说明：`docs/usage.md`。独立工具在 `auction_game/cli/`，用 `python -m` 运行。
 
@@ -43,7 +44,7 @@
 
 用户授权连通排查后，可以执行一次最小对照请求，每次最多调用一次模型，不自动重试。扩大排查范围前，仍须用户确认。
 
-其他收费操作，包括测试赛、正式赛和重跑，都只提供命令，由用户亲自运行。首次真实比赛先由用户运行全员使用测试模型的完整比赛，检查确认后再用常规阵容。
+其他收费操作，包括测试赛、正式赛和重跑，都只提供命令，由用户亲自运行。首次真实比赛先由用户运行全员使用测试模型的完整比赛，个人赛和团队赛各算各的，检查确认后再用常规阵容。
 
 ## 离线验证
 
@@ -54,4 +55,4 @@ python -m pip check
 git diff --check
 ```
 
-完整假模型赛使用 `python -m auction_game.cli.offline_demo`，新场次写入 `logs/`。公共测试辅助代码放在 `tests/support/`，测试文件之间不互相导入。
+完整假模型赛使用 `python -m auction_game.cli.offline_demo`，团队赛加 `--team`，新场次写入 `logs/`。公共测试辅助代码放在 `tests/support/`，测试文件之间不互相导入。
