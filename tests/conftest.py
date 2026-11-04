@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from auction_game.cli.sync_models import build_snapshot
+from auction_game.configuration import load_model_entries
 from tests.support.factories import CHANNELS
 from auction_game.cli import rules
 
@@ -34,7 +35,7 @@ def config_files(tmp_path, monkeypatch):
         "substitute": dict(provider="hub", model="test-model-c", protocol="responses",
                             models_dev=dict(provider="official", model="source-c")),
     }}), encoding="utf-8")
-    catalog = yaml.safe_load(models_path.read_text(encoding="utf-8"))["models"]
+    catalog = load_model_entries(models_path)
     data = {"official": {"models": {
         f"source-{letter}": {"id": f"source-{letter}", "limit": {"context": 1000, "output": budget},
                               "reasoning": letter == "c",

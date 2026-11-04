@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 import re
 import pytest
 
@@ -42,9 +43,10 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     config, templates = demo_configuration
     config["prompts"] = {"enable_predictions": True, "enable_personas": False, "enable_writing_style": True}
     names = ["甲", "乙", "丙", "丁"]
-    configs = [deepcopy(templates[index % len(templates)]) for index in range(len(names))]
-    for name, pc in zip(names, configs):
-        pc["name"] = pc["identity_model"]["name"] = name
+    configs = []
+    for index, name in enumerate(names):
+        pc = templates[index % len(templates)]
+        configs.append(replace(pc, profile=replace(pc.profile, name=name), identity=replace(pc.identity, name=name)))
     monkeypatch.setattr(offline_demo, "load_configuration", lambda **_: deepcopy((config, configs)))
     monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "20261016_120000_offline"
@@ -77,13 +79,19 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     snapshot = paths.read_config()
     assert snapshot["run_type"] == "offline" and snapshot["mode"] == "test_model"
     assert snapshot["prompts"] == config["prompts"]
+    capability_fields = ("max_tokens", "model_settings", "capabilities")
     for pc, saved in zip(configs, snapshot["players"]):
-        assert saved["identity_model"] == pc["identity_model"]
-        assert saved["execution_model"] == {"key": pc["model_key"],
-                                            **{k: pc[k] for k in ("model", "provider", "protocol", "max_tokens",
-                                                                  "model_settings", "capabilities")}}
-        assert pc["identity_model"]["model"] != pc["model"]
-    assert all(f.settings["max_tokens"] == configs[0]["max_tokens"] for f in factories)
+        identity, execution = pc.identity, pc.execution
+        # 合成目录没写 reasoning_effort，快照里也没有这一项。
+        assert saved["identity_model"] == {
+            "key": identity.key, "name": identity.name, "model": identity.model, "provider": identity.provider,
+            "protocol": identity.protocol, "models_dev": identity.models_dev,
+            **{field: getattr(identity, field) for field in capability_fields}}
+        assert saved["execution_model"] == {
+            "key": execution.key, "model": execution.model, "provider": execution.provider,
+            "protocol": execution.protocol, **{field: getattr(execution, field) for field in capability_fields}}
+        assert identity.model != execution.model
+    assert all(f.settings["max_tokens"] == configs[0].execution.max_tokens for f in factories)
     assert all(f.settings["openai_reasoning_effort"] == "medium" for f in factories)
     assert (run_dir / "RULES.md").read_text(encoding="utf-8") == prompts.render_rules(game, names)
 

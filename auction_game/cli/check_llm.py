@@ -29,35 +29,33 @@ def main(argv=None) -> int:
         parser.error("--max-tokens 必须是正整数")
     try:
         config, players = load_configuration(test_model=args.test_model)
-        if args.model:
-            players = []
-            for key in args.model:
-                if key not in config["models"]:
-                    raise ConfigurationError(f"models.yaml：未知模型配置名 {key!r}")
-                players.append({"model_key": key, **config["models"][key]})
+        for key in args.model or []:
+            if key not in config["models"]:
+                raise ConfigurationError(f"models.yaml：未知模型配置名 {key!r}")
     except ConfigurationError as exc:
         print(f"[配置错误] {exc}")
         return 1
     timeout = config["llm"]["timeout_seconds"]
 
-    targets = {player["model_key"]: player for player in players}
+    targets = ({key: config["models"][key] for key in args.model} if args.model
+               else {pc.execution.key: pc.execution for pc in players})
     failures = 0
     print(f"连通检查：{len(targets)} 个检查目标，会请求真实服务，可能收费。每个目标至多请求一次，不重试。")
-    for player in targets.values():
-        label = f"{player['model_key']}（{player['provider']} / {player['protocol']} / {player['model']}）"
-        probe_budget = min(args.max_tokens, player["max_tokens"])
-        print(f"[探测] {label}: 比赛预算={player['max_tokens']}，本次探测预算={probe_budget}，"
-              f"推理={player['capabilities']['reasoning_status']}；"
-              f"{player['capabilities']['reasoning_detail']}")
+    for model in targets.values():
+        label = f"{model.key}（{model.provider} / {model.protocol} / {model.model}）"
+        probe_budget = min(args.max_tokens, model.max_tokens)
+        print(f"[探测] {label}: 比赛预算={model.max_tokens}，本次探测预算={probe_budget}，"
+              f"推理={model.capabilities['reasoning_status']}；"
+              f"{model.capabilities['reasoning_detail']}")
         try:
             executor = AgentExecutor(make_model_factory(
-                provider=player["provider"],
-                channel=config["llm"]["channels"][player["provider"]],
-                model=player["model"],
+                provider=model.provider,
+                channel=config["llm"]["channels"][model.provider],
+                model=model.model,
                 timeout=timeout,
-                protocol=player["protocol"],
+                protocol=model.protocol,
                 max_tokens=probe_budget,
-                model_settings=player["model_settings"],
+                model_settings=model.model_settings,
                 request_attempts=1,
             ))
         except MissingApiKeyError as exc:

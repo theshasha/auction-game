@@ -17,7 +17,7 @@ class TestRulesText:
     """规则正文源于模板，生成文档与 system 使用相同渲染函数。"""
 
     def test_generated_rules_matches_configuration(self, tmp_path, monkeypatch):
-        names = [player["name"] for player in load_players()]
+        names = [profile.name for profile, _ in load_players()]
         text = render_rules(load_game_settings(), names)
         document = tmp_path / "RULES.md"
         monkeypatch.setattr(rules_command, "RULES_PATH", document)

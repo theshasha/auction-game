@@ -11,7 +11,13 @@ from auction_game.game import rules
 from auction_game.cli import rules as rules_command
 from auction_game import runners
 from auction_game.cli import offline_demo
+from auction_game.game.lineup import PlayerProfile
 from tests.support.factories import TEST_GAME
+
+
+def configured_players(names):
+    """替换 load_players 的返回值：每个座位的人设和目录键。"""
+    return [(PlayerProfile(name, "人设", "正文", 0), "unused") for name in names]
 
 
 @pytest.mark.parametrize("changed_input", [
@@ -56,7 +62,7 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, changed_input)
     monkeypatch.setattr(rules_command, "RULES_PATH", document_path)
     monkeypatch.setattr(rules_command, "load_game_settings", lambda: configuration.load_game_settings(game_path))
     monkeypatch.setattr(rules_command, "load_players",
-                        lambda **kwargs: configuration.load_players(players_path, models_path, **kwargs))
+                        lambda: configuration.load_players(players_path, configuration.load_model_entries(models_path)))
     monkeypatch.setattr(sys, "argv", ["rules.py"])
 
     assert rules_command.main() == 0
@@ -105,7 +111,7 @@ def test_max_bid_below_example_bids_fails_generation(tmp_path, monkeypatch):
     document = tmp_path / "RULES.md"
     monkeypatch.setattr(rules_command, "RULES_PATH", document)
     monkeypatch.setattr(rules_command, "load_game_settings", lambda: replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID - 1))
-    monkeypatch.setattr(rules_command, "load_players", lambda **kwargs: [{"name": "配置甲"}, {"name": "配置乙"}])
+    monkeypatch.setattr(rules_command, "load_players", lambda: configured_players(["配置甲", "配置乙"]))
     monkeypatch.setattr(sys, "argv", ["rules.py"])
     assert rules_command.main() == 1
     assert not document.exists()
@@ -115,7 +121,7 @@ def test_max_bid_below_example_bids_fails_generation(tmp_path, monkeypatch):
 @pytest.mark.parametrize("entry,module", [(runners.run_ai, runners), (offline_demo.generate_demo, offline_demo)])
 def test_session_rules_error_stops_before_logs(entry, module, monkeypatch, capsys):
     """测试模式的覆盖参数生成不了规则时，在创建场次目录前停止。"""
-    monkeypatch.setattr(rules_command, "load_players", lambda **kwargs: [{"name": "配置甲"}, {"name": "配置乙"}])
+    monkeypatch.setattr(rules_command, "load_players", lambda: configured_players(["配置甲", "配置乙"]))
     monkeypatch.setattr(module, "load_game_settings", lambda test_model=False:
                         replace(TEST_GAME, max_bid=rules.EXAMPLE_MAX_BID - 1) if test_model else TEST_GAME)
     monkeypatch.setattr(module, "make_run_dir", lambda mode: pytest.fail("规则生成不了时不应创建场次目录"))
@@ -141,7 +147,7 @@ def test_all_starts_sync_rules_before_logs_or_models(entry, kwargs, module, boun
     document.write_text("旧规则", encoding="utf-8")
     names = ["配置甲", "配置乙"]
     monkeypatch.setattr(rules_command, "RULES_PATH", document)
-    monkeypatch.setattr(rules_command, "load_players", lambda **kwargs: [{"name": name} for name in names])
+    monkeypatch.setattr(rules_command, "load_players", lambda: configured_players(names))
     monkeypatch.setattr(module, "load_game_settings", lambda test_model=False:
                         replace(TEST_GAME, regular_matches=9) if test_model else TEST_GAME)
 

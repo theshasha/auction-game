@@ -1,11 +1,11 @@
 """合成公共数据验证离线同步、来源边界与有效策略；没有真实模型名单。"""
 
-from copy import deepcopy
+from dataclasses import replace
 import json
 
 import pytest
 import yaml
-from auction_game.configuration import load_configuration, load_model_catalog
+from auction_game.configuration import load_configuration, load_model_entries
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS, effective_capabilities
 from auction_game.cli.sync_models import build_snapshot, main
 
@@ -29,9 +29,9 @@ def test_explicit_reasoning_override_only_changes_selected_model(config_files, e
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     config, normal = load_configuration(*config_files)
     _, testing = load_configuration(*config_files, test_model=True)
-    assert all(p["protocol"] == "chat" and p["model_settings"] == {"openai_reasoning_effort": effort}
+    assert all(p.execution.protocol == "chat" and p.execution.model_settings == {"openai_reasoning_effort": effort}
                for p in testing)
-    assert config["models"]["substitute"]["capabilities"]["reasoning_status"] == effort
+    assert config["models"]["substitute"].capabilities["reasoning_status"] == effort
     path.write_text(original, encoding="utf-8")
     _, unchanged = load_configuration(*config_files)
     assert normal == unchanged
@@ -62,14 +62,14 @@ def test_sync_preview_write_repeat_and_runtime_offline(config_files, tmp_path, c
     assert main([*args, "--write"]) == 0 and output.read_bytes() == after
     monkeypatch.setattr("auction_game.cli.sync_models.urlopen", lambda *a, **kw: pytest.fail("启动必须离线"))
     config, players = load_configuration(*config_files)
-    assert [p["max_tokens"] for p in players] == [900, DEFAULT_MAX_TOKENS]
-    assert players[0]["capabilities"]["limit"]["input"] is None
-    assert players[0]["capabilities"]["reasoning_status"] == "default"
-    assert players[0]["model_settings"] == {}
-    assert players[1]["capabilities"]["output_fallback_reason"]
+    assert [p.execution.max_tokens for p in players] == [900, DEFAULT_MAX_TOKENS]
+    assert players[0].execution.capabilities["limit"]["input"] is None
+    assert players[0].execution.capabilities["reasoning_status"] == "default"
+    assert players[0].execution.model_settings == {}
+    assert players[1].execution.capabilities["output_fallback_reason"]
     _, testing = load_configuration(*config_files, test_model=True)
-    assert all(p["max_tokens"] == 1900 and p["model_settings"] == {"openai_reasoning_effort": "medium"}
-               and p["capabilities"] == config["models"]["substitute"]["capabilities"] for p in testing)
+    assert all(p.execution.max_tokens == 1900 and p.execution.model_settings == {"openai_reasoning_effort": "medium"}
+               and p.execution.capabilities == config["models"]["substitute"].capabilities for p in testing)
 
 
 def test_failed_import_keeps_snapshot(config_files, tmp_path):
@@ -95,38 +95,38 @@ def test_network_failure_and_request_headers_keep_snapshot(config_files, tmp_pat
 
 @pytest.mark.parametrize("output", [None, 0, "900"])
 def test_invalid_output_falls_back_without_conflating_input(config_files, output):
-    catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
+    catalog = load_model_entries(config_files[2])
     data = public_data()
     data["official"]["models"]["source-c"]["limit"]["output"] = output
     snapshot = build_snapshot(catalog, data, "synthetic")
-    effective = effective_capabilities("substitute", catalog["substitute"], snapshot)
+    effective = effective_capabilities(catalog["substitute"], snapshot)
     assert effective["max_tokens"] == DEFAULT_MAX_TOKENS
     assert effective["capabilities"]["limit"] == {"context": 9999, "input": 8000, "output": None}
     assert effective["capabilities"]["output_fallback_reason"]
 
 
 def test_missing_or_changed_source_uses_defaults(config_files):
-    catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
+    catalog = load_model_entries(config_files[2])
     data = public_data()
     data["official"]["models"]["Source-C"] = data["official"]["models"].pop("source-c")
-    effective = effective_capabilities("substitute", catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
+    effective = effective_capabilities(catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
     assert effective["max_tokens"] == DEFAULT_MAX_TOKENS and not effective["model_settings"]
     assert effective["capabilities"]["reasoning_status"] == "default"
     assert "未找到配置指定的精确来源" in effective["capabilities"]["output_fallback_reason"]
     snapshot = build_snapshot(catalog, public_data(), "synthetic")
-    changed = deepcopy(catalog["substitute"])
-    changed["models_dev"]["model"] = "new-source"
-    effective = effective_capabilities("substitute", changed, snapshot)
+    original = catalog["substitute"]
+    changed = replace(original, models_dev={**original.models_dev, "model": "new-source"})
+    effective = effective_capabilities(changed, snapshot)
     assert effective["max_tokens"] == DEFAULT_MAX_TOKENS and not effective["model_settings"]
     assert "来源已变更" in effective["capabilities"]["output_fallback_reason"]
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
 def test_medium_uses_protocol_setting_without_manual_binding(config_files, protocol):
-    catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
-    catalog["substitute"]["protocol"] = protocol
+    catalog = load_model_entries(config_files[2])
+    catalog["substitute"] = replace(catalog["substitute"], protocol=protocol)
     snapshot = build_snapshot(catalog, public_data(), "synthetic")
-    effective = effective_capabilities("substitute", catalog["substitute"], snapshot)
+    effective = effective_capabilities(catalog["substitute"], snapshot)
     assert effective["model_settings"] == ({"anthropic_thinking": {"type": "adaptive"}, "anthropic_effort": "medium"}
                                            if protocol == "anthropic"
                                            else {"openai_reasoning_effort": "medium"})
@@ -136,18 +136,18 @@ def test_medium_uses_protocol_setting_without_manual_binding(config_files, proto
 @pytest.mark.parametrize("options", [[{"type": "toggle"}], [{"type": "budget_tokens", "min": 1, "max": 10000}],
                                      [{"type": "effort", "values": ["high"]}], []])
 def test_options_without_medium_keep_channel_default(config_files, options):
-    catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
+    catalog = load_model_entries(config_files[2])
     data = public_data()
     data["official"]["models"]["source-c"]["reasoning_options"] = options
-    effective = effective_capabilities("substitute", catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
+    effective = effective_capabilities(catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
     assert effective["model_settings"] == {}
     assert effective["capabilities"]["reasoning_status"] == "default"
     assert effective["capabilities"]["reasoning_options"] == options
 
 
 def test_output_budget_is_not_reduced_by_input_or_context(config_files):
-    catalog = load_model_catalog(config_files[2], resolve_capabilities=False)
+    catalog = load_model_entries(config_files[2])
     data = public_data()
     data["official"]["models"]["source-c"]["limit"]["output"] = 9000
-    effective = effective_capabilities("substitute", catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
+    effective = effective_capabilities(catalog["substitute"], build_snapshot(catalog, data, "synthetic"))
     assert effective["max_tokens"] == 9000

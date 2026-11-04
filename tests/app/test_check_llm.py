@@ -58,7 +58,7 @@ def test_test_model_checks_one_target_with_its_settings(config_files, monkeypatc
 @pytest.mark.parametrize("text", ["OK", "ok"])
 def test_probe_accepts_any_reply_and_shows_it(text, config_files, monkeypatch, capsys):
     config, players = load_configuration(*config_files)
-    config["models"]["substitute"]["protocol"] = "chat"
+    config["models"]["substitute"] = replace(config["models"]["substitute"], protocol="chat")
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: (config, players))
     harness = Harness("chat", [reply(text=text)])
     monkeypatch.setattr(check_llm, "make_model_factory", lambda **kwargs: replace(
@@ -72,7 +72,7 @@ def test_probe_accepts_any_reply_and_shows_it(text, config_files, monkeypatch, c
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_probe_transport_failure_has_no_retry(protocol, config_files, monkeypatch, capsys):
     config, players = load_configuration(*config_files)
-    config["models"]["substitute"]["protocol"] = protocol
+    config["models"]["substitute"] = replace(config["models"]["substitute"], protocol=protocol)
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: (config, players))
     harness = Harness(protocol, ["connect"])
     monkeypatch.setattr(check_llm, "make_model_factory", lambda **kwargs: replace(

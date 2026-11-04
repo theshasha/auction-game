@@ -2,22 +2,59 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import yaml
 
 from auction_game.agent.text_output import FIXED_TAGS
+from auction_game.game.lineup import PlayerProfile
 from auction_game.game.settings import GameSettings
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
 from auction_game.paths import (ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, MODELS_PATH, GAME_PATH, CAPABILITIES_PATH,
                                 WRITING_STYLE_PATH)
 PROTOCOLS = ("chat", "responses", "anthropic")
-EXECUTION_FIELDS = ("model", "provider", "protocol", "max_tokens", "model_settings", "capabilities")
+MODEL_FIELDS = ("name", "model", "provider", "protocol", "reasoning_effort", "models_dev")
 PROMPT_FLAGS = ("enable_predictions", "enable_personas", "enable_writing_style")
 
 
 class ConfigurationError(ValueError):
     """带文件和字段位置的配置错误，命令行入口直接打印。"""
+
+
+@dataclass(frozen=True, kw_only=True)
+class ModelEntry:
+    """模型目录的一个条目：key 是目录键，其余是 YAML 里的字段，可选字段没写时为 None。"""
+
+    key: str
+    model: str
+    provider: str
+    protocol: str
+    models_dev: dict
+    name: str | None = None
+    reasoning_effort: str | None = None
+
+    def to_dict(self) -> dict:
+        """写进场次快照；没写的可选字段不输出。"""
+        return {field: value for field, value in asdict(self).items() if value is not None}
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResolvedModel(ModelEntry):
+    """按能力快照补上输出预算和推理设置的目录条目。"""
+
+    max_tokens: int
+    model_settings: dict
+    capabilities: dict
+
+
+@dataclass(frozen=True)
+class PlayerConfig:
+    """identity 是身份所在的目录条目，execution 是实际调用的；测试模式只替换 execution。"""
+
+    profile: PlayerProfile
+    identity: ResolvedModel
+    execution: ResolvedModel
 
 
 def _read_mapping(path: Path) -> dict:
@@ -35,12 +72,8 @@ def load_configuration(
     players_path: str | Path = PLAYERS_PATH,
     models_path: str | Path = MODELS_PATH,
     *, test_model: bool = False, snapshot_path: str | Path | None = None,
-) -> tuple[dict, list[dict]]:
-    """返回运行设置（含 models 目录）和本场玩家。
-
-    玩家的平铺字段是实际调用配置，identity_model 是身份所在的目录条目；
-    测试模式只替换执行配置，名字和人设不变。
-    """
+) -> tuple[dict, list[PlayerConfig]]:
+    """返回运行设置（含 models 目录）和按座位排列的本场玩家；测试模式全员用测试模型调用。"""
     config_path = ROOT_DIR / config_path
     players_path = ROOT_DIR / players_path
     config = _read_mapping(config_path)
@@ -81,21 +114,16 @@ def load_configuration(
 
     catalog = load_model_catalog(models_path, snapshot_path=snapshot_path)
     for key, model in catalog.items():
-        if model["provider"] not in channels:
+        if model.provider not in channels:
             raise ConfigurationError(
-                f"{ROOT_DIR / models_path}：models.{key}.provider 未知渠道：{model['provider']!r}"
+                f"{ROOT_DIR / models_path}：models.{key}.provider 未知渠道：{model.provider!r}"
             )
     test_key = config.get("test_model")
     if not isinstance(test_key, str) or test_key not in catalog:
         raise ConfigurationError(f"{config_path}：test_model 必须引用 models.yaml 中的目录键")
     config["models"] = catalog
-    players = load_players(players_path, models_path, catalog=catalog)
-    if test_model:
-        execution = catalog[test_key]
-        for player in players:
-            player.update({key: execution[key] for key in EXECUTION_FIELDS})
-            player["model_key"] = test_key
-    return config, players
+    return config, [PlayerConfig(profile, catalog[key], catalog[test_key if test_model else key])
+                    for profile, key in load_players(players_path, catalog)]
 
 
 def load_game_settings(path: str | Path = GAME_PATH, *, test_model: bool = False) -> GameSettings:
@@ -113,17 +141,33 @@ def load_game_settings(path: str | Path = GAME_PATH, *, test_model: bool = False
         raise ConfigurationError(f"{path}：{exc}") from exc
 
 
-def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=True,
-                       snapshot_path: str | Path | None = None) -> dict[str, dict]:
-    """读取模型目录；name 是条目参赛时默认的角色名。"""
+def load_model_catalog(path: str | Path = MODELS_PATH, *,
+                       snapshot_path: str | Path | None = None) -> dict[str, ResolvedModel]:
+    """读取模型目录，并按能力快照补上每个条目的输出预算和推理设置。"""
+    entries = load_model_entries(path)
+    try:
+        snapshot = read_snapshot(ROOT_DIR / (snapshot_path if snapshot_path is not None else CAPABILITIES_PATH))
+    except (OSError, ValueError) as exc:
+        raise ConfigurationError(f"{ROOT_DIR / path}：能力快照读取失败：{exc}。"
+                                 "请运行 python -m auction_game.cli.sync_models --write 更新快照。") from exc
+    return {key: ResolvedModel(**asdict(entry), **effective_capabilities(entry, snapshot))
+            for key, entry in entries.items()}
+
+
+def load_model_entries(path: str | Path = MODELS_PATH) -> dict[str, ModelEntry]:
+    """只读取模型目录的 YAML 字段，不读能力快照；name 是条目参赛时默认的角色名。"""
     path = ROOT_DIR / path
     models = _read_mapping(path).get("models")
     if not isinstance(models, dict) or not models:
         raise ConfigurationError(f"{path}：models 必须是非空键值配置")
+    entries = {}
     for key, model in models.items():
         field = f"models.{key}"
         if not isinstance(model, dict):
             raise ConfigurationError(f"{path}：{field} 必须是键值配置")
+        extra = set(model) - set(MODEL_FIELDS)
+        if extra:
+            raise ConfigurationError(f"{path}：{field} 不支持字段：{', '.join(sorted(extra))}")
         for prop in ("model", "provider"):
             if not isinstance(model.get(prop), str) or not model[prop].strip():
                 raise ConfigurationError(f"{path}：{field}.{prop} 必须是非空字符串")
@@ -137,22 +181,18 @@ def load_model_catalog(path: str | Path = MODELS_PATH, *, resolve_capabilities=T
             raise ConfigurationError(f"{path}：{field}.models_dev 必须指定精确 provider/model")
         if "name" in model and (not isinstance(model["name"], str) or not model["name"].strip()):
             raise ConfigurationError(f"{path}：{field}.name 必须是非空字符串")
-    if resolve_capabilities:
-        try:
-            snapshot = read_snapshot(ROOT_DIR / (snapshot_path if snapshot_path is not None else CAPABILITIES_PATH))
-        except (OSError, ValueError) as exc:
-            raise ConfigurationError(f"{path}：能力快照读取失败：{exc}。"
-                                     "请运行 python -m auction_game.cli.sync_models --write 更新快照。") from exc
-        for key, model in models.items():
-            model.update(effective_capabilities(key, model, snapshot))
-    return models
+        entries[key] = ModelEntry(key=key, **model)
+    return entries
 
 
-def load_players(path: str | Path = PLAYERS_PATH, models_path: str | Path = MODELS_PATH,
-                 *, catalog: dict | None = None, resolve_capabilities=True) -> list[dict]:
-    """合并身份目录和人设，得到本场玩家；规则生成和比赛入口共用。"""
+def load_players(path: str | Path = PLAYERS_PATH,
+                 entries: dict[str, ModelEntry] | None = None) -> list[tuple[PlayerProfile, str]]:
+    """按座位返回每名玩家的人设和身份所在的目录键；规则生成和比赛入口共用。
+
+    entries 没传时只读 models.yaml 的 YAML 字段，不读能力快照。
+    """
     players_path = ROOT_DIR / path
-    catalog = catalog if catalog is not None else load_model_catalog(models_path, resolve_capabilities=resolve_capabilities)
+    entries = entries if entries is not None else load_model_entries()
     players = _read_mapping(players_path).get("players")
     if not isinstance(players, list) or len(players) < 2:
         raise ConfigurationError(f"{players_path}：players 必须是至少两名玩家的列表")
@@ -170,10 +210,9 @@ def load_players(path: str | Path = PLAYERS_PATH, models_path: str | Path = MODE
             if not isinstance(value, str) or not value.strip():
                 raise ConfigurationError(f"{players_path}：{field}.{key} 必须是非空字符串")
         model_key = player["model"]
-        if model_key not in catalog:
+        if model_key not in entries:
             raise ConfigurationError(f"{players_path}：{field}.model 未知目录键：{model_key!r}")
-        identity = {"key": model_key, **catalog[model_key]}
-        name = _player_name(players_path, field, player, model_key, identity.get("name"))
+        name = _player_name(players_path, field, player, model_key, entries[model_key].name)
         if name in names:
             raise ConfigurationError(f"{players_path}：{field} 名字重复：{name!r}；"
                                      "同一个模型放多名玩家时，给每人写 name")
@@ -181,8 +220,7 @@ def load_players(path: str | Path = PLAYERS_PATH, models_path: str | Path = MODE
         rate = player.get("predicted_win_rate", 0)
         if type(rate) not in (int, float) or not 0 <= rate <= 100:
             raise ConfigurationError(f"{players_path}：{field}.predicted_win_rate 必须是 0~100 的数字")
-        resolved.append({**player, **catalog[model_key], "name": name, "model_key": model_key,
-                         "identity_model": identity, "predicted_win_rate": rate})
+        resolved.append((PlayerProfile(name, player["persona_title"], player["persona_text"], rate), model_key))
     return resolved
 
 

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from auction_game.configuration import MODELS_PATH, load_model_catalog
+from auction_game.configuration import MODELS_PATH, ModelEntry, load_model_entries
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
 from auction_game.paths import CAPABILITIES_PATH
 
@@ -20,11 +20,11 @@ def positive_integer(value):
     return value if type(value) is int and value > 0 else None
 
 
-def build_snapshot(catalog: dict, data: dict, retrieved_from: str) -> dict:
+def build_snapshot(catalog: dict[str, ModelEntry], data: dict, retrieved_from: str) -> dict:
     """按 models.yaml 的精确来源取条目；数值上限规范成正整数或 None。"""
     entries = {}
     for key, model in catalog.items():
-        source = model["models_dev"]
+        source = model.models_dev
         item = data.get(source["provider"], {}).get("models", {}).get(source["model"])
         entry = {"source": source}
         if item is None:
@@ -50,7 +50,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     output = args.output or CAPABILITIES_PATH
     try:
-        catalog = load_model_catalog(args.models, resolve_capabilities=False)
+        catalog = load_model_entries(args.models)
         if args.input:
             text = args.input.read_text(encoding="utf-8")
         else:
@@ -70,7 +70,7 @@ def main(argv=None) -> int:
         else:
             print("能力无变化。")
         for key, model in catalog.items():
-            effective = effective_capabilities(key, model, snapshot)
+            effective = effective_capabilities(model, snapshot)
             cap = effective["capabilities"]
             print(f"{key}: max_tokens={effective['max_tokens']} / reasoning={cap['reasoning_status']} / "
                   f"{cap['reasoning_detail']}")

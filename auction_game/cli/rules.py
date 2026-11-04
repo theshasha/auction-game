@@ -33,7 +33,7 @@ def main() -> int:
 
 def _identity_names():
     # 根规则用配置中的角色名；只需目录和名单，不读能力快照。
-    return [player["name"] for player in load_players(resolve_capabilities=False)]
+    return [profile.name for profile, _ in load_players()]
 
 
 def _write_if_changed(text):

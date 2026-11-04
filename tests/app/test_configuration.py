@@ -7,7 +7,7 @@ import yaml
 
 from auction_game.cli import check_llm
 from auction_game import runners
-from auction_game.configuration import ConfigurationError, EXECUTION_FIELDS, load_configuration
+from auction_game.configuration import ConfigurationError, load_configuration
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS
 from tests.support.factories import CHANNELS
 
@@ -25,8 +25,8 @@ def test_defaults_and_preserved_values(config_files):
     assert config["prompts"] == {"enable_predictions": True, "enable_personas": True,
                                  "enable_writing_style": True}
     assert config["writing_style"] == "【写作要求】\n合成写作要求。\n"
-    assert [player["predicted_win_rate"] for player in players] == [23, 0]
-    assert [p["protocol"] for p in players] == ["chat", "anthropic"]
+    assert [player.profile.predicted_win_rate for player in players] == [23, 0]
+    assert [p.execution.protocol for p in players] == ["chat", "anthropic"]
 
 
 def test_missing_prompt_switch_defaults_to_true(config_files):
@@ -109,8 +109,8 @@ def test_lineup_name_replaces_catalog_name_and_keeps_identity(config_files):
     rewrite(config_files[1], lambda data: data["players"][0].update(name="小红"))
     _, renamed = load_configuration(*config_files)
     _, testing = load_configuration(*config_files, test_model=True)
-    assert [player["name"] for player in renamed] == [player["name"] for player in testing] == ["小红", "乙"]
-    assert [player["identity_model"] for player in renamed] == [player["identity_model"] for player in original]
+    assert [player.profile.name for player in renamed] == [player.profile.name for player in testing] == ["小红", "乙"]
+    assert [player.identity for player in renamed] == [player.identity for player in original]
 
 
 def test_same_model_plays_twice_with_separate_names(config_files):
@@ -120,7 +120,7 @@ def test_same_model_plays_twice_with_separate_names(config_files):
 
     rewrite(config_files[1], add_twin)
     _, players = load_configuration(*config_files)
-    assert [(player["name"], player["model_key"]) for player in players] == [
+    assert [(player.profile.name, player.identity.key) for player in players] == [
         ("甲一", "first"), ("乙", "second"), ("甲二", "first")]
 
 
@@ -132,7 +132,7 @@ def test_catalog_entry_without_name_needs_lineup_name(config_files):
     assert f"{players_path}：players[1] 没有名字：在这里写 name，或给 models.substitute 加 name" == str(exc.value)
     rewrite(players_path, lambda data: data["players"][1].update(name="丙"))
     _, players = load_configuration(*config_files)
-    assert (players[1]["name"], players[1]["model_key"]) == ("丙", "substitute")
+    assert (players[1].profile.name, players[1].identity.key) == ("丙", "substitute")
 
 
 @pytest.mark.parametrize("name,reason", [
@@ -168,7 +168,7 @@ def test_catalog_name_is_checked_only_when_used(config_files):
     assert str(exc.value) == f"{players_path}：players[1] 的名字取自 models.second.name，不能含空白和 <、>、/：'乙 二'"
     rewrite(players_path, lambda data: data["players"][1].update(name="乙二"))
     _, players = load_configuration(*config_files)
-    assert [player["name"] for player in players] == ["甲", "乙二"]
+    assert [player.profile.name for player in players] == ["甲", "乙二"]
 
 
 @pytest.mark.parametrize("file_index,change", [
@@ -181,6 +181,15 @@ def test_duplicate_names(config_files, file_index, change):
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value) == f"{players_path}：players[1] 名字重复：'甲'；同一个模型放多名玩家时，给每人写 name"
+
+
+@pytest.mark.parametrize("field", ["reasoning_efort", "key"])
+def test_unknown_catalog_field_rejected(config_files, field):
+    models_path = config_files[2]
+    rewrite(models_path, lambda data: data["models"]["first"].update({field: "low"}))
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value) == f"{models_path}：models.first 不支持字段：{field}"
 
 
 def test_invalid_catalog_protocol(config_files):
@@ -225,22 +234,18 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
     config_path, _, models_path = config_files
     rewrite(models_path, lambda data: data["models"]["substitute"].update(reasoning_effort="low"))
     # 先加载带 low 覆盖的替身，再切换目录键，检查旧配置不污染下一次启动。
-    assert load_configuration(*config_files, test_model=True)[1][0]["model_settings"] == {
+    assert load_configuration(*config_files, test_model=True)[1][0].execution.model_settings == {
         "openai_reasoning_effort": "low"}
     rewrite(config_path, lambda data: data.update(test_model=test_key))
     config, regular = load_configuration(*config_files)
     _, testing = load_configuration(*config_files, test_model=True)
     target = config["models"][config["test_model"]]
     for original, replaced in zip(regular, testing):
-        for key in ("name", "persona_title", "persona_text", "predicted_win_rate", "identity_model"):
-            assert original[key] == replaced[key]
-        for key in EXECUTION_FIELDS:
-            assert replaced[key] == target[key]
-        assert replaced["model_key"] == config["test_model"]
-    assert testing[0] is not testing[1]
+        assert (replaced.profile, replaced.identity) == (original.profile, original.identity)
+        assert replaced.execution == target
     if test_key == "first":
-        assert all(player["model_settings"] == {} for player in testing)
-        assert config["models"]["substitute"]["model_settings"] == {"openai_reasoning_effort": "low"}
+        assert all(player.execution.model_settings == {} for player in testing)
+        assert config["models"]["substitute"].model_settings == {"openai_reasoning_effort": "low"}
     assert load_configuration(*config_files)[1] == regular
 
 

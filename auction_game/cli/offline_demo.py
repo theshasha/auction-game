@@ -158,7 +158,7 @@ def generate_demo(output: Path | None = None, *, test_model=False):
     config, configs = load_configuration(test_model=test_model)
     game = load_game_settings(test_model=test_model)
     sync_root_rules(load_game_settings())
-    names = [pc["name"] for pc in configs]
+    names = [pc.profile.name for pc in configs]
     rules = render_rules(game, names)
     factories = []
 
