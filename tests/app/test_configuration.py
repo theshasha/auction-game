@@ -145,9 +145,10 @@ def test_catalog_entry_without_name_needs_lineup_name(config_files):
     ("小\n红", "不能含空白和 <、>、/"),
     ("<小红>", "不能含空白和 <、>、/：'<小红>'"),
     ("甲/乙", "不能含空白和 <、>、/：'甲/乙'"),
-    ("strategy", "不能是 strategy、decision、speech：'strategy'"),
-    ("decision", "不能是 strategy、decision、speech：'decision'"),
-    ("speech", "不能是 strategy、decision、speech：'speech'"),
+    ("strategy", "不能是 strategy、decision、speech、队内信件区：'strategy'"),
+    ("decision", "不能是 strategy、decision、speech、队内信件区：'decision'"),
+    ("speech", "不能是 strategy、decision、speech、队内信件区：'speech'"),
+    ("队内信件区", "不能是 strategy、decision、speech、队内信件区：'队内信件区'"),
 ])
 def test_invalid_lineup_names(config_files, name, reason):
     players_path = config_files[1]

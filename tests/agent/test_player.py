@@ -8,7 +8,7 @@ import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPromptPart, SystemPromptPart
 
 from auction_game.llm.execution import OutputFailedError
-from auction_game.agent.text_output import BRIEF_BID_FORMAT, DECISION, LetterNames, SPEECH, output_requirement
+from auction_game.agent.text_output import DECISION, LetterNames, SPEECH, output_requirement
 from tests.support.factories import (ALL_NAMES, TEST_GAME, TEST_LINEUP, bid_reply, fake_task_runner, make_ai_obs,
                                      make_player, request_text, speech_reply, text_reply, task_entries)
 from auction_game.agent import prompts
@@ -145,7 +145,7 @@ def test_plan_has_full_format_and_bids_get_one_line(tmp_path):
     player.plan_strategy("请规划", "第 1 局策略规划（含首日出价）")
     player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     assert request_text(runner, 0) == "请规划\n\n" + output_requirement(DECISION, LETTERS)
-    assert request_text(runner, 1).endswith("\n\n" + BRIEF_BID_FORMAT)
+    assert request_text(runner, 1).endswith("\n\n请按本局规划时的格式提交：strategy 和 decision 两块，私信块可以不写。")
     # 送达时机写在任务提示后面，只附一句格式时也有。
     assert "现在写的私信，收件人明天出价时才收到" in request_text(runner, 1)
 

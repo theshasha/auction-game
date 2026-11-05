@@ -12,8 +12,8 @@ from pydantic_ai.usage import UsageLimits
 from auction_game.llm.execution import AgentExecutor, ExecutionResult
 from auction_game.game.settings import GameSettings, validate_submission
 from auction_game.llm.client import ModelFactory
-from auction_game.agent.text_output import (BRIEF_BID_FORMAT, DECISION, SPEECH, Blocks, LetterNames,
-                                            OutputFormatError, output_requirement, parse_text_output)
+from auction_game.agent.text_output import (DECISION, SPEECH, Blocks, LetterScope, OutputFormatError,
+                                            output_requirement, parse_text_output)
 
 Task = Literal["bid", "plan", "speech", "memory", "summary"]
 
@@ -113,7 +113,6 @@ class TaskSpec:
 
     second 是 strategy 之后那一块，None 表示直接返回正文；decision 块的出价要通过出价校验。
     history 是结果写回对话的方式：append 追加，reset 用记忆替换之前的对话，review 只读全场回顾、不写回。
-    brief 不为空时，请求后只附这一句格式提示，纠错时仍给完整格式。
     """
 
     name: Task
@@ -121,11 +120,10 @@ class TaskSpec:
     output: type
     can_write_letters: bool
     history: Literal["append", "reset", "review"]
-    brief: str | None = None
 
 
 TASKS: dict[str, TaskSpec] = {
-    "bid": TaskSpec("bid", DECISION, BidOutput, True, "append", brief=BRIEF_BID_FORMAT),
+    "bid": TaskSpec("bid", DECISION, BidOutput, True, "append"),
     "plan": TaskSpec("plan", DECISION, BidOutput, True, "append"),
     "speech": TaskSpec("speech", SPEECH, SpeechOutput, True, "append"),
     "memory": TaskSpec("memory", None, MemoryOutput, False, "reset"),
@@ -139,8 +137,8 @@ class AuctionDeps:
     coins: int
 
 
-def make_agent(model, spec: TaskSpec, letters: LetterNames | None = None):
-    """letters 是这个任务可以写信的名单，不传表示不能写信。"""
+def make_agent(model, spec: TaskSpec, letters: LetterScope | None = None):
+    """letters 是这个任务的写信范围，不传表示不能写信。"""
     def parse(text: str) -> TaskOutput:
         try:
             return spec.output.from_parsed(parse_text_output(spec.second, text, letters))
@@ -166,9 +164,10 @@ class TaskRunner:
     def __init__(self, factory: ModelFactory):
         self.executor = AgentExecutor(factory)
 
-    def __call__(self, spec: TaskSpec, prompt: str, history: list[ModelMessage], *,
-                 game: GameSettings, coins: int = 0, letters: LetterNames | None = None) -> ExecutionResult:
-        requirement = spec.brief or output_requirement(spec.second, letters)
+    def __call__(self, spec: TaskSpec, prompt: str, history: list[ModelMessage], *, game: GameSettings,
+                 coins: int = 0, letters: LetterScope | None = None, brief: str | None = None) -> ExecutionResult:
+        """brief 不为空时，请求后只附这一句格式提示，纠错时仍给完整格式。"""
+        requirement = brief or output_requirement(spec.second, letters)
         # retries=1 是纠错次数；request_limit 另外限定整个任务最多两次请求。
         return self.executor(make_agent(None, spec, letters), f"{prompt}\n\n{requirement}", history,
                              deps=AuctionDeps(game, coins), usage_limits=UsageLimits(request_limit=2))

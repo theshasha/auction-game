@@ -68,8 +68,11 @@ class AIPlayer:
         self.review_messages = list(review)
 
     def _task(self, name: Task, prompt: str, title: str, context: str | None = None, *,
-              coins: int = 0, letters: bool = True) -> TaskOutput:
-        """title 是这一轮的标题，用作私人日志的小节标题；context 默认同 title。letters 为假时这次不能写信。"""
+              coins: int = 0, letters: bool = True, brief: str | None = None) -> TaskOutput:
+        """title 是这一轮的标题，用作私人日志的小节标题；context 默认同 title。letters 为假时这次不能写信。
+
+        brief 是只附一句格式提示时的那一句，不传就附完整格式。
+        """
         spec = TASKS[name]
         entry = {"title": title, "task": name, "context": title if context is None else context}
         if spec.history == "review":
@@ -77,7 +80,8 @@ class AIPlayer:
         history = self.review_messages if spec.history == "review" else self.messages
         try:
             result = self.task_runner(spec, prompt, history, game=self.game, coins=coins,
-                                      letters=self.letter_names if spec.can_write_letters and letters else None)
+                                      letters=self.letter_names if spec.can_write_letters and letters else None,
+                                      brief=brief)
         except CallFailedError as exc:
             self.log.failure(entry, exc)
             raise
@@ -104,7 +108,8 @@ class AIPlayer:
         """received 是收到的信，写信人到正文。出价请求从第 2 天起发出，第 1 天的出价由本局规划交出。"""
         # 本局规划请求里有完整格式，整理记忆前一直留在对话里，出价请求只附一句提示。
         return self._task("bid", prompts.bid_request(obs, received=received), title,
-                          f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins)
+                          f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
+                          brief=self.letter_names.brief_bid)
 
     def give_speech(self, user_text: str, title: str, *, letters: bool = True) -> SpeechOutput:
         """公开发言只有 speech 给其他玩家看，私有策略只留在自己的对话历史和日志里。最终感言不能写信。"""

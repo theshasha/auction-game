@@ -2,7 +2,7 @@
 
 import pytest
 
-from auction_game.agent.text_output import (DECISION, SPEECH, Blocks, LetterNames, OutputFormatError,
+from auction_game.agent.text_output import (BOARD, DECISION, SPEECH, Blocks, LetterNames, OutputFormatError, TeamBoard,
                                             output_requirement, parse_text_output)
 from auction_game.game.settings import validate_submission
 from tests.support.factories import TEST_GAME, text_reply, task_entries
@@ -146,3 +146,73 @@ def test_letter_format_lists_recipients_and_ends_with_letter_block(second):
             in text)
     assert text.endswith("\n<收件人名字>\n只有收件人能看到的私信。\n</收件人名字>")
     assert "收件人" not in output_requirement(second)
+
+
+BOARD_LETTER = letter(BOARD, "第一行\n\n第二行")
+TEAM_ORDER = "必须先依次提交 strategy 与 decision 两块，标签各占一行且各出现一次，队内信件区的信放在最后。"
+TEAM_PAIR = "队内信件区的信以 <队内信件区> 开始、以 </队内信件区> 结束，标签各占一行。"
+TEAM_OUTSIDE = "协议块外只允许空白。给队友的信只能写在 <队内信件区> 块里。"
+
+
+@pytest.mark.parametrize("second,base,body", [
+    (DECISION, GOOD, {"bid": 2, "super_bid": None}),
+    (SPEECH, SPEECH_TEXT, "发言"),
+])
+def test_team_letter_goes_to_the_board(second, base, body):
+    assert parse_text_output(second, base, TeamBoard()) == Blocks("策略", body, [])
+    written = [{"to": BOARD, "text": "第一行\n\n第二行"}]
+    assert parse_text_output(second, base + BOARD_LETTER, TeamBoard()) == Blocks("策略", body, written)
+
+
+@pytest.mark.parametrize("raw,message", [
+    (GOOD + letter("乙"), TEAM_OUTSIDE),
+    (GOOD + BOARD_LETTER + "\n尾随正文", TEAM_OUTSIDE),
+    (GOOD + f"\n<{BOARD}>\n信", TEAM_PAIR),
+    (GOOD + f"\n<{BOARD}>\n信\n<{BOARD}>", TEAM_PAIR),
+    (BOARD_LETTER.lstrip() + "\n" + GOOD, TEAM_ORDER),
+    (GOOD + letter(BOARD, "<speech>\n嵌套\n</speech>"), TEAM_ORDER),
+    (GOOD + BOARD_LETTER + BOARD_LETTER, "最多写 1 封队内信件区的信。"),
+    (GOOD + letter(BOARD, " \n\t"), "队内信件区的信正文不能为空。"),
+], ids=["name-tag", "trailing-text", "unclosed", "mismatched", "before-strategy", "fixed-tag-inside", "two", "blank"])
+def test_team_letter_format_errors(raw, message):
+    with pytest.raises(OutputFormatError) as exc:
+        parse_text_output(DECISION, raw, TeamBoard())
+    assert str(exc.value) == message
+
+
+DISCUSSION = f"<strategy>\n策略\n</strategy>{BOARD_LETTER}"
+
+
+def test_discussion_returns_the_letter_as_body():
+    assert parse_text_output(BOARD, DISCUSSION) == Blocks("策略", "第一行\n\n第二行", [])
+
+
+@pytest.mark.parametrize("raw", ["<strategy>\n策略\n</strategy>", DISCUSSION + BOARD_LETTER], ids=["missing", "two"])
+def test_discussion_needs_exactly_one_letter(raw):
+    with pytest.raises(OutputFormatError) as exc:
+        parse_text_output(BOARD, raw)
+    assert str(exc.value) == "必须依次提交 strategy 与 队内信件区 两块，标签各占一行且各出现一次。"
+
+
+def test_discussion_letter_cannot_be_blank():
+    with pytest.raises(OutputFormatError) as exc:
+        parse_text_output(BOARD, f"<strategy>\n策略\n</strategy>{letter(BOARD, ' ')}")
+    assert str(exc.value) == "strategy 与 队内信件区 都必须有非空正文。"
+
+
+@pytest.mark.parametrize("second", [DECISION, SPEECH])
+def test_team_format_shows_the_board_block(second):
+    text = output_requirement(second, TeamBoard())
+    assert "队内信件区的信可以不写，最多 1 封，约 300 字。\n" in text
+    assert text.endswith("\n<队内信件区>\n只有队友能看到的信。\n</队内信件区>")
+    assert "私信" not in text and "收件人" not in text
+
+
+def test_discussion_format_has_strategy_and_letter_blocks():
+    assert output_requirement(BOARD).endswith(
+        "\n<strategy>\n仅自己可见的讨论策略。\n</strategy>\n<队内信件区>\n只有队友能看到的信。\n</队内信件区>")
+
+
+def test_team_name_tag_inside_a_letter_stays_text():
+    raw = GOOD + letter(BOARD, "<乙>\n信\n</乙>")
+    assert parse_text_output(DECISION, raw, TeamBoard()).letters == [{"to": BOARD, "text": "<乙>\n信\n</乙>"}]

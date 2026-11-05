@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from auction_game.agent.text_output import FIXED_TAGS
+from auction_game.agent.text_output import RESERVED_NAMES
 from auction_game.game.lineup import PlayerProfile
 from auction_game.game.settings import GameSettings
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
@@ -293,6 +293,6 @@ def _player_name(path, field, player, model_key, catalog_name) -> str:
         label = f"{field} 的名字取自 models.{model_key}.name，"
     if any(char.isspace() or char in "<>/" for char in name):
         raise ConfigurationError(f"{path}：{label}不能含空白和 <、>、/：{name!r}")
-    if name in FIXED_TAGS:
-        raise ConfigurationError(f"{path}：{label}不能是 {'、'.join(FIXED_TAGS)}：{name!r}")
+    if name in RESERVED_NAMES:
+        raise ConfigurationError(f"{path}：{label}不能是 {'、'.join(RESERVED_NAMES)}：{name!r}")
     return name
