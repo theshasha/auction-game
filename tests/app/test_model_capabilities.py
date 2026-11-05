@@ -127,7 +127,8 @@ def test_medium_uses_protocol_setting_without_manual_binding(config_files, proto
     catalog["substitute"] = replace(catalog["substitute"], protocol=protocol)
     snapshot = build_snapshot(catalog, public_data(), "synthetic")
     effective = effective_capabilities(catalog["substitute"], snapshot)
-    assert effective["model_settings"] == ({"anthropic_thinking": {"type": "adaptive"}, "anthropic_effort": "medium"}
+    assert effective["model_settings"] == ({"anthropic_cache_messages": "1h", "anthropic_thinking": {"type": "adaptive"},
+                                            "anthropic_effort": "medium"}
                                            if protocol == "anthropic"
                                            else {"openai_reasoning_effort": "medium"})
     assert effective["capabilities"]["reasoning_status"] == "medium"

@@ -37,7 +37,8 @@ def effective_capabilities(model: ModelEntry, snapshot: dict) -> dict:
     options = entry.get("reasoning_options", [])
     has_medium = any(option.get("type") == "effort" and "medium" in option.get("values", [])
                      for option in options)
-    settings = {}
+    # 比赛一轮常超过 5 分钟。消息级缓存点是兼容网关用的写法，不依赖请求顶层的 cache_control。
+    settings = {"anthropic_cache_messages": "1h"} if model.protocol == "anthropic" else {}
     if model.reasoning_effort is not None:
         status, detail = model.reasoning_effort, "models.yaml 指定"
     elif has_medium:
