@@ -2,7 +2,7 @@
 
 ## 按任务查代码
 
-- `director.py`：`AIDirector.run()` 按顺序写完整场，各阶段的轮次和私信邮箱也在这里。
+- `director.py`：`AIDirector.run()` 按顺序写完整场，各阶段的轮次和信的邮箱也在这里。
 - `controller.py`：轮次的并发、单步、暂停、补跑和退出，规则见根目录 `AGENTS.md` 的"暂停、补跑和退出"。
 
 ## 原则
