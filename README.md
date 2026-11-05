@@ -29,7 +29,9 @@ python main.py
 
 - [使用说明](docs/usage.md)：配置、运行和控制比赛、阅读场次、分析和排查。
 - [统计说明](docs/analyze.md)：分析命令各项指标的口径。
-- [规则讨论备忘](docs/rule-discussion.md)：规则设计的取舍和调参时要看的数据。
-- [私信](docs/letters.md)：个人赛私信的规则、格式、送达、日志和取舍。
-- [团队赛](docs/team-mode.md)：团队赛的赛制、规则、队内信件区、阵容、显示和取舍。
+- [信件](docs/letters.md)：私信和队内信件区共用的规则、格式、送达和日志。
+- [团队赛](docs/team-mode.md)：团队赛和个人赛不同的赛制、规则、队内信件区和显示。
+- [规则设计备忘](docs/design/rules.md)：规则和信件时序的取舍，以及调参时要看的数据。
+- [未采用的方向](docs/design/rejected.md)：讨论过但没有采用的方案和原因。
+- [测试赛结论](docs/design/playtests.md)：测试赛看到的现象和待观察项。
 - [开发约定](AGENTS.md)：改代码前要遵守的要求和代码入口。

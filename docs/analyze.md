@@ -1,6 +1,6 @@
 # 统计说明
 
-`python -m auction_game.reporting.analyze` 默认分析 `logs/` 下最新的、至少完成一局的真实 AI 场次，即 `ai`、`ai-test`、`team` 或 `team-test`；离线赛（`offline`、`team-offline`）要传目录。比赛参数和玩家名单取自本场日志，未完赛的场次只统计已经结束的局。
+`python -m auction_game.cli.analyze` 默认分析 `logs/` 下最新的、至少完成一局的真实 AI 场次，即 `ai`、`ai-test`、`team` 或 `team-test`；离线赛（`offline`、`team-offline`）要传目录。比赛参数和玩家名单取自本场日志，未完赛的场次只统计已经结束的局。
 
 未注明的指标都包含流局日。
 
