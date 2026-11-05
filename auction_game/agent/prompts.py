@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from auction_game.game.engine import team_standings
 from auction_game.game.lineup import Lineup, PlayerProfile
-from auction_game.game.settings import GameSettings
+from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
 from auction_game.game.tables import OUTCOME_TEXT, match_title, render_match_log, render_standings, super_cells
@@ -21,7 +21,9 @@ BID_HINT = "请分析局势并提交今日出价。"
 LAST_DAY_LETTERS = "在本局最后一天出价时"
 # 可以写信的请求在任务提示后写明这次的信什么时候送到，原因见 docs/letters.md 的"写信时的提醒"。
 OPENING_LETTER_DELIVERY = "现在写的私信，收件人在第 1 天出价时收到。"
+TEAM_OPENING_LETTER_DELIVERY = "现在写的信，队友在开局讨论第 1 轮看到。"
 MATCH_END_LETTER_DELIVERY = "现在写的私信，收件人整理记忆时收到，信的原文不会带到下一局。"
+TEAM_MATCH_END_LETTER_DELIVERY = "现在写的信，队友整理记忆时看到，信的原文不会带到下一局。"
 
 
 def build_system_prompt(
@@ -56,18 +58,20 @@ def build_system_prompt(
     return text
 
 
-def opening_speech_request() -> str:
-    return f"比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。\n\n{OPENING_LETTER_DELIVERY}"
+def opening_speech_request(*, team: bool = False) -> str:
+    delivery = TEAM_OPENING_LETTER_DELIVERY if team else OPENING_LETTER_DELIVERY
+    return f"比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。\n\n{delivery}"
 
 
-def _letter_delivery(game: GameSettings, match_index: int, day: int) -> str:
+def _letter_delivery(game: GameSettings, match_index: int, day: int, team: bool) -> str:
     """规划或出价时写的信什么时候送到；day 是这次交的是第几天的出价，规划交的是第 1 天。"""
     if day < game.max_days:
-        return "现在写的私信，收件人明天出价时才收到，那时已经公布今天的结果和全员余额，影响不了对方今天的出价。"
-    text = "现在写的私信，收件人在局末发言时才收到，本局不再出价"
+        return ("现在写的信，队友明天出价时才看到，那时已经公布今天的结果和全员余额，影响不了今天的出价。" if team else
+                "现在写的私信，收件人明天出价时才收到，那时已经公布今天的结果和全员余额，影响不了对方今天的出价。")
+    text = "现在写的信，队友在局末发言时才看到，本局不再出价" if team else "现在写的私信，收件人在局末发言时才收到，本局不再出价"
     # 最后一局正赛和加赛打完，比赛可能就此结束，这时没有局末发言。
     if match_index >= game.regular_matches:
-        text += "；比赛就此结束时，在最终感言时收到"
+        text += f"；比赛就此结束时，在最终感言时{'看到' if team else '收到'}"
     return text + "。"
 
 
@@ -76,13 +80,19 @@ def _quoted(title: str, texts: dict[str, str]) -> str:
     return "\n\n".join([title, *(f"【{name}】{text}" for name, text in texts.items())])
 
 
-def _received_letters(received: dict[str, str] | None, written: str) -> list[str]:
-    """收到的私信接在事实信息之后、任务提示之前；没有信时不出现。received 是写信人到正文。
+def _received_letters(received: dict[str, str] | None, written: str, team: bool) -> list[str]:
+    """收到的信接在事实信息之后、任务提示之前；没有信时不出现。received 是写信人到正文。
 
     written 说明信是在哪一环节写的：每次送到的信都来自收件人上一次行动的那一轮，
     信里的"今日"指写信那天。
     """
-    return [_quoted(f"以下是其他玩家{written}写给你的私信：", received)] if received else []
+    if not received:
+        return []
+    return [_quoted(f"以下是队友{written}写的信：" if team else f"以下是其他玩家{written}写给你的私信：", received)]
+
+
+def _is_team(standings: list[StandingsEntry]) -> bool:
+    return team_standings(standings) is not None
 
 
 def _remaining_scores_info(game: GameSettings, match_index: int, day: int, today_pool: int) -> str:
@@ -121,15 +131,31 @@ def _day1_constant_info(game: GameSettings, match_index: int = 1) -> str:
     )
 
 
-def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
-                         received: dict[str, str] | None = None) -> str:
+def discussion_request(round_number: int, *, others_speeches: dict[str, str] | None = None,
+                       received: dict[str, str] | None = None) -> str:
+    """团队赛开局讨论的一轮；讨论的机制在规则里，这里只写第几轮和这一轮的信什么时候到。
+
+    第 1 轮先列其他玩家的开局发言，之后留在对话里；收到的信来自上一环节。
+    """
+    written = "在开局发言时" if round_number == 1 else f"在开局讨论第 {round_number - 1} 轮时"
+    arrival = "下一轮" if round_number < DISCUSSION_ROUNDS else "第 1 天出价时"
     return "\n\n".join([
-        _quoted("以下是其他玩家的开局发言：", others_speeches),
-        *_received_letters(received, "在开局发言时"),
-        "请结合他们的发言，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
+        *([_quoted("以下是其他玩家的开局发言：", others_speeches)] if others_speeches else []),
+        *_received_letters(received, written, True),
+        f"现在是开局讨论第 {round_number} 轮，共 {DISCUSSION_ROUNDS} 轮。请写这一轮的信（约 300 字），队友在{arrival}看到。",
+    ])
+
+
+def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
+                         received: dict[str, str] | None = None, team: bool = False) -> str:
+    """团队赛不用 others_speeches：开局发言在讨论第 1 轮列过，还在对话里。"""
+    return "\n\n".join([
+        *([] if team else [_quoted("以下是其他玩家的开局发言：", others_speeches)]),
+        *_received_letters(received, f"在开局讨论第 {DISCUSSION_ROUNDS} 轮时" if team else "在开局发言时", team),
+        f"请结合{'开局发言和开局讨论' if team else '他们的发言'}，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
         + _day1_constant_info(game)
         + "\n\n全员累计总分：全员 0 分。",
-        _letter_delivery(game, 1, 1),
+        _letter_delivery(game, 1, 1, team),
     ])
 
 
@@ -191,8 +217,9 @@ def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> 
     status_line += "\n\n" + _total_scores_line(obs.standings)
     status_line += _remaining_scores_info(obs.game, obs.match_index, obs.day, obs.today_pool)
     # 第 2 天收到的是规划时写的信，规划请求同时交了第 1 天的出价，所以也是昨天出价时写的。
-    task = "\n\n".join([*_received_letters(received, "昨天出价时"), BID_HINT,
-                        _letter_delivery(obs.game, obs.match_index, obs.day)])
+    team = _is_team(obs.standings)
+    task = "\n\n".join([*_received_letters(received, "昨天出价时", team), BID_HINT,
+                        _letter_delivery(obs.game, obs.match_index, obs.day, team)])
     yesterday = obs.today_history[-1]
     if yesterday.is_void:
         announcement = f"昨日公布：流局，奖池 {yesterday.pool} 分作废。"
@@ -223,35 +250,37 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], *,
         f"本局完整出价日志：\n\n{render_match_log(log)}",
         f"截至当前的累计排名与分数明细：\n\n{render_standings(standings)}",
     ]
+    team = _is_team(standings)
     # 正赛打完后还有下一局，说明第一名并列，进入加赛；团队赛的第一名并列就是两个阵营同分。
     if log.match_index >= log.game.regular_matches:
-        lines.append("第一名总分并列，全员进入加赛。" if team_standings(standings) is None
-                     else "两个阵营总分相同，全员进入加赛。")
-    lines.extend(_received_letters(received, LAST_DAY_LETTERS))
-    lines.extend(["请向全体玩家发表你的局末发言（不超过 300 字）。", MATCH_END_LETTER_DELIVERY])
+        lines.append("两个阵营总分相同，全员进入加赛。" if team else "第一名总分并列，全员进入加赛。")
+    lines.extend(_received_letters(received, LAST_DAY_LETTERS, team))
+    lines.extend(["请向全体玩家发表你的局末发言（不超过 300 字）。",
+                  TEAM_MATCH_END_LETTER_DELIVERY if team else MATCH_END_LETTER_DELIVERY])
     return "\n\n".join(lines)
 
 
 def memory_request(others_speeches: dict[str, str], match_index: int, *,
-                   received: dict[str, str] | None = None) -> str:
+                   received: dict[str, str] | None = None, team: bool = False) -> str:
     """补充其他玩家的发言；本人的发言已在对话中，整理记忆后才清空对话。第 1 局结束时还没有旧记忆。
 
-    本局出价时收到的信也在对话里，所以没有收到信时也提私信。
+    本局出价时收到的信也在对话里，所以没有收到信时也提私信或队内信件区的信。
     """
     has_old_memory = match_index > 1
     task = (
-        f"请结合{'旧记忆、' if has_old_memory else ''}本局经历、公开发言和私信，整理你的记忆，只有你自己能看到。"
+        f"请结合{'旧记忆、' if has_old_memory else ''}本局经历、公开发言和{'队内信件区的信' if team else '私信'}，"
+        "整理你的记忆，只有你自己能看到。"
         + ("新记忆会完整替换旧记忆；" if has_old_memory else "")
-        + "下一局你看不到之前各局的原始对话、公开发言和私信，要继续用的信息都写在这里。\n\n"
+        + f"下一局你看不到之前各局的原始对话、公开发言和{'信' if team else '私信'}，要继续用的信息都写在这里。\n\n"
         "- 记下对手的出价倾向和自己要做的调整，每条都要能直接用于下一局的出价。\n"
-        "- 私信里谈好的约定和得到的消息，下一局还用得上的也记下来。\n"
+        f"- {'队内信件区' if team else '私信'}里谈好的约定和得到的消息，下一局还用得上的也记下来。\n"
         + ("- 保留仍然有用的旧经验，改掉被本局推翻的判断。\n" if has_old_memory else "")
         + "- 只写结论，不写例子和出价记录。\n"
         "- 规则、最新成绩和之前各局的出价日志会另行提供，无需抄写。\n\n"
         "全文不超过 1000 字。"
     )
     return "\n\n".join([_quoted("以下是其他玩家在本局结束后的公开发言：", others_speeches),
-                        *_received_letters(received, "在局末发言时"), task])
+                        *_received_letters(received, "在局末发言时", team), task])
 
 
 def next_match_plan_request(past_logs: list[MatchLog], standings: list[StandingsEntry], game: GameSettings) -> str:
@@ -276,7 +305,7 @@ def next_match_plan_request(past_logs: list[MatchLog], standings: list[Standings
         f"截至当前的最新累计成绩：\n\n{render_standings(standings)}\n\n"
         f"请结合之前整理的记忆，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)
-        + f"\n\n{_letter_delivery(game, match_index, 1)}"
+        + f"\n\n{_letter_delivery(game, match_index, 1, _is_team(standings))}"
     )
 
 
@@ -287,7 +316,7 @@ def final_speech_request(standings: list[StandingsEntry], log: MatchLog, *,
         f"{match_title(log)}结束，这也是最后一局。",
         f"本局完整出价日志：\n\n{render_match_log(log)}",
         f"比赛全部结束。最终排名与分数明细：\n\n{render_standings(standings)}",
-        *_received_letters(received, LAST_DAY_LETTERS),
+        *_received_letters(received, LAST_DAY_LETTERS, _is_team(standings)),
         "请向全体玩家发表你的最终感言。",
     ])
 

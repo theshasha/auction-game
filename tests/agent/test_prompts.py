@@ -177,6 +177,84 @@ def test_speeches_say_when_letters_arrive():
     assert match_end.endswith("局末发言（不超过 300 字）。\n\n现在写的私信，收件人整理记忆时收到，信的原文不会带到下一局。")
 
 
+TEAM_STANDINGS = make_standings({"甲": [1], "乙": [0]}, team_of={"甲": "红队", "乙": "蓝队"})
+
+
+def team_bid_obs(**kwargs):
+    return replace(make_obs(today_history=[make_day(number, [5, 4]) for number in range(1, kwargs["day"])], **kwargs),
+                   standings=TEAM_STANDINGS)
+
+
+@pytest.mark.parametrize("build,written", [
+    (lambda received: prompts.opening_plan_request({}, TEST_GAME, received=received, team=True), "在开局讨论第 3 轮时"),
+    (lambda received: prompts.bid_request(team_bid_obs(day=2), received=received), "昨天出价时"),
+    (lambda received: prompts.match_end_speech_request(make_log(), TEAM_STANDINGS, received=received),
+     "在本局最后一天出价时"),
+    (lambda received: prompts.final_speech_request(TEAM_STANDINGS, make_log(), received=received), "在本局最后一天出价时"),
+    (lambda received: prompts.memory_request({"丁": "局末发言"}, 1, received=received, team=True), "在局末发言时"),
+    (lambda received: prompts.discussion_request(1, received=received), "在开局发言时"),
+    (lambda received: prompts.discussion_request(2, received=received), "在开局讨论第 1 轮时"),
+    (lambda received: prompts.discussion_request(3, received=received), "在开局讨论第 2 轮时"),
+], ids=["plan", "bid", "match-end", "final", "memory", "discussion-1", "discussion-2", "discussion-3"])
+def test_team_requests_list_teammates_letters(build, written):
+    block = f"以下是队友{written}写的信：\n\n【乙】第一封\n\n【丙】第二封"
+    text = build({"乙": "第一封", "丙": "第二封"})
+    assert block in text and "私信" not in text
+    assert "写的信" not in build(None).replace("现在写的信", "")
+
+
+TEAM_NEXT_DAY = "现在写的信，队友明天出价时才看到，那时已经公布今天的结果和全员余额，影响不了今天的出价。"
+TEAM_LAST_DAY = "现在写的信，队友在局末发言时才看到，本局不再出价。"
+TEAM_LAST_DAY_MAY_END = "现在写的信，队友在局末发言时才看到，本局不再出价；比赛就此结束时，在最终感言时看到。"
+
+
+@pytest.mark.parametrize("match_index,day,expected", [
+    (1, 2, TEAM_NEXT_DAY),
+    (1, 3, TEAM_LAST_DAY),
+    (TEST_GAME.regular_matches, 3, TEAM_LAST_DAY_MAY_END),
+], ids=["next-day", "last-day", "may-end"])
+def test_team_bids_say_when_letters_arrive(match_index, day, expected):
+    game = replace(TEST_GAME, daily_pool=(1, 1, 1))
+    obs = team_bid_obs(day=day, match_index=match_index, game=game)
+    assert prompts.bid_request(obs).endswith(f"{prompts.BID_HINT}\n\n{expected}")
+
+
+def test_team_plans_and_speeches_say_when_letters_arrive():
+    game = replace(TEST_GAME, daily_pool=(1, 1, 1))
+    assert prompts.opening_speech_request(team=True).endswith("\n\n现在写的信，队友在开局讨论第 1 轮看到。")
+    assert prompts.opening_plan_request({}, game, team=True).endswith(f"\n\n{TEAM_NEXT_DAY}")
+    assert prompts.next_match_plan_request(make_logs(1, game), TEAM_STANDINGS, game).endswith(f"\n\n{TEAM_NEXT_DAY}")
+    assert prompts.match_end_speech_request(make_log(), TEAM_STANDINGS).endswith(
+        "局末发言（不超过 300 字）。\n\n现在写的信，队友整理记忆时看到，信的原文不会带到下一局。")
+
+
+@pytest.mark.parametrize("round_number,arrival", [(1, "下一轮"), (2, "下一轮"), (3, "第 1 天出价时")])
+def test_discussion_request_says_the_round_and_when_the_letter_arrives(round_number, arrival):
+    assert prompts.discussion_request(round_number) == (
+        f"现在是开局讨论第 {round_number} 轮，共 3 轮。请写这一轮的信（约 300 字），队友在{arrival}看到。")
+
+
+def test_first_discussion_round_lists_speeches_before_letters():
+    text = prompts.discussion_request(1, others_speeches={"乙": "乙的发言", "丁": "丁的发言"}, received={"乙": "乙的信"})
+    assert text.startswith("以下是其他玩家的开局发言：\n\n【乙】乙的发言\n\n【丁】丁的发言\n\n"
+                           "以下是队友在开局发言时写的信：\n\n【乙】乙的信\n\n现在是开局讨论第 1 轮")
+
+
+def test_team_opening_plan_does_not_repeat_speeches():
+    text = prompts.opening_plan_request({"乙": "开局发言"}, TEST_GAME, team=True)
+    assert text.startswith("请结合开局发言和开局讨论，规划你第一局的初步策略")
+    assert "【乙】" not in text
+
+
+@pytest.mark.parametrize("match_index", [1, 2])
+def test_team_memory_request_talks_about_letters(match_index):
+    text = prompts.memory_request({"丁": "局末发言"}, match_index, team=True)
+    for required in ("公开发言和队内信件区的信，整理你的记忆", "看不到之前各局的原始对话、公开发言和信",
+                     "队内信件区里谈好的约定和得到的消息"):
+        assert required in text
+    assert "私信" not in text
+
+
 class TestPlayoffNotice:
     """局末发言只在还有下一局时发出；正赛打完后还有下一局就预告加赛，加赛局的规划请求写明并列第一的玩家。"""
 

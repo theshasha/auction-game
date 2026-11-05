@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
+# 团队赛开局讨论的轮数，和每队人数一样固定，不做成可配置。
+DISCUSSION_ROUNDS = 3
+
 
 @dataclass(frozen=True)
 class GameSettings:
