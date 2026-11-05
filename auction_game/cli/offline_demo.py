@@ -151,11 +151,15 @@ class DemoFactory:
         """
         if letters is None:
             return ""
-        self.letters_written += 1
         if isinstance(letters, TeamBoard):
-            return f"\n<{BOARD}>\n模拟信：我是{self.name}，这是我写的第 {self.letters_written} 封信。\n</{BOARD}>"
+            return "\n" + self._board_letter()
+        self.letters_written += 1
         to = letters.recipients[self.index % len(letters.recipients)]
         return f"\n<{to}>\n模拟私信：我是{self.name}，这是我写的第 {self.letters_written} 封信。\n</{to}>"
+
+    def _board_letter(self) -> str:
+        self.letters_written += 1
+        return f"<{BOARD}>\n模拟信：我是{self.name}，这是我写的第 {self.letters_written} 封信。\n</{BOARD}>"
 
     async def stream(self, messages, info):
         self.calls += 1
@@ -183,6 +187,8 @@ class DemoFactory:
             speech = f"我是{self.name}。我会根据公开结果谨慎使用金币。"
             yield ("<strategy>\n模拟私有策略：公开表达谨慎态度，不透露具体出价。\n</strategy>\n"
                    f"<speech>\n{speech}\n</speech>" + self._letter(current.letters))
+        elif task == "discussion":
+            yield f"<strategy>\n模拟讨论策略：只谈分工，不写具体出价。\n</strategy>\n{self._board_letter()}"
         elif task == "summary":
             yield f"模拟观众总结：我是{self.name}，本场按离线脚本完成比赛。拍卖分与命中分以实际结算为准。"
         else:

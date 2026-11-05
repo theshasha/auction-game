@@ -15,6 +15,7 @@ from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TY
 
 # 节标题是写信的环节，说明送达时机，免得读成收信的时候。
 LETTERS_HEADER = "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
+TEAM_LETTERS_HEADER = "# 队内信件区\n\n每节是这一环节里写到队内信件区的信，队友在下一次行动时看到。\n"
 
 
 def make_run_dir(mode: str) -> Path:
@@ -62,15 +63,16 @@ def publish_speeches(paths: RunPaths, title: str, speeches: dict[str, str]) -> N
     print(text)
 
 
-def record_letters(paths: RunPaths, title: str, letters: list[tuple[str, str, str]]) -> None:
+def record_letters(paths: RunPaths, title: str, letters: list[tuple[str, str, str]], *, team: bool = False) -> None:
     """这一轮有人写信时向 letters.md 追加一节，第一次有信时创建文件；终端不打印。
 
-    letters 是 (写信人, 收件人, 正文)，写信人按配置顺序。
+    letters 是 (写信人, 收件人, 正文)，写信人按配置顺序；团队赛的收件人是写信人的阵营。
     """
     if not letters:
         return
     text = f"\n## {title}\n\n" + "\n\n".join(f"【{sender} → {to}】{body}" for sender, to, body in letters) + "\n"
-    _append(paths.letters, text if paths.letters.exists() else LETTERS_HEADER + text)
+    header = TEAM_LETTERS_HEADER if team else LETTERS_HEADER
+    _append(paths.letters, text if paths.letters.exists() else header + text)
 
 
 def _append(path: Path, text: str) -> None:

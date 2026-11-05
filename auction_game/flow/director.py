@@ -1,4 +1,4 @@
-"""整场 AI 比赛的流程：开局发言、规划、每天出价、局末发言、整理记忆和终局；私信在收件人的下一轮送达。"""
+"""整场 AI 比赛的流程：开局发言、团队赛的开局讨论、规划、每天出价、局末发言、整理记忆和终局；信在收件人的下一轮送达。"""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from typing import Callable
 from auction_game.agent import prompts
 from auction_game.agent.player import AIPlayer
 from auction_game.agent.tasks import TaskOutput
+from auction_game.agent.text_output import BOARD
 from auction_game.flow.controller import Controller, RoundTask
 from auction_game.game.engine import MatchState, compute_standings
-from auction_game.game.settings import GameSettings
+from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.tournament import TournamentResult, has_next_match
 from auction_game.reporting.run_output import print_day_result, publish_match, publish_speeches, record_letters
@@ -30,6 +31,7 @@ class AIDirector:
         self.paths = RunPaths(log_dir)
         self.game = game
         self.team_of = team_of
+        self.team = team_of is not None
         # 待送达的信：收件人到 {写信人: 正文}，写信人按配置顺序。
         self.mailbox: dict[str, dict[str, str]] = {}
 
@@ -73,12 +75,17 @@ class AIDirector:
         outputs = {player.name: results[player.name] for player in self.players}
         letters = [(sender, letter["to"], letter["text"]) for sender, output in outputs.items()
                    for letter in output.letters]
-        record_letters(self.paths, label, letters)
+        record_letters(self.paths, label, [(sender, self.team_of[sender] if to == BOARD else to, text)
+                                           for sender, to, text in letters], team=self.team)
         mailbox: dict[str, dict[str, str]] = {}
         for sender, to, text in letters:
-            mailbox.setdefault(to, {})[sender] = text
+            for recipient in self._teammates(sender) if to == BOARD else [to]:
+                mailbox.setdefault(recipient, {})[sender] = text
         self.mailbox = mailbox
         return outputs
+
+    def _teammates(self, name: str) -> list[str]:
+        return [player for player, team in self.team_of.items() if team == self.team_of[name] and player != name]
 
     @staticmethod
     def _others(speeches: dict[str, str], exclude: str) -> dict[str, str]:
@@ -101,12 +108,24 @@ class AIDirector:
         return self._submission_round(label, lambda p, received: p.bid(observations[p.name], received, label))
 
     def opening(self) -> dict[str, Bid]:
-        """开局发言和第 1 局规划，返回规划交出的第 1 天出价。"""
+        """开局发言、团队赛的开局讨论和第 1 局规划，返回规划交出的第 1 天出价。"""
         label = "开局发言"
-        speeches = self._speech_round(label, lambda p, _: p.give_speech(prompts.opening_speech_request(), label))
+        speeches = self._speech_round(label, lambda p, _: p.give_speech(
+            prompts.opening_speech_request(team=self.team), label))
+        if self.team:
+            self.discussion(speeches)
         plan_label = "第 1 局策略规划（含首日出价）"
         return self._submission_round(plan_label, lambda p, received: p.plan_strategy(
-            prompts.opening_plan_request(self._others(speeches, p.name), self.game, received=received), plan_label))
+            prompts.opening_plan_request(self._others(speeches, p.name), self.game, received=received, team=self.team),
+            plan_label))
+
+    def discussion(self, speeches: dict[str, str]) -> None:
+        """团队赛的开局讨论；第 1 轮列出开局发言，每轮收到上一环节写的信。"""
+        for number in range(1, DISCUSSION_ROUNDS + 1):
+            label = f"开局讨论第 {number} 轮"
+            self._run_round(label, lambda p, received: p.discuss(prompts.discussion_request(
+                number, others_speeches=self._others(speeches, p.name) if number == 1 else None, received=received),
+                label, first=number == 1))
 
     def match_end(self, logs: list[MatchLog], standings: list[StandingsEntry]) -> dict[str, Bid]:
         """还有下一局时的局末发言、整理记忆和下一局规划，返回规划交出的第 1 天出价；logs 是已结束的全部局。"""
@@ -117,7 +136,8 @@ class AIDirector:
             prompts.match_end_speech_request(log, standings, received=received), label))
         memory_label = f"第 {index} 局累计私有记忆"
         self._run_round(memory_label, lambda p, received: p.save_memory(
-            prompts.memory_request(self._others(speeches, p.name), index, received=received), memory_label))
+            prompts.memory_request(self._others(speeches, p.name), index, received=received, team=self.team),
+            memory_label))
         plan_label = f"第 {index + 1} 局策略规划（含首日出价）"
         # 整理记忆不写信，这一轮收不到信。
         return self._submission_round(plan_label, lambda p, _: p.plan_strategy(

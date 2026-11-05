@@ -244,12 +244,25 @@ def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_confi
     # 第 2 天起由本局赢的一队第 2 人独得：正赛红队乙、蓝队戊轮流，第 3 局是奇数局数的最后一局正赛，谁都不赢。
     assert [[day["winner"] for day in payload["match"]["days"]] for payload in matches] == [
         [None, "乙", "乙"], [None, "戊", "戊"], [None, None, None], [None, "乙", "乙"]]
-    expected_calls = 2 + len(matches) * (game.max_days - 1) + 3 * (len(matches) - 1) + 2
+    # 开局发言、3 轮开局讨论和第 1 局规划，之后每局第 2 天起的出价，局末三轮，最后是感言和总结。
+    expected_calls = 5 + len(matches) * (game.max_days - 1) + 3 * (len(matches) - 1) + 2
     assert all(f.opened == f.closed == f.calls == expected_calls for f in factories)
 
     paths = RunPaths(run_dir)
     snapshot = paths.read_config()
     assert snapshot["run_type"] == "team-offline"
+    sections = paths.letters.read_text(encoding="utf-8").split("\n## ")[1:]
+    assert [section.split("\n", 1)[0] for section in sections[:5]] == [
+        "开局发言", "开局讨论第 1 轮", "开局讨论第 2 轮", "开局讨论第 3 轮", "第 1 局策略规划（含首日出价）"]
+    assert all(re.findall(r"【(\S+) → (\S+)】", section) == list(TEAM_OF.items()) for section in sections)
+    # 甲写到信件区的信，队友下一次行动时看到，对方看不到。
+    letter = task_entries(paths.player(1))[0]["result"]["letters"][0]["text"]
+    discussion = {number: next(entry for entry in task_entries(paths.player(number)) if entry["task"] == "discussion")
+                  for number in (2, 3, 4)}
+    prompts = {number: [part["content"] for message in entry["messages"] for part in message["parts"]
+                        if part["part_kind"] == "user-prompt"][-1] for number, entry in discussion.items()}
+    assert f"以下是队友在开局发言时写的信：\n\n【甲】{letter}" in prompts[2] and f"【甲】{letter}" in prompts[3]
+    assert letter not in prompts[4]
     assert {pc["name"]: pc["team"] for pc in snapshot["players"]} == TEAM_OF
     assert "红队有 甲、乙、丙，蓝队有 丁、戊、己" in (run_dir / "RULES.md").read_text(encoding="utf-8")
     readme = (run_dir / "README.md").read_text(encoding="utf-8")

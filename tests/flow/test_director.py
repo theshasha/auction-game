@@ -1,4 +1,4 @@
-"""整场流程和各轮编排：阶段顺序、加赛、私信送达、公开与私有边界、规划交出的首日出价及观众总结。"""
+"""整场流程和各轮编排：阶段顺序、开局讨论、加赛、信的送达、公开与私有边界、规划交出的首日出价及观众总结。"""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -10,11 +10,13 @@ import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput
+from auction_game.agent.text_output import BOARD
 from auction_game.flow import director as director_module
 from auction_game.llm.execution import OutputFailedError
-from tests.support.factories import (TEST_GAME, StubPlayer, bid_reply, continuous_controller, fake_task_runner,
-                                     init_run_dir, make_ai_obs, make_log, make_player, make_standings,
-                                     request_text, speech_reply, text_reply, task_entries)
+from tests.support.factories import (TEAM_OF, TEST_GAME, StubPlayer, bid_reply, continuous_controller,
+                                     discussion_reply, fake_task_runner, init_run_dir, make_ai_obs, make_log,
+                                     make_player, make_standings, make_team_player, request_text, speech_reply,
+                                     text_reply, task_entries)
 from auction_game.game.settings import GameSettings
 
 
@@ -52,7 +54,7 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
     players = [RecordingPlayer(name) for name in ("甲", "乙")]
     director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=game)
 
-    def opening_plan_request(others, actual_game, *, received):
+    def opening_plan_request(others, actual_game, *, received, team):
         assert actual_game is game
         return f"规划 {others}"
 
@@ -60,13 +62,13 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
         assert actual_game is game
         return f"规划 {[log.match_index for log in logs]}"
 
-    monkeypatch.setattr(director_module.prompts, "opening_speech_request", lambda: "开局")
+    monkeypatch.setattr(director_module.prompts, "opening_speech_request", lambda *, team: "开局")
     monkeypatch.setattr(director_module.prompts, "opening_plan_request", opening_plan_request)
     monkeypatch.setattr(director_module.prompts, "next_match_plan_request", next_match_plan_request)
     monkeypatch.setattr(director_module.prompts, "match_end_speech_request",
                         lambda log, standings, *, received: f"局末 {log.match_index}")
     monkeypatch.setattr(director_module.prompts, "memory_request",
-                        lambda others, index, *, received: f"记忆 {others} {index}")
+                        lambda others, index, *, received, team: f"记忆 {others} {index}")
     director.opening()
     director.match_end([SimpleNamespace(match_index=1), SimpleNamespace(match_index=2)], [])
     assert players[0].calls == [
@@ -95,7 +97,7 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
     players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
     director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=TEST_GAME)
     monkeypatch.setattr(director_module.prompts, "opening_plan_request",
-                        lambda others, game, *, received: f"规划 {list(others)} 收信 {list(received)}")
+                        lambda others, game, *, received, team: f"规划 {list(others)} 收信 {list(received)}")
     director.opening()
     public_log = director.paths.speeches.read_text(encoding="utf-8")
     assert public_log.index("【乙】") < public_log.index("【甲】") < public_log.index("【丙】")
@@ -345,10 +347,64 @@ def test_team_run_plays_playoffs_until_team_totals_differ(tmp_path):
     assert not result.playoff_cap_hit
     assert {entry.player: (entry.team, entry.total_score) for entry in result.final_standings} == {
         "甲": ("红队", 1), "乙": ("红队", 1), "丙": ("蓝队", 1), "丁": ("蓝队", 0)}
+    # 开局讨论只在开赛前一次，在开局发言和第 1 局规划之间。
+    assert players[0].titles[:5] == ["开局发言", "开局讨论第 1 轮", "开局讨论第 2 轮", "开局讨论第 3 轮",
+                                     "第 1 局策略规划（含首日出价）"]
+    assert sum(title.startswith("开局讨论") for title in players[0].titles) == 3
     # 出价时看到的排名和发布的局日志都带阵营。
     assert {entry.player: entry.team for entry in players[0].observations[0].standings} == team_of
     published = json.loads(director.paths.match(3).read_text(encoding="utf-8"))
     assert {entry["player"]: entry["team"] for entry in published["standings_after_match"]} == team_of
+
+
+def team_players(tmp_path, game=TEST_GAME):
+    """全队每轮都写信：开局发言写一封、讨论每轮一封，规划不写。"""
+    return [make_team_player(fake_task_runner([
+        {**speech_reply(f"{name}的发言"), "letters": [{"to": BOARD, "text": f"{name}开局信"}]},
+        *(discussion_reply(f"{name}第{number}轮信") for number in (1, 2, 3)),
+        bid_reply(1),
+    ]), tmp_path, game=game, name=name) for name in TEAM_OF]
+
+
+def team_director(players, tmp_path, controller=None, game=TEST_GAME):
+    return director_module.AIDirector(players, controller or continuous_controller(), tmp_path, game=game,
+                                      team_of=TEAM_OF)
+
+
+def test_opening_discussion_passes_each_round_to_teammates_only(tmp_path):
+    players = team_players(tmp_path)
+    jia, _, _, ding = (players[index] for index in range(4))
+    team_director(players, tmp_path).opening()
+    first, second, third, plan = (request_text(jia.task_runner, index) for index in (1, 2, 3, 4))
+    # 第 1 轮列全员的开局发言，只列队友的信。
+    assert "以下是其他玩家的开局发言：\n\n【乙】乙的发言\n\n【丙】丙的发言\n\n【丁】丁的发言" in first
+    assert "以下是队友在开局发言时写的信：\n\n【乙】乙开局信\n\n【丙】丙开局信" in first
+    assert "丁开局信" not in first and "甲开局信" not in first
+    assert "以下是队友在开局讨论第 1 轮时写的信：\n\n【乙】乙第1轮信\n\n【丙】丙第1轮信" in second
+    assert "以下是队友在开局讨论第 2 轮时写的信：\n\n【乙】乙第2轮信\n\n【丙】丙第2轮信" in third
+    assert "以下是队友在开局讨论第 3 轮时写的信：\n\n【乙】乙第3轮信\n\n【丙】丙第3轮信" in plan
+    assert "开局发言：" not in second and "开局发言：" not in plan
+    assert "【丁】" not in second + third + plan
+    assert "以下是队友在开局讨论第 3 轮时写的信：\n\n【戊】戊第3轮信\n\n【己】己第3轮信" in request_text(ding.task_runner, 4)
+
+
+def test_team_letters_md_lists_board_letters_by_team(tmp_path):
+    director = team_director(team_players(tmp_path), tmp_path)
+    director.opening()
+    letters = director.paths.letters.read_text(encoding="utf-8")
+    assert letters.startswith("# 队内信件区\n\n每节是这一环节里写到队内信件区的信，队友在下一次行动时看到。\n"
+                              "\n## 开局发言\n\n【甲 → 红队】甲开局信\n\n【乙 → 红队】乙开局信")
+    assert "\n## 开局讨论第 3 轮\n\n【甲 → 红队】甲第3轮信" in letters and "【丁 → 蓝队】丁第3轮信" in letters
+    assert "策略规划" not in letters
+
+
+def test_team_memory_request_knows_it_is_a_team_run(tmp_path):
+    game = replace(TEST_GAME, daily_pool=(4,), regular_matches=2)
+    players = [make_team_player(fake_task_runner([speech_reply("局末"), {"memory": "记忆"}, bid_reply(1)]),
+                                tmp_path, game=game, name=name) for name in TEAM_OF]
+    standings = make_standings({name: [0] for name in TEAM_OF}, team_of=TEAM_OF)
+    team_director(players, tmp_path, game=game).match_end([make_log(game=game)], standings)
+    assert "队内信件区里谈好的约定" in request_text(players[0].task_runner, 1)
 
 
 def test_run_publishes_each_match_and_new_match_resets_coins(tmp_path, capsys):

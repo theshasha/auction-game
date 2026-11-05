@@ -14,11 +14,13 @@ from pydantic_ai.messages import TextPart
 from tests.support.factories import (
     TEST_GAME,
     bid_reply,
+    discussion_reply,
     fake_task_runner,
     init_run_dir,
     text_reply,
     make_ai_obs,
     make_player,
+    make_team_player,
     request_text,
     speech_reply,
     task_entries,
@@ -186,6 +188,30 @@ def test_rerun_sees_round_start_letters_and_new_letters_wait_for_next_round(tmp_
     assert "【Bravo】规划信" in request_text(alpha.task_runner, 3)
     assert "开局信" not in request_text(alpha.task_runner, 3)
     assert director.paths.letters.read_text(encoding="utf-8").count("【Bravo → Alpha】规划信") == 1
+
+
+def test_rerun_discussion_round_does_not_see_letters_written_in_that_round(tmp_path):
+    gate = threading.Event()
+    controller = Controller(mode="continuous",
+                            announce=lambda text: gate.set() if text.startswith("[单步]") else None)
+    jia = make_team_player(fake_task_runner([
+        speech_reply("甲"), discussion_reply("甲第1轮信"), ModelAPIError("offline", "unavailable"),
+        discussion_reply("甲第2轮信"), discussion_reply("甲第3轮信"), bid_reply(1)]), tmp_path, name="甲")
+    yi = make_team_player(fake_task_runner([
+        speech_reply("乙"), discussion_reply("乙第1轮信"), discussion_reply("乙第2轮信"),
+        discussion_reply("乙第3轮信"), bid_reply(1)]), tmp_path, name="乙")
+    director = AIDirector([jia, yi], controller, tmp_path, game=TEST_GAME, team_of={"甲": "红队", "乙": "红队"})
+    with running(controller, director.opening) as (thread, outcome):
+        assert gate.wait(timeout=5)  # 甲的第 2 轮失败，乙的第 2 轮已成功
+        controller.offer_command("c")
+        thread.join(timeout=5)
+        assert "result" in outcome
+    # 甲的请求依次是开局发言、第 1 轮、失败的第 2 轮、补跑的第 2 轮、第 3 轮、规划。
+    for index in (2, 3):
+        assert "【乙】乙第1轮信" in request_text(jia.task_runner, index)
+        assert "乙第2轮信" not in request_text(jia.task_runner, index)
+    assert "【乙】乙第2轮信" in request_text(jia.task_runner, 4)
+    assert director.paths.letters.read_text(encoding="utf-8").count("【乙 → 红队】乙第2轮信") == 1
 
 
 @pytest.mark.parametrize("paused", [False, True], ids=["partial-success", "all-success-paused"])

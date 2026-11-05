@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import json
 
 from pydantic_ai.models.function import FunctionModel
-from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput, SummaryOutput, TaskRunner
+from auction_game.agent.tasks import (BidOutput, DiscussionOutput, MemoryOutput, SpeechOutput, SummaryOutput,
+                                      TaskRunner)
 
 from auction_game.agent import prompts
 from auction_game.agent.log import AgentLog
@@ -198,6 +199,10 @@ class StubPlayer:
     def give_speech(self, text, title, *, letters=True):
         self.titles.append(title)
         return SpeechOutput("策略", f"{self.name}的发言", [])
+
+    def discuss(self, text, title, *, first):
+        self.titles.append(title)
+        return DiscussionOutput("策略", f"{self.name}的信")
 
     def plan_strategy(self, text, title):
         self.titles.append(title)
