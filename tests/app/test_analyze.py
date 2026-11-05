@@ -28,7 +28,7 @@ from tests.support.factories import TEAM_OF, TEST_GAME, make_day, make_log, make
 
 from auction_game.llm.execution import CallFailedError, ExecutionResult
 from auction_game.agent.log import AgentLog
-from auction_game.agent.tasks import BidOutput, SpeechOutput, SummaryOutput
+from auction_game.agent.tasks import BidOutput, DiscussionOutput, SpeechOutput, SummaryOutput
 from auction_game.reporting.analyze import (analyze, collect_player_stats, collect_team_stats, find_latest_ai_run,
                                              load_match_logs, main)
 from auction_game.reporting.run_output import initialize_run
@@ -340,6 +340,22 @@ def test_usage_sums_every_reply_by_player_and_task(tmp_path, capsys):
         "  出价：请求 3 次，输入 750（缓存命中 150，20%），输出 75；另有 3 次请求失败；"
         "最大单次输入 300，来自 甲 第 1 局第 2 天",
         "  观众总结：请求 1 次，输入 1,000（缓存命中 0，0%），输出 5；最大单次输入 1,000，来自 乙 观众总结（仅观众可见）",
+    ]
+
+
+def test_usage_lists_discussion_after_speech(tmp_path, capsys):
+    run_dir = tmp_path / "20260909_120000_team"
+    write_matches(run_dir, make_matches(), run_type="team", team_of=TEAM_OF)
+    log = player_log(run_dir, RunPaths(run_dir).read_config()["players"][0])
+    for title, task, output in (("开局讨论第 1 轮", "discussion", DiscussionOutput("策略", "信")),
+                                ("开局发言", "speech", SpeechOutput("策略", "发言", []))):
+        log.success({"title": title, "task": task, "context": title},
+                    ExecutionResult(output, [ModelRequest(parts=[UserPromptPart("请求")]), model_reply(100, 10)], []))
+    analyze(run_dir)
+    usage = capsys.readouterr().out.split("  按任务：\n", 1)[1]
+    assert usage.splitlines()[:2] == [
+        "  发言：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局发言",
+        "  讨论：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局讨论第 1 轮",
     ]
 
 

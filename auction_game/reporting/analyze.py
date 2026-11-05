@@ -21,7 +21,8 @@ from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TY
 
 # 真实 AI 场次的时间戳目录，排除离线赛和 archive 等归档目录；目录名的类型取自场次的 run_type。
 RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_(?:ai|team)(?:-test)?(_\d+)?$")
-TASK_LABELS = {"speech": "发言", "plan": "规划", "bid": "出价", "memory": "记忆", "summary": "观众总结"}
+TASK_LABELS = {"speech": "发言", "discussion": "讨论", "plan": "规划", "bid": "出价", "memory": "记忆",
+               "summary": "观众总结"}
 
 
 def find_latest_ai_run() -> Path:

@@ -128,6 +128,10 @@ def test_team_readme_title_and_private_links_grouped_by_team(tmp_path):
     assert readme.startswith("# 拍卖团队赛\n\n运行类型：团队赛离线模拟。\n\n全员使用假模型，无真实调用。")
     assert readme.endswith("## 私人对话（含私有策略，仅供赛后阅读）\n\n### 红队\n\n- [甲](players/001.md)\n\n"
                            "- [乙](players/002.md)\n\n### 蓝队\n\n- [丁](players/004.md)\n")
+    assert "letters.md" not in readme
+    paths.letters.write_text("信", encoding="utf-8")
+    write_readme(paths)
+    assert "\n[队内信件区](letters.md)\n" in (paths.root / "README.md").read_text(encoding="utf-8")
 
 
 def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):

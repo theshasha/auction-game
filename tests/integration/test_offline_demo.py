@@ -267,6 +267,7 @@ def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_confi
     assert "红队有 甲、乙、丙，蓝队有 丁、戊、己" in (run_dir / "RULES.md").read_text(encoding="utf-8")
     readme = (run_dir / "README.md").read_text(encoding="utf-8")
     assert readme.startswith("# 拍卖团队赛") and "### 红队" in readme and "### 蓝队" in readme
+    assert "[队内信件区](letters.md)" in readme
     assert all((run_dir / link).exists() for link in re.findall(r"\]\(([^)]+)\)", readme))
     analyze.analyze(run_dir)
     output = capsys.readouterr().out

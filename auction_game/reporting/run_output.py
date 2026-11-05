@@ -111,7 +111,7 @@ def write_readme(paths, standings=None):
     if paths.speeches.exists():
         lines.append("[公开发言](speeches.md)")
     if paths.letters.exists():
-        lines.append("[私信](letters.md)")
+        lines.append("[队内信件区](letters.md)" if team else "[私信](letters.md)")
     lines.append("[逐局结果](matches.md)")
     if standings is not None:
         lines.extend(["## 截至当前的结果", render_standings(standings)])
