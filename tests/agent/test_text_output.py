@@ -172,7 +172,7 @@ def test_team_letter_goes_to_the_board(second, base, body):
     (BOARD_LETTER.lstrip() + "\n" + GOOD, TEAM_ORDER),
     (GOOD + letter(BOARD, "<speech>\n嵌套\n</speech>"), TEAM_ORDER),
     (GOOD + BOARD_LETTER + BOARD_LETTER, "最多写 1 封队内信件区的信。"),
-    (GOOD + letter(BOARD, " \n\t"), "队内信件区的信正文不能为空。"),
+    (GOOD + letter(BOARD, " \n\t"), "队内信件区的信正文不能为空，不写信时省略整个块。"),
 ], ids=["name-tag", "trailing-text", "unclosed", "mismatched", "before-strategy", "fixed-tag-inside", "two", "blank"])
 def test_team_letter_format_errors(raw, message):
     with pytest.raises(OutputFormatError) as exc:
@@ -203,7 +203,7 @@ def test_discussion_letter_cannot_be_blank():
 @pytest.mark.parametrize("second", [DECISION, SPEECH])
 def test_team_format_shows_the_board_block(second):
     text = output_requirement(second, TeamBoard())
-    assert "队内信件区的信可以不写，最多 1 封，约 300 字。\n" in text
+    assert "队内信件区的信可以不写，不写时省略整个块，最多 1 封，约 300 字。\n" in text
     assert text.endswith("\n<队内信件区>\n只有队友能看到的信。\n</队内信件区>")
 
 

@@ -81,14 +81,14 @@ class TeamBoard:
     brief_bid = "请按本局规划时的格式提交：strategy 和 decision 两块，队内信件区的信可以不写。"
     order_note = "队内信件区的信放在最后"
     pair_error = f"队内信件区的信以 <{BOARD}> 开始、以 </{BOARD}> 结束，标签各占一行。"
-    hint = "队内信件区的信可以不写，最多 1 封，约 300 字。"
+    hint = "队内信件区的信可以不写，不写时省略整个块，最多 1 封，约 300 字。"
     outside_error = f"协议块外只允许空白。给队友的信只能写在 <{BOARD}> 块里。"
 
     def check(self, written: list[dict]) -> None:
         if len(written) > 1:
             raise OutputFormatError("最多写 1 封队内信件区的信。")
         if written and not written[0]["text"]:
-            raise OutputFormatError("队内信件区的信正文不能为空。")
+            raise OutputFormatError("队内信件区的信正文不能为空，不写信时省略整个块。")
 
 
 LetterScope = LetterNames | TeamBoard
