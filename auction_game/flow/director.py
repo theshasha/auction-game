@@ -1,4 +1,4 @@
-"""整场 AI 比赛的流程：开局发言、团队赛的开局讨论、规划、每天出价、局末发言、整理记忆和终局；信在收件人的下一轮送达。"""
+"""整场 AI 比赛的流程：开局发言、团队赛每局的开局讨论、规划、每天出价、局末发言、整理记忆和终局；信在收件人的下一轮送达。"""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class AIDirector:
         """按顺序跑完整场比赛，返回最终结果。
 
         每局第 1 天用规划交出的出价结算，第 2 天起每天一轮出价；每局结束先公布结果，还有下一局时
-        再做局末发言、整理记忆和下一局规划，最后一局之后是最终感言和观众总结。
+        再做局末发言、整理记忆、团队赛的开局讨论和下一局规划，最后一局之后是最终感言和观众总结。
         """
         names = [player.name for player in self.players]
         logs: list[MatchLog] = []
@@ -113,22 +113,24 @@ class AIDirector:
         speeches = self._speech_round(label, lambda p, _: p.give_speech(
             prompts.opening_speech_request(team=self.team), label))
         if self.team:
-            self.discussion(speeches)
+            self.discussion(1, speeches=speeches)
         plan_label = "第 1 局策略规划（含首日出价）"
         return self._submission_round(plan_label, lambda p, received: p.plan_strategy(
             prompts.opening_plan_request(self._others(speeches, p.name), self.game, received=received, team=self.team),
             plan_label))
 
-    def discussion(self, speeches: dict[str, str]) -> None:
-        """团队赛的开局讨论；第 1 轮列出开局发言，每轮收到上一环节写的信。"""
+    def discussion(self, match_index: int, *, speeches: dict[str, str] | None = None,
+                   past_matches: str | None = None) -> None:
+        """团队赛一局的开局讨论；第 1 轮列出 speeches（第 1 局）或 past_matches（之后各局），每轮收到上一环节写的信。"""
         for number in range(1, DISCUSSION_ROUNDS + 1):
-            label = f"开局讨论第 {number} 轮"
+            first = number == 1
+            label = f"第 {match_index} 局开局讨论第 {number} 轮"
             self._run_round(label, lambda p, received: p.discuss(prompts.discussion_request(
-                number, others_speeches=self._others(speeches, p.name) if number == 1 else None, received=received),
-                label, first=number == 1))
+                match_index, number, others_speeches=self._others(speeches, p.name) if first and speeches else None,
+                past_matches=past_matches if first else None, received=received), label, first=first))
 
     def match_end(self, logs: list[MatchLog], standings: list[StandingsEntry]) -> dict[str, Bid]:
-        """还有下一局时的局末发言、整理记忆和下一局规划，返回规划交出的第 1 天出价；logs 是已结束的全部局。"""
+        """还有下一局时的局末发言、整理记忆、团队赛的开局讨论和下一局规划，返回规划交出的第 1 天出价；logs 是已结束的全部局。"""
         log = logs[-1]
         index = log.match_index
         label = f"第 {index} 局局末发言"
@@ -139,6 +141,10 @@ class AIDirector:
             prompts.memory_request(self._others(speeches, p.name), index, received=received, team=self.team),
             memory_label))
         plan_label = f"第 {index + 1} 局策略规划（含首日出价）"
+        if self.team:
+            self.discussion(index + 1, past_matches=prompts.past_matches_info(logs, standings, self.game))
+            return self._submission_round(plan_label, lambda p, received: p.plan_strategy(
+                prompts.team_next_match_plan_request(index + 1, self.game, received=received), plan_label))
         # 整理记忆不写信，这一轮收不到信。
         return self._submission_round(plan_label, lambda p, _: p.plan_strategy(
             prompts.next_match_plan_request(logs, standings, self.game), plan_label))

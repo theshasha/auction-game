@@ -187,15 +187,16 @@ def team_bid_obs(**kwargs):
 
 @pytest.mark.parametrize("build,written", [
     (lambda received: prompts.opening_plan_request({}, TEST_GAME, received=received, team=True), "在开局讨论第 3 轮时"),
+    (lambda received: prompts.team_next_match_plan_request(2, TEST_GAME, received=received), "在开局讨论第 3 轮时"),
     (lambda received: prompts.bid_request(team_bid_obs(day=2), received=received), "昨天出价时"),
     (lambda received: prompts.match_end_speech_request(make_log(), TEAM_STANDINGS, received=received),
      "在本局最后一天出价时"),
     (lambda received: prompts.final_speech_request(TEAM_STANDINGS, make_log(), received=received), "在本局最后一天出价时"),
     (lambda received: prompts.memory_request({"丁": "局末发言"}, 1, received=received, team=True), "在局末发言时"),
-    (lambda received: prompts.discussion_request(1, received=received), "在开局发言时"),
-    (lambda received: prompts.discussion_request(2, received=received), "在开局讨论第 1 轮时"),
-    (lambda received: prompts.discussion_request(3, received=received), "在开局讨论第 2 轮时"),
-], ids=["plan", "bid", "match-end", "final", "memory", "discussion-1", "discussion-2", "discussion-3"])
+    (lambda received: prompts.discussion_request(1, 1, received=received), "在开局发言时"),
+    (lambda received: prompts.discussion_request(1, 2, received=received), "在开局讨论第 1 轮时"),
+    (lambda received: prompts.discussion_request(2, 3, received=received), "在开局讨论第 2 轮时"),
+], ids=["plan", "next-plan", "bid", "match-end", "final", "memory", "discussion-1", "discussion-2", "discussion-3"])
 def test_team_requests_list_teammates_letters(build, written):
     block = f"以下是队友{written}写的信：\n\n【乙】第一封\n\n【丙】第二封"
     text = build({"乙": "第一封", "丙": "第二封"})
@@ -223,21 +224,56 @@ def test_team_plans_and_speeches_say_when_letters_arrive():
     game = replace(TEST_GAME, daily_pool=(1, 1, 1))
     assert prompts.opening_speech_request(team=True).endswith("\n\n现在写的信，队友在开局讨论第 1 轮看到。")
     assert prompts.opening_plan_request({}, game, team=True).endswith(f"\n\n{TEAM_NEXT_DAY}")
-    assert prompts.next_match_plan_request(make_logs(1, game), TEAM_STANDINGS, game).endswith(f"\n\n{TEAM_NEXT_DAY}")
+    assert prompts.team_next_match_plan_request(2, game).endswith(f"\n\n{TEAM_NEXT_DAY}")
     assert prompts.match_end_speech_request(make_log(), TEAM_STANDINGS).endswith(
         "局末发言（不超过 300 字）。\n\n现在写的信，队友整理记忆时看到，信的原文不会带到下一局。")
 
 
+@pytest.mark.parametrize("match_index", [1, 2])
 @pytest.mark.parametrize("round_number,arrival", [(1, "下一轮"), (2, "下一轮"), (3, "第 1 天出价时")])
-def test_discussion_request_says_the_round_and_when_the_letter_arrives(round_number, arrival):
-    assert prompts.discussion_request(round_number) == (
-        f"现在是开局讨论第 {round_number} 轮，共 3 轮。请写这一轮的信（约 300 字），队友在{arrival}看到。")
+def test_discussion_request_says_the_round_and_when_the_letter_arrives(match_index, round_number, arrival):
+    assert prompts.discussion_request(match_index, round_number) == (
+        f"现在是第 {match_index} 局开局讨论第 {round_number} 轮，共 3 轮。请写这一轮的信（约 300 字），队友在{arrival}看到。")
 
 
 def test_first_discussion_round_lists_speeches_before_letters():
-    text = prompts.discussion_request(1, others_speeches={"乙": "乙的发言", "丁": "丁的发言"}, received={"乙": "乙的信"})
+    text = prompts.discussion_request(1, 1, others_speeches={"乙": "乙的发言", "丁": "丁的发言"},
+                                      received={"乙": "乙的信"})
     assert text.startswith("以下是其他玩家的开局发言：\n\n【乙】乙的发言\n\n【丁】丁的发言\n\n"
-                           "以下是队友在开局发言时写的信：\n\n【乙】乙的信\n\n现在是开局讨论第 1 轮")
+                           "以下是队友在开局发言时写的信：\n\n【乙】乙的信\n\n现在是第 1 局开局讨论第 1 轮")
+
+
+def test_later_discussion_lists_past_matches_before_the_task():
+    logs = make_logs(2)
+    info = prompts.past_matches_info(logs, TEAM_STANDINGS, TEST_GAME)
+    assert f"第 1 局（正赛局）：\n\n{tables.render_match_log(logs[0])}" in info
+    assert f"第 2 局（正赛局）：\n\n{tables.render_match_log(logs[1])}" in info
+    assert f"截至当前的最新累计成绩：\n\n{tables.render_standings(TEAM_STANDINGS)}" in info
+    assert prompts.discussion_request(3, 1, past_matches=info).startswith(f"{info}\n\n现在是第 3 局开局讨论第 1 轮")
+
+
+def test_team_next_match_plan_builds_on_discussion_without_repeating_past_matches():
+    text = prompts.team_next_match_plan_request(2, TEST_GAME)
+    assert text.startswith("请结合之前整理的记忆和开局讨论，规划第 2 局的初步策略，并直接给出第 2 局第 1 天的出价。\n\n第 1 天，你有")
+    assert "出价日志" not in text and "累计成绩" not in text
+
+
+def test_team_next_match_plan_reminds_coins_reset_on_single_day_match():
+    assert "本局最后一天，结束后金币清零。" in prompts.team_next_match_plan_request(2, replace(TEST_GAME, daily_pool=(1,)))
+
+
+@pytest.mark.parametrize("match_index", [2, 3, 4], ids=["early-regular", "last-regular", "playoff"])
+def test_team_next_match_plan_shows_remaining_scores_in_last_regular_match_and_playoffs(match_index):
+    game = replace(TEST_GAME, daily_pool=(2, 1, 3), super_hit_score=2, regular_matches=3)
+    text = prompts.team_next_match_plan_request(match_index, game)
+    assert ("\n\n本局还剩 3 天（含今天），剩余拍卖奖池共 6 分。如果每天都命中，每人最多还能获得 6 命中分。" in text) is (match_index >= 3)
+
+
+@pytest.mark.parametrize("match_index,expected", [(2, TEAM_LAST_DAY), (3, TEAM_LAST_DAY_MAY_END)],
+                         ids=["single-day", "single-day-last-regular"])
+def test_team_next_match_plan_on_single_day_match_says_when_letters_arrive(match_index, expected):
+    game = replace(TEST_GAME, regular_matches=3, daily_pool=(1,))
+    assert prompts.team_next_match_plan_request(match_index, game).endswith(f"\n\n{expected}")
 
 
 def test_team_opening_plan_does_not_repeat_speeches():
@@ -300,9 +336,9 @@ class TestPlayoffNotice:
                                    scores_history=dict(zip(NAMES, [[2], [0], [1], [3], [0], [0]])), team_of=TEAM_OF)
         speech = prompts.match_end_speech_request(make_log(game=game), standings)
         assert "两个阵营总分相同，全员进入加赛。" in speech and "第一名总分并列" not in speech
-        plan = prompts.next_match_plan_request(make_logs(1, game), standings, game)
-        assert plan.startswith("第 2 局是加赛局。目前两个阵营总分相同，各 3 分。\n\n之前各局的完整出价日志")
-        assert "| 排名 | 阵营 | 总分 |" in speech and "| 排名 | 阵营 | 总分 |" in plan
+        past = prompts.past_matches_info(make_logs(1, game), standings, game)
+        assert past.startswith("第 2 局是加赛局。目前两个阵营总分相同，各 3 分。\n\n之前各局的完整出价日志")
+        assert "| 排名 | 阵营 | 总分 |" in speech and "| 排名 | 阵营 | 总分 |" in past
 
 
 class TestPlanBidMerge:

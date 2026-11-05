@@ -131,18 +131,44 @@ def _day1_constant_info(game: GameSettings, match_index: int = 1) -> str:
     )
 
 
-def discussion_request(round_number: int, *, others_speeches: dict[str, str] | None = None,
-                       received: dict[str, str] | None = None) -> str:
+def past_matches_info(past_logs: list[MatchLog], standings: list[StandingsEntry], game: GameSettings) -> str:
+    """past_logs 是已结束的全部局。整理记忆清空了旧对话，这段补回各局出价日志和排名，留在新一局的对话里。
+
+    加赛局写明并列第一的玩家，团队赛写两个阵营同分：进入加赛的消息只在局末发言请求里，整理记忆后就看不到了。
+    """
+    match_index = len(past_logs) + 1
+    logs_text = "\n\n".join(f"{match_title(log)}：\n\n{render_match_log(log)}" for log in past_logs)
+    playoff_note = ""
+    if match_index > game.regular_matches:
+        teams = team_standings(standings)
+        if teams is None:
+            leaders = [entry for entry in standings if entry.rank == 1]
+            playoff_note = (f"第 {match_index} 局是加赛局。目前第一名总分并列："
+                            f"{'、'.join(entry.player for entry in leaders)}各 {leaders[0].total_score} 分。\n\n")
+        else:
+            playoff_note = f"第 {match_index} 局是加赛局。目前两个阵营总分相同，各 {teams[0].total_score} 分。\n\n"
+    return (
+        playoff_note
+        + f"之前各局的完整出价日志：\n\n{logs_text}\n\n"
+        f"截至当前的最新累计成绩：\n\n{render_standings(standings)}"
+    )
+
+
+def discussion_request(match_index: int, round_number: int, *, others_speeches: dict[str, str] | None = None,
+                       past_matches: str | None = None, received: dict[str, str] | None = None) -> str:
     """团队赛开局讨论的一轮；讨论的机制在规则里，这里只写第几轮和这一轮的信什么时候到。
 
-    第 1 轮先列其他玩家的开局发言，之后留在对话里；收到的信来自上一环节。
+    第 1 轮先列第 1 局的其他玩家开局发言，或之后各局的 past_matches_info，之后留在对话里。
+    收到的信来自上一环节；第 2 局起第 1 轮的上一环节是整理记忆，收不到信。
     """
     written = "在开局发言时" if round_number == 1 else f"在开局讨论第 {round_number - 1} 轮时"
     arrival = "下一轮" if round_number < DISCUSSION_ROUNDS else "第 1 天出价时"
     return "\n\n".join([
         *([_quoted("以下是其他玩家的开局发言：", others_speeches)] if others_speeches else []),
+        *([past_matches] if past_matches else []),
         *_received_letters(received, written, True),
-        f"现在是开局讨论第 {round_number} 轮，共 {DISCUSSION_ROUNDS} 轮。请写这一轮的信（约 300 字），队友在{arrival}看到。",
+        f"现在是第 {match_index} 局开局讨论第 {round_number} 轮，共 {DISCUSSION_ROUNDS} 轮。"
+        f"请写这一轮的信（约 300 字），队友在{arrival}看到。",
     ])
 
 
@@ -284,34 +310,30 @@ def memory_request(others_speeches: dict[str, str], match_index: int, *,
 
 
 def next_match_plan_request(past_logs: list[MatchLog], standings: list[StandingsEntry], game: GameSettings) -> str:
-    """past_logs 是已结束的全部局。整理记忆清空了旧对话，这里补回各局出价日志，留在新一局的对话里。
-
-    加赛局写明并列第一的玩家，团队赛写两个阵营同分：进入加赛的消息只在局末发言请求里，整理记忆后就看不到了。
-    """
+    """个人赛第 2 局起的规划。"""
     match_index = len(past_logs) + 1
-    logs_text = "\n\n".join(f"{match_title(log)}：\n\n{render_match_log(log)}" for log in past_logs)
-    playoff_note = ""
-    if match_index > game.regular_matches:
-        teams = team_standings(standings)
-        if teams is None:
-            leaders = [entry for entry in standings if entry.rank == 1]
-            playoff_note = (f"第 {match_index} 局是加赛局。目前第一名总分并列："
-                            f"{'、'.join(entry.player for entry in leaders)}各 {leaders[0].total_score} 分。\n\n")
-        else:
-            playoff_note = f"第 {match_index} 局是加赛局。目前两个阵营总分相同，各 {teams[0].total_score} 分。\n\n"
     return (
-        playoff_note
-        + f"之前各局的完整出价日志：\n\n{logs_text}\n\n"
-        f"截至当前的最新累计成绩：\n\n{render_standings(standings)}\n\n"
+        f"{past_matches_info(past_logs, standings, game)}\n\n"
         f"请结合之前整理的记忆，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
         + _day1_constant_info(game, match_index)
-        + f"\n\n{_letter_delivery(game, match_index, 1, _is_team(standings))}"
+        + f"\n\n{_letter_delivery(game, match_index, 1, False)}"
     )
+
+
+def team_next_match_plan_request(match_index: int, game: GameSettings, *,
+                                 received: dict[str, str] | None = None) -> str:
+    """团队赛第 2 局起的规划；之前各局的日志和排名在讨论第 1 轮的请求里，还在对话里。"""
+    return "\n\n".join([
+        *_received_letters(received, f"在开局讨论第 {DISCUSSION_ROUNDS} 轮时", True),
+        f"请结合之前整理的记忆和开局讨论，规划第 {match_index} 局的初步策略，并直接给出第 {match_index} 局第 1 天的出价。"
+        + _day1_constant_info(game, match_index),
+        _letter_delivery(game, match_index, 1, True),
+    ])
 
 
 def final_speech_request(standings: list[StandingsEntry], log: MatchLog, *,
                          received: dict[str, str] | None = None) -> str:
-    """请求最终感言，并提供最后一局的出价日志；之前各局的日志已在本局规划请求中给出。"""
+    """请求最终感言，并提供最后一局的出价日志；之前各局的日志已在本局规划请求或讨论第 1 轮的请求中给出。"""
     return "\n\n".join([
         f"{match_title(log)}结束，这也是最后一局。",
         f"本局完整出价日志：\n\n{render_match_log(log)}",

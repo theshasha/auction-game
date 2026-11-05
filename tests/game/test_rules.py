@@ -90,7 +90,7 @@ class TestRulesText:
         assert team == individual and team[-1].startswith("3. ")
 
     def test_team_rules_state_discussion_rounds(self):
-        assert "每个阵营进行 3 轮队内讨论，称为开局讨论" in render_rules(TEST_GAME, make_team_lineup())
+        assert "每局开始前，每个阵营进行 3 轮队内讨论，称为开局讨论" in render_rules(TEST_GAME, make_team_lineup())
 
     @pytest.mark.parametrize("attribute,lineup", [("TEMPLATE_PATH", make_lineup()),
                                                   ("TEAM_TEMPLATE_PATH", make_team_lineup())])

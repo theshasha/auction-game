@@ -10,9 +10,10 @@ import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput
-from auction_game.agent.text_output import BOARD
+from auction_game.agent.text_output import BOARD, BRIEF_DISCUSSION_FORMAT, output_requirement
 from auction_game.flow import director as director_module
 from auction_game.llm.execution import OutputFailedError
+from auction_game.game.tables import render_match_log, render_standings
 from tests.support.factories import (TEAM_OF, TEST_GAME, StubPlayer, bid_reply, continuous_controller,
                                      discussion_reply, fake_task_runner, init_run_dir, make_ai_obs, make_log,
                                      make_player, make_standings, make_team_player, request_text, speech_reply,
@@ -347,10 +348,18 @@ def test_team_run_plays_playoffs_until_team_totals_differ(tmp_path):
     assert not result.playoff_cap_hit
     assert {entry.player: (entry.team, entry.total_score) for entry in result.final_standings} == {
         "甲": ("红队", 1), "乙": ("红队", 1), "丙": ("蓝队", 1), "丁": ("蓝队", 0)}
-    # 开局讨论只在开赛前一次，在开局发言和第 1 局规划之间。
-    assert players[0].titles[:5] == ["开局发言", "开局讨论第 1 轮", "开局讨论第 2 轮", "开局讨论第 3 轮",
-                                     "第 1 局策略规划（含首日出价）"]
-    assert sum(title.startswith("开局讨论") for title in players[0].titles) == 3
+    # 每局开始前都有开局讨论，加赛也有：第 1 局在开局发言之后，之后各局在整理记忆之后，都在规划之前。
+    titles = players[0].titles
+
+    def discussion_then_plan(match):
+        return [*(f"第 {match} 局开局讨论第 {number} 轮" for number in (1, 2, 3)), f"第 {match} 局策略规划（含首日出价）"]
+
+    assert titles[:5] == ["开局发言", *discussion_then_plan(1)]
+    for match in (2, 3):
+        start = titles.index(f"第 {match - 1} 局局末发言")
+        assert titles[start:start + 6] == [f"第 {match - 1} 局局末发言", f"第 {match - 1} 局累计私有记忆",
+                                           *discussion_then_plan(match)]
+    assert sum("开局讨论" in title for title in titles) == 9
     # 出价时看到的排名和发布的局日志都带阵营。
     assert {entry.player: entry.team for entry in players[0].observations[0].standings} == team_of
     published = json.loads(director.paths.match(3).read_text(encoding="utf-8"))
@@ -394,17 +403,48 @@ def test_team_letters_md_lists_board_letters_by_team(tmp_path):
     letters = director.paths.letters.read_text(encoding="utf-8")
     assert letters.startswith("# 队内信件区\n\n每节是这一环节里写到队内信件区的信，队友在下一次行动时看到。\n"
                               "\n## 开局发言\n\n【甲 → 红队】甲开局信\n\n【乙 → 红队】乙开局信")
-    assert "\n## 开局讨论第 3 轮\n\n【甲 → 红队】甲第3轮信" in letters and "【丁 → 蓝队】丁第3轮信" in letters
+    assert "\n## 第 1 局开局讨论第 3 轮\n\n【甲 → 红队】甲第3轮信" in letters and "【丁 → 蓝队】丁第3轮信" in letters
     assert "策略规划" not in letters
 
 
 def test_team_memory_request_knows_it_is_a_team_run(tmp_path):
     game = replace(TEST_GAME, daily_pool=(4,), regular_matches=2)
-    players = [make_team_player(fake_task_runner([speech_reply("局末"), {"memory": "记忆"}, bid_reply(1)]),
-                                tmp_path, game=game, name=name) for name in TEAM_OF]
+    players = [make_team_player(fake_task_runner([
+        speech_reply("局末"), {"memory": "记忆"}, *(discussion_reply("信") for _ in range(3)), bid_reply(1),
+    ]), tmp_path, game=game, name=name) for name in TEAM_OF]
     standings = make_standings({name: [0] for name in TEAM_OF}, team_of=TEAM_OF)
     team_director(players, tmp_path, game=game).match_end([make_log(game=game)], standings)
     assert "队内信件区里谈好的约定" in request_text(players[0].task_runner, 1)
+
+
+def test_later_match_discussion_runs_in_the_new_conversation_and_reaches_the_plan(tmp_path):
+    game = replace(TEST_GAME, daily_pool=(4,), regular_matches=2)
+    players = [make_team_player(fake_task_runner([
+        {**speech_reply("局末"), "letters": [{"to": BOARD, "text": f"{name}局末信"}]}, {"memory": "记忆"},
+        *(discussion_reply(f"{name}第{number}轮信") for number in (1, 2, 3)), bid_reply(1),
+    ]), tmp_path, game=game, name=name) for name in TEAM_OF]
+    jia, ding = players[0], players[3]
+    log = make_log(game=game)
+    standings = make_standings({name: [0] for name in TEAM_OF}, team_of=TEAM_OF)
+    team_director(players, tmp_path, game=game).match_end([log], standings)
+    # 甲的请求依次是局末发言、整理记忆、3 轮讨论和规划。
+    memory, first, second, third, plan = (request_text(jia.task_runner, index) for index in range(1, 6))
+    assert "以下是队友在局末发言时写的信：\n\n【乙】乙局末信\n\n【丙】丙局末信" in memory
+    # 第 1 轮补回日志和排名，附完整格式；局末信已在整理记忆时送到，这一轮收不到信。
+    assert render_match_log(log) in first and render_standings(standings) in first
+    assert "现在是第 2 局开局讨论第 1 轮" in first and output_requirement(BOARD) in first
+    assert "写的信：" not in first
+    assert "以下是队友在开局讨论第 1 轮时写的信：\n\n【乙】乙第1轮信\n\n【丙】丙第1轮信" in second
+    assert "以下是队友在开局讨论第 2 轮时写的信：\n\n【乙】乙第2轮信\n\n【丙】丙第2轮信" in third
+    for request in (second, third):
+        assert "出价日志" not in request and BRIEF_DISCUSSION_FORMAT in request
+    assert "以下是队友在开局讨论第 3 轮时写的信：\n\n【乙】乙第3轮信\n\n【丙】丙第3轮信" in plan
+    assert "出价日志" not in plan and "【丁】" not in second + third + plan
+    assert "以下是队友在开局讨论第 3 轮时写的信：\n\n【戊】戊第3轮信\n\n【己】己第3轮信" in request_text(ding.task_runner, 5)
+    # 讨论排在整理记忆之后，留在新一局的对话里；上一局的信已经清掉。
+    history = ModelMessagesTypeAdapter.dump_json(jia.messages).decode()
+    assert "乙第3轮信" in history and render_standings(standings).splitlines()[0] in history
+    assert "局末信" not in history
 
 
 def test_run_publishes_each_match_and_new_match_resets_coins(tmp_path, capsys):

@@ -244,8 +244,9 @@ def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_confi
     # 第 2 天起由本局赢的一队第 2 人独得：正赛红队乙、蓝队戊轮流，第 3 局是奇数局数的最后一局正赛，谁都不赢。
     assert [[day["winner"] for day in payload["match"]["days"]] for payload in matches] == [
         [None, "乙", "乙"], [None, "戊", "戊"], [None, None, None], [None, "乙", "乙"]]
-    # 开局发言、3 轮开局讨论和第 1 局规划，之后每局第 2 天起的出价，局末三轮，最后是感言和总结。
-    expected_calls = 5 + len(matches) * (game.max_days - 1) + 3 * (len(matches) - 1) + 2
+    # 开局发言、3 轮开局讨论和第 1 局规划，之后每局第 2 天起的出价，局末发言、整理记忆、3 轮开局讨论和规划共 6 轮，
+    # 最后是感言和总结。
+    expected_calls = 5 + len(matches) * (game.max_days - 1) + 6 * (len(matches) - 1) + 2
     assert all(f.opened == f.closed == f.calls == expected_calls for f in factories)
 
     paths = RunPaths(run_dir)
@@ -253,7 +254,8 @@ def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_confi
     assert snapshot["run_type"] == "team-offline"
     sections = paths.letters.read_text(encoding="utf-8").split("\n## ")[1:]
     assert [section.split("\n", 1)[0] for section in sections[:5]] == [
-        "开局发言", "开局讨论第 1 轮", "开局讨论第 2 轮", "开局讨论第 3 轮", "第 1 局策略规划（含首日出价）"]
+        "开局发言", "第 1 局开局讨论第 1 轮", "第 1 局开局讨论第 2 轮", "第 1 局开局讨论第 3 轮",
+        "第 1 局策略规划（含首日出价）"]
     assert all(re.findall(r"【(\S+) → (\S+)】", section) == list(TEAM_OF.items()) for section in sections)
     # 甲写到信件区的信，队友下一次行动时看到，对方看不到。
     letter = task_entries(paths.player(1))[0]["result"]["letters"][0]["text"]
