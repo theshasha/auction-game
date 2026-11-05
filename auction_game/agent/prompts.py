@@ -63,7 +63,7 @@ def opening_speech_request() -> str:
 def _letter_delivery(game: GameSettings, match_index: int, day: int) -> str:
     """规划或出价时写的信什么时候送到；day 是这次交的是第几天的出价，规划交的是第 1 天。"""
     if day < game.max_days:
-        return "现在写的私信，收件人明天出价时才收到，影响不了对方今天的出价。"
+        return "现在写的私信，收件人明天出价时才收到，那时已经公布今天的结果和全员余额，影响不了对方今天的出价。"
     text = "现在写的私信，收件人在局末发言时才收到，本局不再出价"
     # 最后一局正赛和加赛打完，比赛可能就此结束，这时没有局末发言。
     if match_index >= game.regular_matches:

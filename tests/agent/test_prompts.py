@@ -141,7 +141,7 @@ def test_received_letters_sit_between_facts_and_task(kind):
     assert "写给你的私信" not in build(None)
 
 
-NEXT_DAY = "现在写的私信，收件人明天出价时才收到，影响不了对方今天的出价。"
+NEXT_DAY = "现在写的私信，收件人明天出价时才收到，那时已经公布今天的结果和全员余额，影响不了对方今天的出价。"
 LAST_DAY = "现在写的私信，收件人在局末发言时才收到，本局不再出价。"
 LAST_DAY_MAY_END = "现在写的私信，收件人在局末发言时才收到，本局不再出价；比赛就此结束时，在最终感言时收到。"
 
