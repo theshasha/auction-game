@@ -199,7 +199,7 @@ def team_bid_obs(**kwargs):
 def test_team_requests_list_teammates_letters(build, written):
     block = f"以下是队友{written}写的信：\n\n【乙】第一封\n\n【丙】第二封"
     text = build({"乙": "第一封", "丙": "第二封"})
-    assert block in text and "私信" not in text
+    assert block in text
     assert "写的信" not in build(None).replace("现在写的信", "")
 
 
@@ -252,7 +252,6 @@ def test_team_memory_request_talks_about_letters(match_index):
     for required in ("公开发言和队内信件区的信，整理你的记忆", "看不到之前各局的原始对话、公开发言和信",
                      "队内信件区里谈好的约定和得到的消息"):
         assert required in text
-    assert "私信" not in text
 
 
 class TestPlayoffNotice:

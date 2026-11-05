@@ -81,9 +81,16 @@ class TestRulesText:
         assert "{" not in text and "}" not in text
         assert prompts.build_system_prompt(lineup.profiles[0], lineup, game).startswith(text)
 
-    @pytest.mark.parametrize("section", ["三", "五"])
-    def test_team_template_shares_bidding_and_information_sections(self, section):
-        assert sections(TEAM_TEMPLATE_PATH)[section] == sections(TEMPLATE_PATH)[section]
+    def test_team_template_shares_bidding_section(self):
+        assert sections(TEAM_TEMPLATE_PATH)["三"] == sections(TEMPLATE_PATH)["三"]
+
+    def test_team_template_shares_information_and_speech_rules(self):
+        """第五节第 1–3 条相同；之后是开局讨论、记忆和队内信件区，团队赛另写。"""
+        team, individual = (sections(path)["五"].splitlines()[1:4] for path in (TEAM_TEMPLATE_PATH, TEMPLATE_PATH))
+        assert team == individual and team[-1].startswith("3. ")
+
+    def test_team_rules_state_discussion_rounds(self):
+        assert "每个阵营进行 3 轮队内讨论，称为开局讨论" in render_rules(TEST_GAME, make_team_lineup())
 
     @pytest.mark.parametrize("attribute,lineup", [("TEMPLATE_PATH", make_lineup()),
                                                   ("TEAM_TEMPLATE_PATH", make_team_lineup())])

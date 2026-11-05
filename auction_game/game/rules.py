@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from auction_game.game.lineup import Lineup
-from auction_game.game.settings import GameSettings
+from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.paths import TEAM_TEMPLATE_PATH, TEMPLATE_PATH
 
 GENERATED_NOTE = "<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动生成：python -m auction_game.cli.rules -->\n"
@@ -48,6 +48,7 @@ def render_rules(game: GameSettings, lineup: Lineup, *, include_note: bool = Tru
         template_path, note = TEAM_TEMPLATE_PATH, TEAM_GENERATED_NOTE
         values["team_lineup"] = "，".join(f"{team}有 {'、'.join(members)}" for team, members in teams.items())
         values["team_size"] = len(next(iter(teams.values())))
+        values["discussion_rounds"] = DISCUSSION_ROUNDS
     else:
         template_path, note = TEMPLATE_PATH, GENERATED_NOTE
     body = template_path.read_text(encoding="utf-8").format_map(values).strip() + "\n"

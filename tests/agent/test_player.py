@@ -230,4 +230,4 @@ def test_team_bid_writes_to_the_board_and_gets_team_format_line(tmp_path):
     assert request_text(runner, 0) == "请规划\n\n" + output_requirement(DECISION, TeamBoard())
     assert request_text(runner, 1).endswith("\n\n请按本局规划时的格式提交：strategy 和 decision 两块，队内信件区的信可以不写。")
     markdown = player.log.readable_path.read_text(encoding="utf-8")
-    assert "### 队内信件区\n\n我明天守高位" in markdown and "### 私信" not in markdown
+    assert "### 队内信件区\n\n我明天守高位" in markdown

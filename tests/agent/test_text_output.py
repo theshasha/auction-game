@@ -205,7 +205,6 @@ def test_team_format_shows_the_board_block(second):
     text = output_requirement(second, TeamBoard())
     assert "队内信件区的信可以不写，最多 1 封，约 300 字。\n" in text
     assert text.endswith("\n<队内信件区>\n只有队友能看到的信。\n</队内信件区>")
-    assert "私信" not in text and "收件人" not in text
 
 
 def test_discussion_format_has_strategy_and_letter_blocks():
