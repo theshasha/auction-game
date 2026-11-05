@@ -126,3 +126,11 @@ models:
     models_dev:
       provider: moonshotai
       model: kimi-k3.1-pro
+  qwen_flash:
+    name: 千问妹妹
+    model: qwen3.8-flash
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: alibaba
+      model: qwen3.8-flash

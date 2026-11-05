@@ -14,7 +14,7 @@ teams:
         persona_text: "无"
   - name: 蓝队
     players:
-      - model: kimi_pro
+      - model: qwen_flash
         persona_title: "无"
         persona_text: "无"
       - model: glm_pro

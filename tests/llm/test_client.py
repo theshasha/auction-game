@@ -297,12 +297,13 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     assert request.extensions["timeout"]["read"] == 17 and h.closes == 1
 
 
-@pytest.mark.parametrize("response,status", [(reply(text="OK"), 0),
+@pytest.mark.parametrize("response,status", [(reply(text="c0de"), 0),
                                              (503, 1), (reply(text=""), 1)])
 def test_probe_single_streamed_text_request_never_retries(response, status, monkeypatch, capsys):
     from auction_game.cli import check_llm
     from auction_game.configuration import PlayerConfig, ResolvedModel
     from auction_game.game.lineup import PlayerProfile
+    monkeypatch.setattr(check_llm.secrets, "token_hex", lambda nbytes: "c0de")
     h = Harness("responses", [response])
     model = ResolvedModel(key="fake", provider="fake", model="alias", protocol="responses",
                           models_dev={"provider": "fake", "model": "alias"}, max_tokens=4096,

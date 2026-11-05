@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-11-05T09:57:58.970200+00:00",
+  "fetched_at": "2026-11-05T16:25:47.194298+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -368,6 +368,37 @@
             "high",
             "max"
           ]
+        }
+      ]
+    },
+    "qwen_flash": {
+      "source": {
+        "provider": "alibaba",
+        "model": "qwen3.8-flash"
+      },
+      "status": "matched",
+      "matched_id": "qwen3.8-flash",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 131072
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "xhigh"
+          ]
+        },
+        {
+          "type": "budget_tokens",
+          "max": 262144
         }
       ]
     }
