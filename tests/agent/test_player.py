@@ -8,9 +8,10 @@ import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPromptPart, SystemPromptPart
 
 from auction_game.llm.execution import OutputFailedError
-from auction_game.agent.text_output import DECISION, LetterNames, SPEECH, output_requirement
-from tests.support.factories import (ALL_NAMES, TEST_GAME, TEST_LINEUP, bid_reply, fake_task_runner, make_ai_obs,
-                                     make_player, request_text, speech_reply, text_reply, task_entries)
+from auction_game.agent.text_output import BOARD, DECISION, LetterNames, SPEECH, TeamBoard, output_requirement
+from tests.support.factories import (ALL_NAMES, TEST_GAME, TEST_LINEUP, bid_reply, discussion_reply, fake_task_runner,
+                                     make_ai_obs, make_player, make_team_player, request_text, speech_reply, text_reply,
+                                     task_entries)
 from auction_game.agent import prompts
 
 LETTERS = LetterNames("Alpha", tuple(ALL_NAMES[1:]))
@@ -191,3 +192,42 @@ def test_plan_returns_day_one_bid_and_letters(tmp_path):
     output = player.plan_strategy("请规划", "第 1 局策略规划（含首日出价）")
     assert (output.submission, output.letters) == ((1, 3), [letter])
     assert len(runner.calls) == 1
+
+
+def test_discussion_format_is_full_in_first_round_only_and_results_stay_in_history(tmp_path):
+    runner = fake_task_runner([discussion_reply("第一轮的信"), discussion_reply("第二轮的信")])
+    player = make_team_player(runner, tmp_path)
+    first = player.discuss("第 1 轮请求", "开局讨论第 1 轮", first=True)
+    second = player.discuss("第 2 轮请求", "开局讨论第 2 轮", first=False)
+    assert (first.strategy, first.letters) == ("讨论的私有考虑", [{"to": BOARD, "text": "第一轮的信"}])
+    assert second.letters == [{"to": BOARD, "text": "第二轮的信"}]
+    assert request_text(runner, 0) == "第 1 轮请求\n\n" + output_requirement(BOARD)
+    assert request_text(runner, 1) == "第 2 轮请求\n\n请按上一轮的格式提交：strategy 和队内信件区两块。"
+    # 结果写回对话，下一轮能看到自己写过的信。
+    assert any("第一轮的信" in part.content for message in runner.calls[1] for part in message.parts
+               if isinstance(part, TextPart))
+    entry = task_entries(player.log.path)[0]
+    assert entry["task"] == "discussion"
+    assert entry["result"] == {"strategy": "讨论的私有考虑", "letters": [{"to": BOARD, "text": "第一轮的信"}]}
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
+    assert "### 私有策略\n\n讨论的私有考虑\n\n### 队内信件区\n\n第一轮的信\n\n---" in markdown
+
+
+def test_format_error_in_later_discussion_round_gets_full_format(tmp_path):
+    runner = fake_task_runner(["随手写的信", discussion_reply("补上格式")])
+    player = make_team_player(runner, tmp_path)
+    assert player.discuss("请求", "开局讨论第 2 轮", first=False).letter == "补上格式"
+    assert retry_text(runner, 1) == ("必须依次提交 strategy 与 队内信件区 两块，标签各占一行且各出现一次。\n"
+                                     + output_requirement(BOARD))
+
+
+def test_team_bid_writes_to_the_board_and_gets_team_format_line(tmp_path):
+    letter = {"to": BOARD, "text": "我明天守高位"}
+    runner = fake_task_runner([{**bid_reply(1), "letters": [letter]}, {**bid_reply(2), "letters": [letter]}])
+    player = make_team_player(runner, tmp_path)
+    assert player.plan_strategy("请规划", "第 1 局策略规划（含首日出价）").letters == [letter]
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").letters == [letter]
+    assert request_text(runner, 0) == "请规划\n\n" + output_requirement(DECISION, TeamBoard())
+    assert request_text(runner, 1).endswith("\n\n请按本局规划时的格式提交：strategy 和 decision 两块，队内信件区的信可以不写。")
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
+    assert "### 队内信件区\n\n我明天守高位" in markdown and "### 私信" not in markdown

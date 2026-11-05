@@ -14,7 +14,7 @@ from pydantic_ai.models.function import FunctionModel
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.flow.controller import Controller
 from auction_game.agent.tasks import Task, TaskRunner
-from auction_game.agent.text_output import LetterNames
+from auction_game.agent.text_output import BOARD, LetterScope, TeamBoard
 from auction_game.game.lineup import Lineup
 from auction_game.game.settings import GameSettings
 from auction_game.runners import make_task_runners, play_ai
@@ -25,14 +25,14 @@ from auction_game.game.rules import render_rules
 
 @dataclass(frozen=True)
 class OfflineTask:
-    """交给假模型的当前任务；letters 是可写信的名单，不能写信时为 None。"""
+    """交给假模型的当前任务；letters 是写信范围，不能写信时为 None。"""
 
     task: Task
     game: GameSettings
     coins: int
     match_index: int
     day: int
-    letters: LetterNames | None
+    letters: LetterScope | None
 
 
 def demo_submission(game, index, player_count, match_index, day, coins):
@@ -144,11 +144,16 @@ class DemoFactory:
     current: OfflineTask | None = None  # 由这名玩家的任务入口在每个任务开始前设置
     letters_written: int = 0
 
-    def _letter(self, letters: LetterNames | None) -> str:
-        """能写信时写 1 封给配置里的下一位，最后一位写给第一位；编号便于在日志里对上送达。"""
+    def _letter(self, letters: LetterScope | None) -> str:
+        """能写信时写 1 封：团队赛写到队内信件区，个人赛写给配置里的下一位，最后一位写给第一位。
+
+        编号便于在日志里对上送达。
+        """
         if letters is None:
             return ""
         self.letters_written += 1
+        if isinstance(letters, TeamBoard):
+            return f"\n<{BOARD}>\n模拟信：我是{self.name}，这是我写的第 {self.letters_written} 封信。\n</{BOARD}>"
         to = letters.recipients[self.index % len(letters.recipients)]
         return f"\n<{to}>\n模拟私信：我是{self.name}，这是我写的第 {self.letters_written} 封信。\n</{to}>"
 

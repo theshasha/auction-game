@@ -1,4 +1,4 @@
-"""五种任务的规格和输出：解析文本输出、校验出价，格式错误和违规出价共用一次纠错。"""
+"""六种任务的规格和输出：解析文本输出、校验出价，格式错误和违规出价共用一次纠错。"""
 
 from __future__ import annotations
 
@@ -12,16 +12,18 @@ from pydantic_ai.usage import UsageLimits
 from auction_game.llm.execution import AgentExecutor, ExecutionResult
 from auction_game.game.settings import GameSettings, validate_submission
 from auction_game.llm.client import ModelFactory
-from auction_game.agent.text_output import (DECISION, SPEECH, Blocks, LetterScope, OutputFormatError,
+from auction_game.agent.text_output import (BOARD, DECISION, SPEECH, Blocks, LetterScope, OutputFormatError,
                                             output_requirement, parse_text_output)
 
-Task = Literal["bid", "plan", "speech", "memory", "summary"]
+Task = Literal["bid", "plan", "speech", "discussion", "memory", "summary"]
 
 
 def _strategy_and_letters(strategy: str, letters: list[dict], result: str) -> list[str]:
-    """分块任务在私人日志里的小节：私有策略、结果，有信时再加私信。"""
+    """分块任务在私人日志里的小节：私有策略、结果，有信时再加私信或队内信件区的信。"""
     lines = [f"### 私有策略\n\n{strategy}", result]
-    if letters:
+    if letters and letters[0]["to"] == BOARD:
+        lines.append(f"### {BOARD}\n\n{letters[0]['text']}")
+    elif letters:
         lines.append("### 私信\n\n" + "\n\n".join(f"写给 {letter['to']}：{letter['text']}" for letter in letters))
     return lines
 
@@ -73,6 +75,28 @@ class SpeechOutput:
 
 
 @dataclass(frozen=True)
+class DiscussionOutput:
+    """开局讨论一轮的结果：私有策略和必须写的一封信。"""
+
+    strategy: str
+    letter: str
+
+    @classmethod
+    def from_parsed(cls, blocks: Blocks) -> DiscussionOutput:
+        return cls(blocks.strategy, blocks.body)
+
+    @property
+    def letters(self) -> list[dict]:
+        return [{"to": BOARD, "text": self.letter}]
+
+    def to_log(self) -> dict:
+        return {"strategy": self.strategy, "letters": self.letters}
+
+    def render(self) -> list[str]:
+        return [f"### 私有策略\n\n{self.strategy}", f"### {BOARD}\n\n{self.letter}"]
+
+
+@dataclass(frozen=True)
 class MemoryOutput:
     memory: str
     letters: tuple = ()  # 整理记忆不能写信
@@ -104,7 +128,7 @@ class SummaryOutput:
         return [f"### 总结\n\n{self.text}"]
 
 
-TaskOutput = BidOutput | SpeechOutput | MemoryOutput | SummaryOutput
+TaskOutput = BidOutput | SpeechOutput | DiscussionOutput | MemoryOutput | SummaryOutput
 
 
 @dataclass(frozen=True)
@@ -116,7 +140,7 @@ class TaskSpec:
     """
 
     name: Task
-    second: Literal["decision", "speech"] | None
+    second: Literal["decision", "speech", "队内信件区"] | None
     output: type
     can_write_letters: bool
     history: Literal["append", "reset", "review"]
@@ -126,6 +150,7 @@ TASKS: dict[str, TaskSpec] = {
     "bid": TaskSpec("bid", DECISION, BidOutput, True, "append"),
     "plan": TaskSpec("plan", DECISION, BidOutput, True, "append"),
     "speech": TaskSpec("speech", SPEECH, SpeechOutput, True, "append"),
+    "discussion": TaskSpec("discussion", BOARD, DiscussionOutput, False, "append"),
     "memory": TaskSpec("memory", None, MemoryOutput, False, "reset"),
     "summary": TaskSpec("summary", None, SummaryOutput, False, "review"),
 }

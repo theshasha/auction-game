@@ -12,9 +12,9 @@ from pydantic_ai.messages import (
 from auction_game.agent import prompts
 from auction_game.llm.execution import CallFailedError, TaskCancelledError
 from auction_game.agent.log import AgentLog
-from auction_game.agent.tasks import (TASKS, BidOutput, MemoryOutput, SpeechOutput, SummaryOutput, Task,
-                                      TaskOutput, TaskRunner)
-from auction_game.agent.text_output import LetterNames
+from auction_game.agent.tasks import (TASKS, BidOutput, DiscussionOutput, MemoryOutput, SpeechOutput, SummaryOutput,
+                                      Task, TaskOutput, TaskRunner)
+from auction_game.agent.text_output import BRIEF_DISCUSSION_FORMAT, LetterScope
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import Observation
 
@@ -45,7 +45,7 @@ def completed_history(messages: list[ModelMessage]) -> list[ModelMessage]:
 class AIPlayer:
     """日志成功才提交；快照同时恢复当前上下文、全场回顾和记忆。"""
 
-    def __init__(self, name: str, system_prompt: str, letter_names: LetterNames,
+    def __init__(self, name: str, system_prompt: str, letter_scope: LetterScope,
                  task_runner: TaskRunner, log: AgentLog, *, game: GameSettings):
         """系统提示由 prompts.build_system_prompt 按阵容拼好，放在两份对话的第一条。"""
         self.name = name
@@ -54,7 +54,7 @@ class AIPlayer:
         self.review_messages = list(self.messages)
         self.memory = ""
         self.task_runner = task_runner
-        self.letter_names = letter_names
+        self.letter_scope = letter_scope
         self.log = log
         self.log.system_prompt(system_prompt)
 
@@ -80,7 +80,7 @@ class AIPlayer:
         history = self.review_messages if spec.history == "review" else self.messages
         try:
             result = self.task_runner(spec, prompt, history, game=self.game, coins=coins,
-                                      letters=self.letter_names if spec.can_write_letters and letters else None,
+                                      letters=self.letter_scope if spec.can_write_letters and letters else None,
                                       brief=brief)
         except CallFailedError as exc:
             self.log.failure(entry, exc)
@@ -109,11 +109,15 @@ class AIPlayer:
         # 本局规划请求里有完整格式，整理记忆前一直留在对话里，出价请求只附一句提示。
         return self._task("bid", prompts.bid_request(obs, received=received), title,
                           f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
-                          brief=self.letter_names.brief_bid)
+                          brief=self.letter_scope.brief_bid)
 
     def give_speech(self, user_text: str, title: str, *, letters: bool = True) -> SpeechOutput:
         """公开发言只有 speech 给其他玩家看，私有策略只留在自己的对话历史和日志里。最终感言不能写信。"""
         return self._task("speech", user_text, title, letters=letters)
+
+    def discuss(self, user_text: str, title: str, *, first: bool) -> DiscussionOutput:
+        """开局讨论的一轮；first 是第 1 轮，附完整格式，之后的轮次只附一句提示。"""
+        return self._task("discussion", user_text, title, brief=None if first else BRIEF_DISCUSSION_FORMAT)
 
     def plan_strategy(self, user_text: str, title: str) -> BidOutput:
         """规划同时交出本局第 1 天的出价。"""

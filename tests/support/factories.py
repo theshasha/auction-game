@@ -11,7 +11,7 @@ from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput, Summ
 from auction_game.agent import prompts
 from auction_game.agent.log import AgentLog
 from auction_game.agent.player import AIPlayer
-from auction_game.agent.text_output import LetterNames
+from auction_game.agent.text_output import BOARD, LetterNames, TeamBoard
 from auction_game.flow.controller import Controller
 from auction_game.reporting.run_output import initialize_run
 from auction_game.game.engine import MatchState, compute_standings, settle_day
@@ -277,7 +277,7 @@ def request_text(runner, index):
 
 
 def text_reply(data):
-    """将测试字段写成模型文本；保留非法字段供生产解析器检查。letters 写成私信块，不进 decision。"""
+    """将测试字段写成模型文本；保留非法字段供生产解析器检查。letters 写成信的块，不进 decision。"""
     if isinstance(data, str):
         return data
     if "memory" in data:
@@ -287,6 +287,8 @@ def text_reply(data):
                       for letter in data.get("letters", []))
     if "speech" in data:
         return f"<strategy>\n{strategy}\n</strategy>\n<speech>\n{data['speech']}\n</speech>{letters}"
+    if "letter" in data:
+        return f"<strategy>\n{strategy}\n</strategy>\n<{BOARD}>\n{data['letter']}\n</{BOARD}>"
     decision = {key: value for key, value in data.items() if key not in ("strategy", "letters")}
     return (f"<strategy>\n{strategy}\n</strategy>\n<decision>\n"
             f"{json.dumps(decision, ensure_ascii=False)}\n</decision>{letters}")
@@ -297,6 +299,15 @@ def make_player(task_runner, tmp_path, game=TEST_GAME, name="Alpha"):
     profile = next(profile for profile in TEST_LINEUP.profiles if profile.name == name)
     return AIPlayer(name, prompts.build_system_prompt(profile, TEST_LINEUP, game),
                     LetterNames(name, TEST_LINEUP.others(name)), task_runner,
+                    AgentLog(name, tmp_path / f"ai_{name}.jsonl", readable_path=tmp_path / f"ai_{name}.md"),
+                    game=game)
+
+
+def make_team_player(task_runner, tmp_path, game=TEST_GAME, name="甲"):
+    """阵容是 make_team_lineup()，name 要在 TEAM_OF 中。"""
+    lineup = make_team_lineup()
+    profile = next(profile for profile in lineup.profiles if profile.name == name)
+    return AIPlayer(name, prompts.build_system_prompt(profile, lineup, game), TeamBoard(), task_runner,
                     AgentLog(name, tmp_path / f"ai_{name}.jsonl", readable_path=tmp_path / f"ai_{name}.md"),
                     game=game)
 
@@ -326,6 +337,10 @@ def bid_reply(bid, super_bid=None, strategy="我的私有分析"):
 
 def speech_reply(speech):
     return {"strategy": "先放个烟雾弹（私有）", "speech": speech}
+
+
+def discussion_reply(letter):
+    return {"strategy": "讨论的私有考虑", "letter": letter}
 
 
 def make_ai_obs(day=2, coins=6, game=TEST_GAME, name="Alpha"):

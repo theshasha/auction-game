@@ -19,6 +19,8 @@ BLOCK_FORMATS = {
     BOARD: f"<strategy>\n仅自己可见的讨论策略。\n</strategy>\n{BOARD_FORMAT}",
 }
 MAX_LETTERS = 2
+# 开局讨论第 1 轮附完整格式，留在对话里，之后的轮次只附这一句。
+BRIEF_DISCUSSION_FORMAT = "请按上一轮的格式提交：strategy 和队内信件区两块。"
 # 固定块的标签，出现在附加块的位置就报块顺序错误；队内信件区在团队赛是附加块，所以不在其中。
 FIXED_TAGS = ("strategy", DECISION, SPEECH)
 # 读取阵容时，玩家名不能是这些标签，原因见 docs/letters.md 的"名字"。

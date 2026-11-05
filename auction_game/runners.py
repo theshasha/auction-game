@@ -8,7 +8,7 @@ from auction_game.flow.director import AIDirector
 from auction_game.agent.log import AgentLog
 from auction_game.agent.player import AIPlayer
 from auction_game.agent.prompts import build_system_prompt
-from auction_game.agent.text_output import LetterNames
+from auction_game.agent.text_output import LetterNames, TeamBoard
 from auction_game.configuration import ConfigurationError, load_configuration, load_game_settings
 from auction_game.flow.controller import Controller, TournamentAborted
 from auction_game.llm.client import MissingApiKeyError, make_model_factory
@@ -104,7 +104,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
                 enable_personas=config["prompts"]["enable_personas"],
                 writing_style=config["writing_style"],
             ),
-            letter_names=LetterNames(profile.name, lineup.others(profile.name)),
+            letter_scope=TeamBoard() if lineup.teams else LetterNames(profile.name, lineup.others(profile.name)),
             task_runner=task_runners[profile.name],
             log=AgentLog(profile.name, paths.player(number), readable_path=paths.player(number, readable=True)),
             game=game,
