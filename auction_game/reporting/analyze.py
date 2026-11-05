@@ -1,9 +1,4 @@
-"""统计场次。默认选最新的真实 AI 场次（ai、ai-test、team 或 team-test），也可显式指定其他类型。
-
-用法：
-    python -m auction_game.reporting.analyze
-    python -m auction_game.reporting.analyze logs/<目录名>
-"""
+"""读取场次日志并计算统计，口径见 docs/analyze.md；打印和命令行入口在 auction_game.cli.analyze。"""
 
 from __future__ import annotations
 
@@ -13,11 +8,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from auction_game.game.engine import resolve_bids, team_standings
-from auction_game.game.models import StandingsEntry
+from auction_game.game.engine import resolve_bids
 from auction_game.game.settings import GameSettings
 from auction_game.paths import LOG_DIR
-from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TYPES
+from auction_game.reporting.run_paths import RunPaths
 
 # 真实 AI 场次的时间戳目录，排除离线赛和 archive 等归档目录；目录名的类型取自场次的 run_type。
 RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_(?:ai|team)(?:-test)?(_\d+)?$")
@@ -42,7 +36,7 @@ def load_match_logs(run_dir: Path) -> list[dict]:
     return [json.loads(path.read_text(encoding="utf-8")) for path in match_files]
 
 
-def _match_setup(matches: list[dict]) -> tuple[GameSettings, list[str]]:
+def match_setup(matches: list[dict]) -> tuple[GameSettings, list[str]]:
     """各局共用的比赛参数和参赛名单，取自第一局日志。"""
     first = matches[0]["match"]
     return GameSettings.from_dict(first["game"]), list(first["scores"])
@@ -50,7 +44,7 @@ def _match_setup(matches: list[dict]) -> tuple[GameSettings, list[str]]:
 
 def collect_player_stats(matches: list[dict]) -> dict:
     """聚合各局总分及拍卖分矩阵，玩家按总分降序；均价只计正常出价。"""
-    game, player_names = _match_setup(matches)
+    game, player_names = match_setup(matches)
     match_labels: list[str] = []
     score_matrix: dict[str, list[int]] = {name: [] for name in player_names}
     auction_score_matrix: dict[str, list[int]] = {name: [] for name in player_names}
@@ -146,32 +140,55 @@ def collect_player_stats(matches: list[dict]) -> dict:
             "super_days": super_days, "super_changed_days": super_changed_days}
 
 
-def print_player_stats(stats: dict) -> None:
-    """每玩家一个小块，分数与余额共用标注了正赛/加赛的列序。"""
-    match_labels = stats["match_labels"]
-    print("玩家明细（按总分排序）")
-    print(f"各局顺序：{' / '.join(match_labels)}")
-    for row in stats["rows"]:
-        print()
-        print(row["name"])
-        print(f"  总分：{row['total_score']}分（拍卖{row['auction_score']}分，命中{row['super_score']}分）")
-        cells = " / ".join(str(score) for score in stats["score_matrix"][row["name"]])
-        auction_cells = " / ".join(str(score) for score in stats["auction_score_matrix"][row["name"]])
-        print(f"  各局总分：{cells}")
-        print(f"  各局拍卖分：{auction_cells}")
-        print(f"  单局最高总分：独占{row['solo_top_matches']}局，并列{row['tied_top_matches']}局")
-        super_text = f"使用{row['super_uses']}次，命中{row['super_hits']}次"
-        if row["super_uses"]:
-            super_text += f"（{row['super_hits'] / row['super_uses']:.0%}）"
-        print(f"  超级出价：{super_text}")
-        print(f"  超级出价净金币变化：{row['super_net_coins']:+d}金币")
-        print(f"  撞车损失：{row['collision_burn']}金币"
-              f"（正常出价互撞{row['normal_collision_burn']}，唯一正常出价被狙{row['unique_sniped_burn']}）")
-        avg_bid_text = f"{row['avg_bid']:.2f}" if row["avg_bid"] is not None else "—"
-        print(f"  平均正常出价（不含流局日）：{avg_bid_text}")
-        end_coins_text = " / ".join(str(coins) for coins in row["end_coins"])
-        print(f"  各局结束余额：{end_coins_text} 金币")
-        print(f"  正常出价为零：{row['zero_bids']}次")
+def collect_run_stats(matches: list[dict], player_stats: dict) -> dict:
+    """全场指标：天数和流局、按天序号的出价和奖池、获胜价和出 0，以及各玩家汇总之和。
+
+    player_stats 是 collect_player_stats 的结果。
+    """
+    game, _ = match_setup(matches)
+    rows = player_stats["rows"]
+    total_days = 0
+    void_days = 0
+    # 按「第几天」聚合非流局日的全部出价；奖池包括流局日
+    bids_by_day_index: dict[int, list[int]] = {}
+    pools_by_day_index: dict[int, list[int]] = {}
+    winning_bids: list[int] = []
+    zero_bids = 0
+    zero_bid_wins = 0
+    cap_wins = 0            # 获胜价等于出价上限的天数
+
+    for payload in matches:
+        for day in payload["match"]["days"]:
+            total_days += 1
+            pools_by_day_index.setdefault(day["day"], []).append(day["pool"])
+            # 正常出价和超级出价的数值都算。
+            values = [value for result in day["players"] for value in (result["bid"], result["super_bid"])
+                      if value is not None]
+            zero_bids += values.count(0)
+            if day["winner"] is None:
+                void_days += 1
+                continue
+            bids_by_day_index.setdefault(day["day"], []).extend(values)
+            winning_bids.append(day["winning_bid"])
+            if day["winning_bid"] == game.max_bid:
+                cap_wins += 1
+            if day["winning_bid"] == 0:
+                zero_bid_wins += 1
+
+    super_uses = sum(row["super_uses"] for row in rows)
+    super_hits = sum(row["super_hits"] for row in rows)
+    return {"total_days": total_days, "void_days": void_days,
+            "playoff_count": sum(1 for payload in matches if payload["match"]["is_playoff"]),
+            "end_coins": [coins for row in rows for coins in row["end_coins"]],
+            "collision_burn": sum(row["collision_burn"] for row in rows),
+            "normal_collision_burn": sum(row["normal_collision_burn"] for row in rows),
+            "unique_sniped_burn": sum(row["unique_sniped_burn"] for row in rows),
+            "super_uses": super_uses, "super_hits": super_hits,
+            "super_cost_spent": super_uses * game.super_cost,
+            "super_bounty_minted": super_hits * game.super_bounty,
+            "bids_by_day_index": bids_by_day_index, "pools_by_day_index": pools_by_day_index,
+            "winning_bids": winning_bids, "cap_wins": cap_wins,
+            "zero_bids": zero_bids, "zero_bid_wins": zero_bid_wins}
 
 
 def collect_team_stats(matches: list[dict], team_of: dict[str, str]) -> dict[str, Counter]:
@@ -197,33 +214,6 @@ def collect_team_stats(matches: list[dict], team_of: dict[str, str]) -> dict[str
                 elif normal_bid_counts[result["super_bid"]]:
                     totals["teammate_only_misses"] += 1
     return stats
-
-
-def print_team_sections(snapshot: dict, matches: list[dict], match_labels: list[str]) -> None:
-    """团队赛的阵营总分和阵营配合。阵营总分用最后一局日志里的累计排名汇总，和 README、终端同一个汇总函数。
-
-    快照里玩家的 team 有值才是团队赛；个人赛不输出，也不读累计排名，较早的个人赛快照没有 team 这个键。
-    """
-    if not any(pc.get("team") for pc in snapshot["players"]):
-        return
-    teams = team_standings([StandingsEntry(**entry) for entry in matches[-1]["standings_after_match"]])
-    print("阵营总分")
-    print(f"  各局顺序：{' / '.join(match_labels)}")
-    for team in teams:
-        print(f"  {team.team}：{team.total_score} 分（拍卖 {team.total_auction_score} 分，"
-              f"命中 {team.total_score - team.total_auction_score} 分），"
-              f"各局 {' / '.join(str(score) for score in team.scores_per_match)}")
-    print()
-
-    team_stats = collect_team_stats(matches, {pc["name"]: pc["team"] for pc in snapshot["players"]})
-    print("阵营配合")
-    print("  队内撞车按天和价位计次：同一价位有 2 笔及以上队友的正常出价就算一次，另有对方出价也算")
-    for team in teams:
-        totals = team_stats[team.team]
-        hit_rate = f"（{totals['super_hits'] / totals['super_uses']:.0%}）" if totals["super_uses"] else ""
-        print(f"  {team.team}：队内撞车 {totals['team_collisions']} 次；超级出价 {totals['super_uses']} 次，"
-              f"命中 {totals['super_hits']} 次{hit_rate}，只狙到队友 {totals['teammate_only_misses']} 次")
-    print()
 
 
 def collect_usage(run_dir: Path, players: list[dict]) -> dict:
@@ -259,149 +249,3 @@ def collect_usage(run_dir: Path, players: list[dict]) -> dict:
     return {"players": by_player,
             "tasks": {task: by_task[task] for task in TASK_LABELS if task in by_task},
             "largest_inputs": largest_inputs}
-
-
-def _usage_text(totals: Counter) -> str:
-    text = f"请求 {totals['requests']} 次，输入 {totals['input']:,}"
-    if totals["input"]:
-        text += f"（缓存命中 {totals['cache_read']:,}，{totals['cache_read'] / totals['input']:.0%}）"
-    text += f"，输出 {totals['output']:,}"
-    if totals["failed_requests"]:
-        text += f"；另有 {totals['failed_requests']} 次请求失败"
-    return text
-
-
-def print_usage(usage: dict) -> None:
-    print("模型用量（token）")
-    print("  输入含缓存命中，输出含推理；失败的请求没有用量记录，只计次数")
-    for name, totals in usage["players"].items():
-        print(f"  {name}：{_usage_text(totals)}")
-    print("  按任务：")
-    for task, totals in usage["tasks"].items():
-        line = f"  {TASK_LABELS[task]}：{_usage_text(totals)}"
-        if task in usage["largest_inputs"]:
-            tokens, name, context = usage["largest_inputs"][task]
-            line += f"；最大单次输入 {tokens:,}，来自 {name} {context}"
-        print(line)
-
-
-def analyze(run_dir: Path) -> None:
-    snapshot = RunPaths(run_dir).read_config()
-    matches = load_match_logs(run_dir)
-    game, player_names = _match_setup(matches)
-    player_stats = collect_player_stats(matches)
-    print("比赛概况")
-    print(f"场次目录：{run_dir.name}")
-    print(f"运行类型：{RUN_TYPES[snapshot['run_type']]}")
-    offline = snapshot["run_type"] in OFFLINE_RUN_TYPES
-    if offline:
-        print("离线假模型结果：实际执行为假模型，无真实模型调用")
-    else:
-        print("测试运行结果（非身份模型成绩）" if snapshot["mode"] == "test_model" else "常规阵容结果")
-    for pc in snapshot["players"]:
-        execution_label = "配置模型" if offline else "实际"
-        print(f"  {pc['name']}：身份 {pc['identity_model']['model']} → {execution_label} "
-              f"{pc['execution_model']['protocol']} / {pc['execution_model']['model']}")
-
-    total_days = 0
-    void_days = 0
-    # 按「第几天」聚合非流局日的全部出价；奖池包括流局日
-    bids_by_day_index: dict[int, list[int]] = {}
-    pools_by_day_index: dict[int, list[int]] = {}
-    winning_bids: list[int] = []
-    remaining_coins_all = [coins for row in player_stats["rows"] for coins in row["end_coins"]]
-    zero_bids = 0
-    zero_bid_wins = 0
-    collision_burn = sum(row["collision_burn"] for row in player_stats["rows"])
-    normal_collision_burn = sum(row["normal_collision_burn"] for row in player_stats["rows"])
-    unique_sniped_burn = sum(row["unique_sniped_burn"] for row in player_stats["rows"])
-    super_uses = sum(row["super_uses"] for row in player_stats["rows"])
-    super_hits = sum(row["super_hits"] for row in player_stats["rows"])
-    super_bounty_minted = super_hits * game.super_bounty
-    super_cost_spent = super_uses * game.super_cost
-    cap_wins = 0            # 获胜价等于出价上限的天数
-    cap_bid = game.max_bid
-
-    for payload in matches:
-        match = payload["match"]
-
-        for day in match["days"]:
-            total_days += 1
-            pools_by_day_index.setdefault(day["day"], []).append(day["pool"])
-            # 正常出价和超级出价的数值都算。
-            values = [value for result in day["players"] for value in (result["bid"], result["super_bid"])
-                      if value is not None]
-            zero_bids += values.count(0)
-            if day["winner"] is None:
-                void_days += 1
-                continue
-            bids_by_day_index.setdefault(day["day"], []).extend(values)
-            winning_bids.append(day["winning_bid"])
-            if day["winning_bid"] == game.max_bid:
-                cap_wins += 1
-            if day["winning_bid"] == 0:
-                zero_bid_wins += 1
-
-    print(f"玩家：{'、'.join(player_names)}")
-    playoff_count = sum(1 for m in matches if m["match"]["is_playoff"])
-    print(f"局数：{len(matches)}（正赛 {len(matches) - playoff_count} + 加赛 {playoff_count}）")
-    print(f"总拍卖天数：{total_days}，其中流局 {void_days} 天（{void_days / total_days:.1%}）")
-    print()
-    print_team_sections(snapshot, matches, player_stats["match_labels"])
-
-    print("经济与超级出价")
-    print(f"局末平均剩余金币：{sum(remaining_coins_all) / len(remaining_coins_all):.2f}"
-          f"（最低 {min(remaining_coins_all)}，最高 {max(remaining_coins_all)}）")
-    print(f"撞车损失：{collision_burn} 金币"
-          f"（正常出价互撞 {normal_collision_burn}，唯一正常出价被狙 {unique_sniped_burn}；只计正常出价）")
-    print(f"  每局平均：{collision_burn / len(matches):.1f} 金币")
-    hit_rate = f"（命中率 {super_hits / super_uses:.0%}）" if super_uses else ""
-    print(f"超级出价：使用 {super_uses} 次，命中 {super_hits} 次{hit_rate}")
-    print(f"  成本消耗：{super_cost_spent} 金币")
-    print(f"  悬赏发放：{super_bounty_minted} 金币")
-    print(f"  超级出价净金币变化：{super_bounty_minted - super_cost_spent:+d} 金币")
-    print(f"  命中原本互撞价 {player_stats['super_collision_hits']} 次（按超级出价笔数计，包含流局）")
-    print(f"  使用超级出价：{player_stats['super_days']} 天")
-    print(f"  改变当日结果：{player_stats['super_changed_days']} 天")
-    print("    保持正常出价不变，对比取消全部超级出价后的结果")
-    print()
-
-    print("平均出价与奖池：")
-    print("  出价排除流局日，含正常出价及超级出价的价位；奖池包含流局日")
-    for day_index in sorted(pools_by_day_index):
-        pools = pools_by_day_index[day_index]
-        bids = bids_by_day_index.get(day_index, [])
-        avg_bid = f"{sum(bids) / len(bids):.2f}（{len(bids)} 笔）" if bids else "—（全流局）"
-        print(f"  第 {day_index} 天：出价 {avg_bid}，奖池 {sum(pools) / len(pools):.2f}")
-    all_bids = [bid for bids in bids_by_day_index.values() for bid in bids]
-    if all_bids:
-        print(f"  全天总体：平均 {sum(all_bids) / len(all_bids):.2f}（{len(all_bids)} 笔）")
-    if winning_bids:
-        win_dist = dict(sorted(Counter(winning_bids).items()))
-        print(f"  获胜价平均：{sum(winning_bids) / len(winning_bids):.2f}（{len(winning_bids)} 个获胜日）")
-        print(f"  获胜价分布：{win_dist}")
-        print(f"  获胜价={cap_bid}（出价上限）占比 {cap_wins / len(winning_bids):.1%}")
-    print()
-
-    print_player_stats(player_stats)
-    print()
-
-    print("特殊情况")
-    print(f"出 0 共 {zero_bids} 笔（含流局日和超级出价），其中 0 价获胜 {zero_bid_wins} 次")
-
-    # 离线赛的用量是假模型估算的。
-    if not offline:
-        print()
-        print_usage(collect_usage(run_dir, snapshot["players"]))
-
-
-def main() -> None:
-    run_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else find_latest_ai_run()
-    try:
-        analyze(run_dir)
-    except (OSError, ValueError) as exc:
-        sys.exit(str(exc))
-
-
-if __name__ == "__main__":
-    main()

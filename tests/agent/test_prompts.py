@@ -81,8 +81,8 @@ class TestSpeechFields:
         log = make_log(days=[make_day(1, [5, 4, 3, 2, 1, 0], pool=3)])
         standings = make_standings({"甲": [2, 1], "乙": [1, 0]},
                                    scores_history={"甲": [8, 4], "乙": [12, 2]})
-        text = (prompts.final_speech_request(standings, log) if final
-                else prompts.match_end_speech_request(log, standings))
+        text = (prompts.final_speech_request(standings, log, team=False) if final
+                else prompts.match_end_speech_request(log, standings, team=False))
         assert "本局得分：甲 3 分、乙 0 分" in text
         assert "排名与分数明细" in text
         assert f"本局完整出价日志：\n\n{tables.render_match_log(log)}" in text
@@ -103,7 +103,7 @@ class TestSpeechFields:
 
 @pytest.mark.parametrize("match_index", [1, 2])
 def test_memory_request_lists_other_speeches_and_key_requirements(match_index):
-    text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"}, match_index)
+    text = prompts.memory_request({"乙": "公开信号", "丙": "另一条公开信号"}, match_index, team=False)
     assert "公开发言：\n\n【乙】公开信号\n\n【丙】另一条公开信号\n\n请结合" in text
     # 没有收到信也提私信：本局出价时收到的信在对话里。
     for required in ("公开发言和私信，整理你的记忆", "看不到之前各局的原始对话、公开发言和私信",
@@ -123,18 +123,18 @@ def test_received_letters_sit_between_facts_and_task(kind):
     obs = make_obs(day=2, today_history=[make_day(1, [5, 4, 3, 2, 1, 0])])
     build, fact, written, task = {
         "opening-plan": (lambda received: prompts.opening_plan_request({"乙": "开局发言"}, TEST_GAME,
-                                                                       received=received),
+                                                                       received=received, team=False),
                          "【乙】开局发言", "在开局发言时", "请结合他们的发言"),
-        "bid": (lambda received: prompts.bid_request(obs, received=received), "全员累计总分：", "昨天出价时",
+        "bid": (lambda received: prompts.bid_request(obs, received=received, team=False), "全员累计总分：", "昨天出价时",
                 prompts.BID_HINT),
-        "match-end": (lambda received: prompts.match_end_speech_request(log, standings, received=received),
+        "match-end": (lambda received: prompts.match_end_speech_request(log, standings, received=received, team=False),
                       tables.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
         "playoff-match-end": (lambda received: prompts.match_end_speech_request(playoff_log, standings,
-                                                                                received=received),
+                                                                                received=received, team=False),
                               "第一名总分并列，全员进入加赛。", "在本局最后一天出价时", "请向全体玩家发表你的局末发言"),
-        "memory": (lambda received: prompts.memory_request({"乙": "局末发言"}, 2, received=received),
+        "memory": (lambda received: prompts.memory_request({"乙": "局末发言"}, 2, received=received, team=False),
                    "【乙】局末发言", "在局末发言时", "请结合旧记忆"),
-        "final": (lambda received: prompts.final_speech_request(standings, log, received=received),
+        "final": (lambda received: prompts.final_speech_request(standings, log, received=received, team=False),
                   tables.render_standings(standings), "在本局最后一天出价时", "请向全体玩家发表你的最终感言"),
     }[kind]
     block = f"以下是其他玩家{written}写给你的私信：\n\n【乙】第一封\n第二行\n\n【丙】第二封"
@@ -166,18 +166,18 @@ def test_planning_and_bidding_say_when_letters_arrive(kind, match_index, day, da
     if kind == "bid":
         obs = make_obs(day=day, match_index=match_index, game=game,
                        today_history=[make_day(number, [0, 1], game=game) for number in range(1, day)])
-        text = prompts.bid_request(obs)
+        text = prompts.bid_request(obs, team=False)
         assert text.endswith(f"{prompts.BID_HINT}\n\n{expected}")
     elif match_index == 1:
-        assert prompts.opening_plan_request({}, game).endswith(f"\n\n{expected}")
+        assert prompts.opening_plan_request({}, game, team=False).endswith(f"\n\n{expected}")
     else:
         assert prompts.next_match_plan_request(make_logs(match_index - 1, game), [], game).endswith(f"\n\n{expected}")
 
 
 def test_speeches_say_when_letters_arrive():
     """开局发言的信在第 1 天出价时送到，局末发言的信在整理记忆时送到；最终感言不能写信。"""
-    assert prompts.opening_speech_request().endswith("\n\n现在写的私信，收件人在第 1 天出价时收到。")
-    match_end = prompts.match_end_speech_request(make_log(), make_standings({"甲": [1], "乙": [0]}))
+    assert prompts.opening_speech_request(team=False).endswith("\n\n现在写的私信，收件人在第 1 天出价时收到。")
+    match_end = prompts.match_end_speech_request(make_log(), make_standings({"甲": [1], "乙": [0]}), team=False)
     assert match_end.endswith("局末发言（不超过 300 字）。\n\n现在写的私信，收件人整理记忆时收到，信的原文不会带到下一局。")
 
 
@@ -192,10 +192,10 @@ def team_bid_obs(**kwargs):
 @pytest.mark.parametrize("build,written", [
     (lambda received: prompts.opening_plan_request({}, TEST_GAME, received=received, team=True), "在开局讨论第 3 轮时"),
     (lambda received: prompts.team_next_match_plan_request(2, TEST_GAME, received=received), "在开局讨论第 3 轮时"),
-    (lambda received: prompts.bid_request(team_bid_obs(day=2), received=received), "昨天出价时"),
-    (lambda received: prompts.match_end_speech_request(make_log(), TEAM_STANDINGS, received=received),
+    (lambda received: prompts.bid_request(team_bid_obs(day=2), received=received, team=True), "昨天出价时"),
+    (lambda received: prompts.match_end_speech_request(make_log(), TEAM_STANDINGS, received=received, team=True),
      "在本局最后一天出价时"),
-    (lambda received: prompts.final_speech_request(TEAM_STANDINGS, make_log(), received=received), "在本局最后一天出价时"),
+    (lambda received: prompts.final_speech_request(TEAM_STANDINGS, make_log(), received=received, team=True), "在本局最后一天出价时"),
     (lambda received: prompts.memory_request({"丁": "局末发言"}, 1, received=received, team=True), "在局末发言时"),
     (lambda received: prompts.discussion_request(1, 1, received=received), "在开局发言时"),
     (lambda received: prompts.discussion_request(1, 2, received=received), "在开局讨论第 1 轮时"),
@@ -221,7 +221,7 @@ TEAM_LAST_DAY_MAY_END = "现在写的信，队友在局末发言时才看到，�
 def test_team_bids_say_when_letters_arrive(match_index, day, expected):
     game = replace(TEST_GAME, daily_pool=(1, 1, 1))
     obs = team_bid_obs(day=day, match_index=match_index, game=game)
-    assert prompts.bid_request(obs).endswith(f"{prompts.BID_HINT}\n\n{expected}")
+    assert prompts.bid_request(obs, team=True).endswith(f"{prompts.BID_HINT}\n\n{expected}")
 
 
 def test_team_plans_and_speeches_say_when_letters_arrive():
@@ -229,7 +229,7 @@ def test_team_plans_and_speeches_say_when_letters_arrive():
     assert prompts.opening_speech_request(team=True).endswith("\n\n现在写的信，队友在开局讨论第 1 轮看到。")
     assert prompts.opening_plan_request({}, game, team=True).endswith(f"\n\n{TEAM_NEXT_DAY}")
     assert prompts.team_next_match_plan_request(2, game).endswith(f"\n\n{TEAM_NEXT_DAY}")
-    assert prompts.match_end_speech_request(make_log(), TEAM_STANDINGS).endswith(
+    assert prompts.match_end_speech_request(make_log(), TEAM_STANDINGS, team=True).endswith(
         "局末发言（不超过 300 字）。\n\n现在写的信，队友整理记忆时看到，信的原文不会带到下一局。")
 
 
@@ -319,6 +319,7 @@ class TestPlayoffNotice:
                 {name: [int(name == "甲")] * match_index for name in NAMES},
                 scores_history={name: [4 if name in ("甲", "乙") else 0] * match_index for name in NAMES},
             ),
+            team=False,
         )
         notice = "第一名总分并列，全员进入加赛。"
         assert ("第一名总分并列" in text) is expected
@@ -338,7 +339,7 @@ class TestPlayoffNotice:
         game = replace(TEST_GAME, regular_matches=1)
         standings = make_standings({name: [0] for name in NAMES},
                                    scores_history=dict(zip(NAMES, [[2], [0], [1], [3], [0], [0]])), team_of=TEAM_OF)
-        speech = prompts.match_end_speech_request(make_log(game=game), standings)
+        speech = prompts.match_end_speech_request(make_log(game=game), standings, team=True)
         assert "两个阵营总分相同，全员进入加赛。" in speech and "第一名总分并列" not in speech
         past = prompts.past_matches_info(make_logs(1, game), standings, game)
         assert past.startswith("第 2 局是加赛局。目前两个阵营总分相同，各 3 分。\n\n之前各局的完整出价日志")
@@ -350,7 +351,7 @@ class TestPlanBidMerge:
 
     def test_single_day_plan_reminds_coins_reset(self):
         game = replace(TEST_GAME, daily_pool=(1,))
-        assert "本局最后一天，结束后金币清零。" in prompts.opening_plan_request({}, game)
+        assert "本局最后一天，结束后金币清零。" in prompts.opening_plan_request({}, game, team=False)
         assert "本局最后一天，结束后金币清零。" in prompts.next_match_plan_request(make_logs(1, game), [], game)
 
     def test_next_match_plan_restores_all_past_match_logs(self):
@@ -359,7 +360,7 @@ class TestPlanBidMerge:
         assert f"第 1 局（正赛局）：\n\n{tables.render_match_log(logs[0])}" in text
         assert f"第 2 局（加赛局）：\n\n{tables.render_match_log(logs[1])}" in text
         assert text.index("出价日志") < text.index("最新累计成绩") < text.index("规划第 3 局")
-        assert "之前各局的出价日志会另行提供" in prompts.memory_request({}, 2)
+        assert "之前各局的出价日志会另行提供" in prompts.memory_request({}, 2, team=False)
 
     @pytest.mark.parametrize(
         "build, speech_kind, strategy, bid_task",
@@ -374,7 +375,7 @@ class TestPlanBidMerge:
                        super_cost=3, super_hit_score=2)
         opening = build is prompts.opening_plan_request
         standings = make_standings({"甲": [2], "乙": [1]}, scores_history={"甲": [10], "乙": [11]})
-        text = build({"甲": "发言A", "乙": "发言B"}, game) if opening else build(make_logs(1, game), standings, game)
+        text = build({"甲": "发言A", "乙": "发言B"}, game, team=False) if opening else build(make_logs(1, game), standings, game)
         assert speech_kind in text
         assert strategy in text and bid_task in text
         if opening:
@@ -393,7 +394,7 @@ class TestPlanBidMerge:
     def test_plans_only_show_remaining_scores_in_last_regular_match_and_playoffs(self, opening, match_index):
         game = replace(TEST_GAME, daily_pool=(2, 1, 3), super_hit_score=2, regular_matches=3)
         tied = make_standings({"甲": [0], "乙": [0]})
-        text = (prompts.opening_plan_request({}, game) if opening
+        text = (prompts.opening_plan_request({}, game, team=False) if opening
                 else prompts.next_match_plan_request(make_logs(match_index - 1, game), tied, game))
         show_remaining = match_index >= game.regular_matches
         assert ("本局还剩" in text) is show_remaining

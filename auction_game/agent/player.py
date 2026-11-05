@@ -102,7 +102,7 @@ class AIPlayer:
     def bid(self, obs: Observation, received: dict[str, str], title: str) -> BidOutput:
         """received 是收到的信，写信人到正文。出价请求从第 2 天起发出，第 1 天的出价由本局规划交出。"""
         # 本局规划请求里有完整格式，整理记忆前一直留在对话里，出价请求只附一句提示。
-        return self._task("bid", prompts.bid_request(obs, received=received), title,
+        return self._task("bid", prompts.bid_request(obs, received=received, team=self.letter_scope.team), title,
                           f"第 {obs.match_index} 局第 {obs.day} 天", coins=obs.my_coins,
                           brief=self.letter_scope.brief_bid)
 

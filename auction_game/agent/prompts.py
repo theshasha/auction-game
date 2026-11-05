@@ -58,7 +58,7 @@ def build_system_prompt(
     return text
 
 
-def opening_speech_request(*, team: bool = False) -> str:
+def opening_speech_request(*, team: bool) -> str:
     delivery = TEAM_OPENING_LETTER_DELIVERY if team else OPENING_LETTER_DELIVERY
     return f"比赛即将开始。请向全体玩家发表你的开局发言（不超过 300 字）。\n\n{delivery}"
 
@@ -89,10 +89,6 @@ def _received_letters(received: dict[str, str] | None, written: str, team: bool)
     if not received:
         return []
     return [_quoted(f"以下是队友{written}写的信：" if team else f"以下是其他玩家{written}写给你的私信：", received)]
-
-
-def _is_team(standings: list[StandingsEntry]) -> bool:
-    return team_standings(standings) is not None
 
 
 def _remaining_scores_info(game: GameSettings, match_index: int, day: int, today_pool: int) -> str:
@@ -173,7 +169,7 @@ def discussion_request(match_index: int, round_number: int, *, others_speeches: 
 
 
 def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
-                         received: dict[str, str] | None = None, team: bool = False) -> str:
+                         received: dict[str, str] | None = None, team: bool) -> str:
     """团队赛不用 others_speeches：开局发言在讨论第 1 轮列过，还在对话里。"""
     return "\n\n".join([
         *([] if team else [_quoted("以下是其他玩家的开局发言：", others_speeches)]),
@@ -229,7 +225,7 @@ def _yesterday_bids_table(obs: Observation) -> str:
     return "\n".join(lines)
 
 
-def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> str:
+def bid_request(obs: Observation, *, received: dict[str, str] | None = None, team: bool) -> str:
     """第 2 天起的出价请求；第 1 天的出价在本局规划请求里交。"""
     # 余额已经包含当天工资，注明这一点，避免重复计算。
     status_line = (
@@ -243,7 +239,6 @@ def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> 
     status_line += "\n\n" + _total_scores_line(obs.standings)
     status_line += _remaining_scores_info(obs.game, obs.match_index, obs.day, obs.today_pool)
     # 第 2 天收到的是规划时写的信，规划请求同时交了第 1 天的出价，所以也是昨天出价时写的。
-    team = _is_team(obs.standings)
     task = "\n\n".join([*_received_letters(received, "昨天出价时", team), BID_HINT,
                         _letter_delivery(obs.game, obs.match_index, obs.day, team)])
     yesterday = obs.today_history[-1]
@@ -269,14 +264,13 @@ def bid_request(obs: Observation, *, received: dict[str, str] | None = None) -> 
 
 
 def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], *,
-                             received: dict[str, str] | None = None) -> str:
+                             received: dict[str, str] | None = None, team: bool) -> str:
     """只在还有下一局时调用。"""
     lines = [
         f"{match_title(log)}结束。",
         f"本局完整出价日志：\n\n{render_match_log(log)}",
         f"截至当前的累计排名与分数明细：\n\n{render_standings(standings)}",
     ]
-    team = _is_team(standings)
     # 正赛打完后还有下一局，说明第一名并列，进入加赛；团队赛的第一名并列就是两个阵营同分。
     if log.match_index >= log.game.regular_matches:
         lines.append("两个阵营总分相同，全员进入加赛。" if team else "第一名总分并列，全员进入加赛。")
@@ -287,7 +281,7 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], *,
 
 
 def memory_request(others_speeches: dict[str, str], match_index: int, *,
-                   received: dict[str, str] | None = None, team: bool = False) -> str:
+                   received: dict[str, str] | None = None, team: bool) -> str:
     """补充其他玩家的发言；本人的发言已在对话中，整理记忆后才清空对话。第 1 局结束时还没有旧记忆。
 
     本局出价时收到的信也在对话里，所以没有收到信时也提私信或队内信件区的信。
@@ -332,13 +326,13 @@ def team_next_match_plan_request(match_index: int, game: GameSettings, *,
 
 
 def final_speech_request(standings: list[StandingsEntry], log: MatchLog, *,
-                         received: dict[str, str] | None = None) -> str:
+                         received: dict[str, str] | None = None, team: bool) -> str:
     """请求最终感言，并提供最后一局的出价日志；之前各局的日志已在本局规划请求或讨论第 1 轮的请求中给出。"""
     return "\n\n".join([
         f"{match_title(log)}结束，这也是最后一局。",
         f"本局完整出价日志：\n\n{render_match_log(log)}",
         f"比赛全部结束。最终排名与分数明细：\n\n{render_standings(standings)}",
-        *_received_letters(received, LAST_DAY_LETTERS, _is_team(standings)),
+        *_received_letters(received, LAST_DAY_LETTERS, team),
         "请向全体玩家发表你的最终感言。",
     ])
 

@@ -24,7 +24,7 @@ class PlayerDayResult:
 
 @dataclass(frozen=True)
 class DayResult:
-    """一天的结算结果。规则四.1：第 2 天起每天开始时全部公开。"""
+    """一天的结算结果。规则五.1：第 2 天起每天开始时全部公开。"""
 
     day: int
     pool: int                    # 当天配置奖池，流局时仍记录作废前的金额
@@ -153,6 +153,6 @@ class Observation:
     today_history: list[DayResult]  # 本局已结束各天的结算，含自己昨日的结果
     standings: list[StandingsEntry]   # 截至昨日结算后的累计排名
     game: GameSettings          # 本场不可变规则参数，与裁判和日志共用
-    # 全场每人金币余额（含自己，含当日工资）：规则四.1 规定第 2 天起每天
+    # 全场每人金币余额（含自己，含当日工资）：规则五.1 规定第 2 天起每天
     # 开始时公布；第 1 天为 None（均为本场初始金币，无信息量，不渲染）。
     all_coins: Optional[dict[str, int]] = None

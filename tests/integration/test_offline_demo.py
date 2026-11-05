@@ -10,7 +10,7 @@ from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.reporting import analyze
-from auction_game.cli import offline_demo
+from auction_game.cli import analyze as analyze_command, offline_demo
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.cli.offline_demo import generate_demo
 from auction_game.agent import prompts
@@ -162,7 +162,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         analyze.find_latest_ai_run()
     # 统计只读场次快照，当前配置入口损坏也能完整统计。
     monkeypatch.setattr("auction_game.configuration.load_game_settings", lambda: (_ for _ in ()).throw(AssertionError("应读快照")))
-    analyze.analyze(run_dir)
+    analyze_command.analyze(run_dir)
     output = capsys.readouterr().out
     assert "离线演示：全员使用假模型，不调用真实服务，不收费。" in output
     assert "提示设置：赛前预测开启，人设关闭，写作要求开启" in output
@@ -271,7 +271,7 @@ def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_confi
     assert readme.startswith("# 拍卖团队赛") and "### 红队" in readme and "### 蓝队" in readme
     assert "[队内信件区](letters.md)" in readme
     assert all((run_dir / link).exists() for link in re.findall(r"\]\(([^)]+)\)", readme))
-    analyze.analyze(run_dir)
+    analyze_command.analyze(run_dir)
     output = capsys.readouterr().out
     assert "获胜阵营: 红队" in output
     assert "运行类型：团队赛离线模拟" in output and "离线假模型结果：实际执行为假模型，无真实模型调用" in output

@@ -33,6 +33,12 @@ def test_system_prompt_is_sent_and_opens_history(tmp_path):
     assert [(type(part), part.content) for part in player.messages[0].parts] == [(SystemPromptPart, expected)]
 
 
+def test_team_player_bid_request_uses_team_wording(tmp_path):
+    runner = fake_task_runner([bid_reply(1)])
+    make_team_player(runner, tmp_path).bid(make_ai_obs(), {"乙": "队友的信"}, "第 1 局第 2 天出价")
+    assert "以下是队友昨天出价时写的信：\n\n【乙】队友的信" in request_text(runner, 0)
+
+
 @pytest.mark.parametrize("invalid", [
     bid_reply("2"), "<strategy>missing standalone tags</strategy>", dict(bid_reply(2), extra=1),
 ])
@@ -68,7 +74,7 @@ def test_custom_game_and_realtime_balance_use_shared_rules(tmp_path):
     game = replace(TEST_GAME, initial_coins=4, max_bid=9, super_cost=3)
     runner = fake_task_runner([bid_reply(5), bid_reply(1, 9), bid_reply(8, 9), bid_reply(7, 9)])
     player = make_player(runner, tmp_path, game=game)
-    assert player.plan_strategy(prompts.opening_plan_request({}, game), "第 1 局策略规划（含首日出价）").submission == (1, 9)
+    assert player.plan_strategy(prompts.opening_plan_request({}, game, team=False), "第 1 局策略规划（含首日出价）").submission == (1, 9)
     assert player.bid(make_ai_obs(coins=10, game=game), {}, "第 1 局第 2 天出价").submission == (7, 9)
     assert len(runner.calls) == 4
     assert "超过当前余额 4" in ModelMessagesTypeAdapter.dump_json(runner.calls[1]).decode()

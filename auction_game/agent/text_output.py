@@ -38,6 +38,7 @@ class LetterNames:
     sender: str
     recipients: tuple[str, ...]
 
+    team = False
     block = LETTER_FORMAT
     # 出价请求只附这一句，完整格式在本局规划请求里；信什么时候送到写在请求的任务提示后面。
     brief_bid = "请按本局规划时的格式提交：strategy 和 decision 两块，私信块可以不写。"
@@ -76,6 +77,7 @@ class LetterNames:
 class TeamBoard:
     """团队赛可以写信的任务用的写信范围：信放进队内信件区，不分收件人。"""
 
+    team = True
     tags = (BOARD,)
     block = BOARD_FORMAT
     brief_bid = "请按本局规划时的格式提交：strategy 和 decision 两块，队内信件区的信可以不写。"

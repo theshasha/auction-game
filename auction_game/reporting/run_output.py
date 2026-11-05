@@ -97,7 +97,7 @@ def initialize_run(run_dir, snapshot, rules):
 def write_readme(paths, standings=None):
     """团队赛看快照里玩家的 team：标题写团队赛，私人对话按阵营分组。"""
     config = paths.read_config()
-    team = any(pc.get("team") for pc in config["players"])
+    team = any(pc["team"] for pc in config["players"])
     if config["run_type"] in OFFLINE_RUN_TYPES:
         model_note = "全员使用假模型，无真实调用。"
     elif config["mode"] == "test_model":

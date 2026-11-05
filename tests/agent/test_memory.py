@@ -104,7 +104,7 @@ def test_sdk_plain_memory_and_cross_match_replacement(protocol, tmp_path):
                            reply(bid_reply(1)), reply({"memory": "cumulative-v2"}), reply(bid_reply(2))])
     player = make_player(TaskRunner(h.factory), tmp_path)
     player.give_speech("old match raw", "第 1 局局末发言")
-    player.save_memory(prompts.memory_request({"Bravo": "other signal"}, 1), "第 1 局累计私有记忆")
+    player.save_memory(prompts.memory_request({"Bravo": "other signal"}, 1, team=False), "第 1 局累计私有记忆")
     assert "不加格式标签或 JSON 外壳" in json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert player.memories == ["cumulative-v1"]
     player.plan_strategy(prompts.next_match_plan_request(make_logs(1), [], player.game), "第 2 局策略规划（含首日出价）")
@@ -127,7 +127,7 @@ def test_cumulative_memory_replaces_prior_context_and_summary_gets_old_versions(
     player = make_player(runner, tmp_path)
     player.give_speech("first match raw", "开局发言")
     checkpoint = player.checkpoint()
-    player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}, 1), "第 1 局累计私有记忆")
+    player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}, 1, team=False), "第 1 局累计私有记忆")
     assert "own raw signal" in encoded(runner.calls[-1]) and "other raw signal" in encoded(runner.calls[-1])
     assert player.memories == ["第一版经验"]
     assert "first match raw" not in encoded(player.messages)

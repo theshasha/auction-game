@@ -27,14 +27,14 @@ class TestBidRequest:
         obs.standings = make_standings(
             {"甲": [3, 3], "乙": [2, 2]}, scores_history={"甲": [6, 6], "乙": [8, 9]},
         )
-        assert "\n\n全员累计总分：乙 17 分、甲 12 分。" in prompts.bid_request(obs)
+        assert "\n\n全员累计总分：乙 17 分、甲 12 分。" in prompts.bid_request(obs, team=False)
 
     @pytest.mark.parametrize("match_index,visible", [(1, False), (2, True), (3, True), (4, True)])
     def test_remaining_scores_only_final_regular_and_playoffs(self, match_index, visible):
         obs = make_prompt_obs(day=2, pool=3, today_history=[make_day(1, BIDS, pool=2)])
         obs.game = replace(TEST_GAME, regular_matches=2, daily_pool=(2, 3, 4))
         obs.match_index = match_index
-        text = prompts.bid_request(obs)
+        text = prompts.bid_request(obs, team=False)
         assert ("\n\n本局还剩 2 天（含今天），剩余拍卖奖池共 7 分。如果每天都命中，每人最多还能获得 4 命中分。" in text) == visible
         tied = make_standings({"甲": [0], "乙": [0]})
         plan = prompts.next_match_plan_request(make_logs(match_index - 1, obs.game), tied, obs.game)
@@ -44,12 +44,12 @@ class TestBidRequest:
 
     def test_single_match_opening_and_final_day_remaining(self):
         game = replace(TEST_GAME, regular_matches=1, daily_pool=(2, 3))
-        opening = prompts.opening_plan_request({}, game)
+        opening = prompts.opening_plan_request({}, game, team=False)
         assert "全员累计总分：全员 0 分。" in opening
         assert "\n\n本局还剩 2 天（含今天），剩余拍卖奖池共 5 分。如果每天都命中，每人最多还能获得 4 命中分。" in opening
         obs = make_prompt_obs(day=2, pool=3, today_history=[make_day(1, BIDS, pool=2)])
         obs.game = game
-        text = prompts.bid_request(obs)
+        text = prompts.bid_request(obs, team=False)
         assert "\n\n本局还剩 1 天（含今天），剩余拍卖奖池共 3 分。如果每天都命中，每人最多还能获得 2 命中分。" in text
 
     @pytest.mark.parametrize("daily_pool", [(2,), (2, 3, 4)])
@@ -58,7 +58,7 @@ class TestBidRequest:
             TEST_GAME, regular_matches=1, daily_pool=daily_pool, super_hit_score=5,
         )
         texts = [
-            prompts.opening_plan_request({}, game),
+            prompts.opening_plan_request({}, game, team=False),
             prompts.next_match_plan_request(make_logs(1, game), make_standings({"甲": [0], "乙": [0]}), game),
         ]
         remaining_lines = [
@@ -74,14 +74,14 @@ class TestBidRequest:
 
     def test_max_affordable_bid_capped_by_balance(self):
         # 余额 4 低于上限时，可出最高价明示为 4
-        text = prompts.bid_request(make_prompt_obs(day=2, coins=4, today_history=[make_day(1, BIDS)]))
+        text = prompts.bid_request(make_prompt_obs(day=2, coins=4, today_history=[make_day(1, BIDS)]), team=False)
         assert "- 你的金币余额：4（已含今日工资，正常出价上限：4）。" in text.splitlines()
 
     def test_later_day_table_with_salary_note(self):
         text = prompts.bid_request(make_prompt_obs(
             day=2, today_history=[make_day(1, BIDS)], total_auction_score=5, match_score=7, total_score=23, coins=10,
             all_coins={"甲": 10, "乙": 8, "丙": 9, "丁": 7, "戊": 6, "己": 0},
-        ))
+        ), team=False)
         lines = text.splitlines()
 
         assert lines[0] == "当前是第 2 局第 2 天。"
@@ -107,7 +107,7 @@ class TestBidRequest:
         # 丙狙中甲的唯一 6，丁狙 7 落空，戊己互撞 2，乙以 5 获胜。
         text = prompts.bid_request(make_prompt_obs(
             day=2, today_history=[make_day(1, [6, 5, 4, 3, 2, 2], super_bids={"丙": 6, "丁": 7})],
-        ))
+        ), team=False)
         lines = text.splitlines()
 
         assert "| 甲 | 6 | 撞车 | — | — | 7 |" in lines  # 被狙中也算撞车
@@ -123,7 +123,7 @@ class TestBidRequest:
             day=2,
             today_history=[make_day(1, [2, 2, 1, 1, 0, 0])],
             pool=1,
-        ))
+        ), team=False)
         lines = text.splitlines()
 
         assert "昨日公布：流局，奖池 1 分作废。" in lines
@@ -167,13 +167,13 @@ class TestMyLastDayLine:
     def test_last_day_line_segments(self, bids, super_bids, expected):
         text = prompts.bid_request(make_prompt_obs(
             day=2, today_history=[make_day(1, bids, super_bids=super_bids)],
-        ))
+        ), team=False)
         assert expected + "\n\n今日状态：\n\n- 今日奖池：" in text
 
     def test_line_position_between_announcement_and_status(self):
         text = prompts.bid_request(make_prompt_obs(
             day=2, today_history=[make_day(1, BIDS)],
-        ))
+        ), team=False)
         assert text.index("昨日公布") < text.index("昨日你的金币结算") < text.index("今日奖池")
 
     def test_custom_game_sets_daily_limit_cost_and_bounty(self):
@@ -183,7 +183,7 @@ class TestMyLastDayLine:
             day=2, coins=12, game=game,
             today_history=[make_day(1, [4, 9, 5, 2, 1, 0], super_bids={"甲": 9}, game=game)],
         )
-        text = prompts.bid_request(obs)
+        text = prompts.bid_request(obs, team=False)
         assert "正常出价上限：9" in text
         assert "- 超级出价花费 3 金币。\n- 获得 5 金币悬赏。" in text
         assert "昨日命中得分：甲 7 分。" in text
@@ -193,11 +193,11 @@ class TestMyLastDayLine:
         game = replace(TEST_GAME, daily_pool=tuple([1] * days))
         obs = make_prompt_obs(day=days, today_history=[make_day(1, BIDS)])
         obs.game = game
-        text = prompts.bid_request(obs)
+        text = prompts.bid_request(obs, team=False)
         assert "本局最后一天，结束后金币清零。" in text
 
     def test_earlier_day_has_no_final_day_reminder(self):
-        text = prompts.bid_request(make_prompt_obs(day=2, today_history=[make_day(1, BIDS)]))
+        text = prompts.bid_request(make_prompt_obs(day=2, today_history=[make_day(1, BIDS)]), team=False)
         assert "结束后金币清零" not in text
 
 
@@ -213,7 +213,7 @@ class TestTeamBidRequest:
     """团队赛：累计总分按阵营分组，昨日明细多一列阵营，只狙到队友价位的落空写明原因。TEAM_OF 里甲乙丙是红队。"""
 
     def test_totals_grouped_by_team_and_table_has_team_column(self):
-        text = prompts.bid_request(team_obs(BIDS))
+        text = prompts.bid_request(team_obs(BIDS), team=True)
         assert "\n\n累计总分：蓝队 6 分（丁 4 分、戊 2 分、己 0 分），红队 4 分（甲 3 分、乙 1 分、丙 0 分）。" in text
         assert "全员累计总分" not in text
         lines = text.splitlines()
@@ -228,7 +228,7 @@ class TestTeamBidRequest:
         ([0, 5, 1, 2, 3, 4], 2, "- 超级出价花费 2 金币。\n- 获得 3 金币悬赏。"),
     ], ids=["one-teammate", "two-teammates", "nobody-there", "hit-opponent"])
     def test_miss_on_teammates_only_value_names_them(self, bids, super_bid, expected):
-        text = prompts.bid_request(team_obs(bids, {"甲": super_bid}))
+        text = prompts.bid_request(team_obs(bids, {"甲": super_bid}), team=True)
         assert f"\n{expected}\n\n今日状态：" in text
 
 
@@ -266,7 +266,7 @@ class TestEngineScorePrompts:
         ) + "。"
         for name in NAMES:
             obs = captured[name][1]
-            text = prompts.bid_request(obs)
+            text = prompts.bid_request(obs, team=False)
             assert obs.my_match_score == log.scores[name]
             assert hits in text
             assert f"本局得分：{log.scores[name]} 分。" in text
@@ -283,9 +283,9 @@ class TestEngineScorePrompts:
                 assert f"| {name} | {bids[index]} | {outcomes[index]} | {super_bids[name]} | 命中 |" in text
                 assert "- 超级出价花费 2 金币。\n- 获得 3 金币悬赏。" in text
         observer = "戊" if winner is None else "甲"
-        assert personal_result in prompts.bid_request(captured[observer][1])
+        assert personal_result in prompts.bid_request(captured[observer][1], team=False)
         announcement = next(
-            line for line in prompts.bid_request(captured[observer][1]).splitlines()
+            line for line in prompts.bid_request(captured[observer][1], team=False).splitlines()
             if line.startswith("昨日公布：")
         )
         if winner is None:
@@ -310,13 +310,13 @@ class TestEngineScorePrompts:
             day2, day3 = captured[name][1:]
             day2.match_index = day3.match_index = match_index
             assert day2.my_match_score == day3.my_match_score == log.scores[name] == 5
-            after_void = prompts.bid_request(day2)
+            after_void = prompts.bid_request(day2, team=False)
             assert "昨日公布：流局，奖池 2 分作废。" in after_void
             assert "昨日命中得分：戊 5 分、己 5 分。" in after_void
             assert "今日奖池：3 分" in after_void
             assert "\n\n本局还剩 2 天（含今天），剩余拍卖奖池共 7 分。如果每天都命中，每人最多还能获得 10 命中分。" in after_void
             assert "本局得分：5 分。" in after_void
-            after_award = prompts.bid_request(day3)
+            after_award = prompts.bid_request(day3, team=False)
             assert "昨日公布：甲 以 4 金币的正常出价获胜，拍卖得分 3 分。" in after_award
             assert "昨日无人命中。" in after_award
             assert "本局得分：5 分。" in after_award

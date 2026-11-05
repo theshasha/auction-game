@@ -227,7 +227,7 @@ def init_run_dir(tmp_path, names):
     """初始化一个离线场次目录，整场流程往里写发言、局日志和 README。"""
     run_dir = tmp_path / "run"
     initialize_run(run_dir, {"run_type": "offline", "mode": "regular",
-                             "players": [{"name": name} for name in names]}, "测试规则")
+                             "players": [{"name": name, "team": None} for name in names]}, "测试规则")
     return run_dir
 
 

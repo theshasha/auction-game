@@ -135,7 +135,7 @@ class AIDirector:
         index = log.match_index
         label = f"第 {index} 局局末发言"
         speeches = self._speech_round(label, lambda p, received: p.give_speech(
-            prompts.match_end_speech_request(log, standings, received=received), label))
+            prompts.match_end_speech_request(log, standings, received=received, team=self.team), label))
         memory_label = f"第 {index} 局累计私有记忆"
         self._run_round(memory_label, lambda p, received: p.save_memory(
             prompts.memory_request(self._others(speeches, p.name), index, received=received, team=self.team),
@@ -153,7 +153,7 @@ class AIDirector:
         """最后一局之后的最终感言和观众总结；最后一局的出价日志随感言请求发出。"""
         label = "最终感言"
         speeches = self._speech_round(label, lambda p, received: p.give_speech(
-            prompts.final_speech_request(standings, log, received=received), label, letters=False))
+            prompts.final_speech_request(standings, log, received=received, team=self.team), label, letters=False))
         summary_label = "观众总结（仅观众可见）"
         summaries = self._run_round(summary_label, lambda p, _: p.final_summary(
             self._others(speeches, p.name), summary_label))

@@ -67,7 +67,7 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
     monkeypatch.setattr(director_module.prompts, "opening_plan_request", opening_plan_request)
     monkeypatch.setattr(director_module.prompts, "next_match_plan_request", next_match_plan_request)
     monkeypatch.setattr(director_module.prompts, "match_end_speech_request",
-                        lambda log, standings, *, received: f"局末 {log.match_index}")
+                        lambda log, standings, *, received, team: f"局末 {log.match_index}")
     monkeypatch.setattr(director_module.prompts, "memory_request",
                         lambda others, index, *, received, team: f"记忆 {others} {index}")
     director.opening()
@@ -217,7 +217,7 @@ def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
     player = make_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path)
     director = director_module.AIDirector([player], continuous_controller(), tmp_path, game=TEST_GAME)
     monkeypatch.setattr(director_module.prompts, "final_speech_request",
-                        lambda standings, log, *, received: "请发表最终感言")
+                        lambda standings, log, *, received, team: "请发表最终感言")
     director.final([], None)
     assert request_text(player.task_runner, 0) == "请发表最终感言\n\n" + output_requirement(SPEECH)
 
@@ -413,7 +413,17 @@ def test_team_memory_request_knows_it_is_a_team_run(tmp_path):
     ]), tmp_path, game=game, name=name) for name in TEAM_OF]
     standings = make_standings({name: [0] for name in TEAM_OF}, team_of=TEAM_OF)
     team_director(players, tmp_path, game=game).match_end([make_log(game=game)], standings)
+    assert "现在写的信，队友整理记忆时看到" in request_text(players[0].task_runner, 0)
     assert "队内信件区里谈好的约定" in request_text(players[0].task_runner, 1)
+
+
+def test_team_final_speech_request_knows_it_is_a_team_run(tmp_path):
+    players = [make_team_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path, name=name)
+               for name in TEAM_OF]
+    director = team_director(players, tmp_path)
+    director.mailbox = {"甲": {"乙": "最后一天的信"}}
+    director.final(make_standings({name: [0] for name in TEAM_OF}, team_of=TEAM_OF), make_log())
+    assert "以下是队友在本局最后一天出价时写的信：\n\n【乙】最后一天的信" in request_text(players[0].task_runner, 0)
 
 
 def test_later_match_discussion_runs_in_the_new_conversation_and_reaches_the_plan(tmp_path):

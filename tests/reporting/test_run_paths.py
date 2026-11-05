@@ -18,7 +18,7 @@ def test_same_second_runs_get_suffix_and_existing_run_is_not_overwritten(tmp_pat
     second = run_output.make_run_dir("ai")
     assert second.name == first.name + "_2" and sentinel.read_text() == "keep"
     snapshot = {"run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(),
-                "players": [{"name": "甲"}, {"name": "乙"}]}
+                "players": [{"name": "甲", "team": None}, {"name": "乙", "team": None}]}
     run_output.initialize_run(second, snapshot, "rules")
     with pytest.raises(FileExistsError):
         run_output.initialize_run(second, snapshot, "overwrite")

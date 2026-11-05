@@ -107,7 +107,7 @@ def test_readme_describes_actual_model_usage(tmp_path, run_type, mode, expected)
     paths = initialize_run(
         tmp_path / "run",
         {"run_type": run_type, "mode": mode, "game": TEST_GAME.to_dict(),
-         "players": [{"name": name, "identity_model": {"model": "identity"},
+         "players": [{"name": name, "team": None, "identity_model": {"model": "identity"},
                       "execution_model": {"protocol": "chat", "model": "execution"}} for name in NAMES]},
         render_rules(TEST_GAME, make_lineup()),
     )
@@ -138,7 +138,7 @@ def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):
     paths = initialize_run(
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(),
-         "players": [{"name": name} for name in NAMES]},
+         "players": [{"name": name, "team": None} for name in NAMES]},
         render_rules(TEST_GAME, make_lineup()),
     )
     readme = paths.root / "README.md"
@@ -155,7 +155,7 @@ def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):
     paths = initialize_run(
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": game.to_dict(),
-         "players": [{"name": name} for name in NAMES]},
+         "players": [{"name": name, "team": None} for name in NAMES]},
         render_rules(game, make_lineup()),
     )
     # 每局全员出同一个价，天天撞车流局；第 3 局是加赛。
@@ -192,7 +192,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     paths = initialize_run(
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": game.to_dict(),
-         "players": [{"name": name} for name in NAMES]},
+         "players": [{"name": name, "team": None} for name in NAMES]},
         render_rules(game, make_lineup()),
     )
     publish_match(paths, log, standings)
@@ -205,8 +205,8 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert report.count("| 流局（奖池作废） | 0、1、2 |") == 2
     assert "| 流局（奖池作废） | 0、1、2 | 丁 2 |" in report
     assert "| 3 | 3 |" in report
-    for text in [report, prompts.match_end_speech_request(log, standings),
-                 prompts.final_speech_request(standings, log)]:
+    for text in [report, prompts.match_end_speech_request(log, standings, team=False),
+                 prompts.final_speech_request(standings, log, team=False)]:
         assert tables.render_match_log(log) in text
 
     payload = json.loads(paths.match(1).read_text(encoding="utf-8"))
