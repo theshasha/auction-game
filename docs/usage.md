@@ -6,7 +6,7 @@
 
 - `configs/game.yaml`：局数、金币、奖池、出价上限和超级出价参数。
 - `configs/models.yaml`：模型目录。每个条目写调用的模型 ID、渠道、协议和 models.dev 来源；`name` 是参赛时默认的角色名。
-- `configs/players.yaml`：个人赛阵容、人设和虚构的预测胜率。玩家的 `name` 可以不写，不写时用模型目录里的角色名；同一个模型放多名玩家时，给每人写 `name`。名字不能含空白和 `<`、`>`、`/`，不能是 `strategy`、`decision`、`speech`，同一场不能重名。
+- `configs/players.yaml`：个人赛阵容、人设和虚构的预测胜率。玩家的 `name` 可以不写，不写时用模型目录里的角色名；同一个模型放多名玩家时，给每人写 `name`。名字的要求见[私信](letters.md#名字)。
 - `configs/teams.yaml`：团队赛阵容，正好 2 个阵营、每个 3 人。每个阵营写 `name`（阵营名，不能为空或重复）和 `players`；玩家的字段和名字要求同 `players.yaml`，但没有预测胜率。
 - `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。
 
