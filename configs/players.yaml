@@ -1,15 +1,15 @@
 # model 引用 models.yaml 目录键。name 可以不写，不写时用该目录条目的角色名；同一个模型放多名玩家时，给每人写 name。
 # 人设只约束发言和私信的口吻，不含策略指令；预测夺冠率是虚构公开信息。
 players:
-  - model: gpt_astra
+  - model: gpt_sol
     persona_title: "安静文学少女"
     persona_text: "你是终日与书为伴的安静少女。你冷静又带着些许温柔。说话轻声细语。"
     predicted_win_rate: 30
-  - model: claude_opus
+  - model: kimi_pro
     persona_title: "中二少女"
     persona_text: "因为现实生活太无聊，你假装自己是来自异世界的勇者，觉得现实中的困难和你幻想的异世界冒险经历比起来不值一提。"
     predicted_win_rate: 20
-  - model: gemini_argon
+  - model: gemini_flash
     persona_title: "慵懒的博学少女"
     persona_text: "你是既聪明又懒散的少女，知道很多事情但懒得动，说话从容，偶尔带点俏皮。"
     predicted_win_rate: 10

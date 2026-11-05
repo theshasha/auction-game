@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-10-19T07:23:04.839952+00:00",
+  "fetched_at": "2026-11-05T09:57:58.970200+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -10,7 +10,6 @@
       },
       "status": "matched",
       "matched_id": "gpt-6-astra",
-      "canonical_model_id": "openai/gpt-6-astra",
       "limit": {
         "context": 1050000,
         "input": 922000,
@@ -28,8 +27,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "gpt_sol": {
       "source": {
@@ -38,7 +36,6 @@
       },
       "status": "matched",
       "matched_id": "gpt-6.1-sol",
-      "canonical_model_id": "openai/gpt-6.1-sol",
       "limit": {
         "context": 1050000,
         "input": 922000,
@@ -56,8 +53,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "gpt_luna": {
       "source": {
@@ -66,7 +62,6 @@
       },
       "status": "matched",
       "matched_id": "gpt-6-luna",
-      "canonical_model_id": "openai/gpt-6-luna",
       "limit": {
         "context": 1050000,
         "input": 922000,
@@ -85,8 +80,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "deepseek_flash": {
       "source": {
@@ -95,9 +89,8 @@
       },
       "status": "matched",
       "matched_id": "deepseek-flash",
-      "canonical_model_id": "deepseek/deepseek-v4.1-flash-1017",
       "limit": {
-        "context": 1000000,
+        "context": 1048576,
         "input": null,
         "output": 393216
       },
@@ -114,8 +107,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "gemini_flash": {
       "source": {
@@ -124,7 +116,6 @@
       },
       "status": "matched",
       "matched_id": "gemini-3.8-flash",
-      "canonical_model_id": "google/gemini-3.8-flash",
       "limit": {
         "context": 1048576,
         "input": null,
@@ -140,8 +131,7 @@
             "high"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "gemini_argon": {
       "source": {
@@ -150,7 +140,6 @@
       },
       "status": "matched",
       "matched_id": "gemini-4-argon",
-      "canonical_model_id": "google/gemini-4-argon",
       "limit": {
         "context": 1048576,
         "input": null,
@@ -166,8 +155,7 @@
             "high"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "glm_pro": {
       "source": {
@@ -176,7 +164,6 @@
       },
       "status": "matched",
       "matched_id": "glm-5.3",
-      "canonical_model_id": "zhipuai/glm-5.3",
       "limit": {
         "context": 1000000,
         "input": null,
@@ -192,8 +179,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "glm_flash": {
       "source": {
@@ -202,7 +188,6 @@
       },
       "status": "matched",
       "matched_id": "glm-5.3-flash",
-      "canonical_model_id": "zhipuai/glm-5.3-flash",
       "limit": {
         "context": 1000000,
         "input": null,
@@ -218,8 +203,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "deepseek_pro": {
       "source": {
@@ -228,9 +212,8 @@
       },
       "status": "matched",
       "matched_id": "deepseek-v4-pro",
-      "canonical_model_id": "deepseek/deepseek-v4-pro-0813",
       "limit": {
-        "context": 1000000,
+        "context": 1048576,
         "input": null,
         "output": 393216
       },
@@ -247,8 +230,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "grok": {
       "source": {
@@ -257,7 +239,6 @@
       },
       "status": "matched",
       "matched_id": "grok-4.7",
-      "canonical_model_id": "xai/grok-4.7",
       "limit": {
         "context": 500000,
         "input": null,
@@ -274,8 +255,7 @@
             "xhigh"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "claude_sonnet": {
       "source": {
@@ -284,7 +264,6 @@
       },
       "status": "matched",
       "matched_id": "claude-sonnet-5-5",
-      "canonical_model_id": "anthropic/claude-sonnet-5-5",
       "limit": {
         "context": 1000000,
         "input": null,
@@ -302,8 +281,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "claude_opus": {
       "source": {
@@ -312,7 +290,6 @@
       },
       "status": "matched",
       "matched_id": "claude-opus-5-5",
-      "canonical_model_id": "anthropic/claude-opus-5-5",
       "limit": {
         "context": 1000000,
         "input": null,
@@ -330,8 +307,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     },
     "mimo_pro": {
       "source": {
@@ -340,7 +316,6 @@
       },
       "status": "matched",
       "matched_id": "mimo-v2.6-pro",
-      "canonical_model_id": null,
       "limit": {
         "context": 1048576,
         "input": null,
@@ -351,8 +326,7 @@
         {
           "type": "toggle"
         }
-      ],
-      "tool_call": true
+      ]
     },
     "mimo_flash": {
       "source": {
@@ -361,7 +335,6 @@
       },
       "status": "matched",
       "matched_id": "mimo-v2.6-flash",
-      "canonical_model_id": null,
       "limit": {
         "context": 1048576,
         "input": null,
@@ -372,17 +345,15 @@
         {
           "type": "toggle"
         }
-      ],
-      "tool_call": true
+      ]
     },
-    "kimi_k3": {
+    "kimi_pro": {
       "source": {
         "provider": "moonshotai",
-        "model": "kimi-k3"
+        "model": "kimi-k3.1-pro"
       },
       "status": "matched",
-      "matched_id": "kimi-k3",
-      "canonical_model_id": "moonshotai/kimi-k3",
+      "matched_id": "kimi-k3.1-pro",
       "limit": {
         "context": 1048576,
         "input": null,
@@ -398,8 +369,7 @@
             "max"
           ]
         }
-      ],
-      "tool_call": true
+      ]
     }
   }
 }

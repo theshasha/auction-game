@@ -117,12 +117,12 @@ models:
     models_dev:
       provider: xiaomi
       model: mimo-v2.6-flash
-  kimi_k3:
+  kimi_pro:
     name: Kimi姐姐
-    model: kimi-k3
+    model: kimi-k3.1-pro
     provider: hub
     protocol: chat
     reasoning_effort: low
     models_dev:
       provider: moonshotai
-      model: kimi-k3
+      model: kimi-k3.1-pro

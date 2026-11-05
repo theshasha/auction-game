@@ -3,10 +3,10 @@
 teams:
   - name: 红队
     players:
-      - model: gpt_astra
+      - model: gpt_sol
         persona_title: "无"
         persona_text: "无"
-      - model: gemini_argon
+      - model: gemini_flash
         persona_title: "无"
         persona_text: "无"
       - model: grok
@@ -14,7 +14,7 @@ teams:
         persona_text: "无"
   - name: 蓝队
     players:
-      - model: claude_opus
+      - model: kimi_pro
         persona_title: "无"
         persona_text: "无"
       - model: glm_pro
