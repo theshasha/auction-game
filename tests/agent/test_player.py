@@ -22,7 +22,7 @@ def retry_text(runner, index):
                 if isinstance(part, RetryPromptPart))
 
 
-def test_system_prompt_is_sent_and_opens_both_histories(tmp_path):
+def test_system_prompt_is_sent_and_opens_history(tmp_path):
     runner = fake_task_runner([bid_reply(1)])
     player = make_player(runner, tmp_path)
     assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (1, None)
@@ -30,8 +30,7 @@ def test_system_prompt_is_sent_and_opens_both_histories(tmp_path):
     sent = [part.content for message in runner.calls[0] for part in message.parts
             if isinstance(part, SystemPromptPart)]
     assert sent == [expected]
-    for history in (player.messages, player.review_messages):
-        assert [(type(part), part.content) for part in history[0].parts] == [(SystemPromptPart, expected)]
+    assert [(type(part), part.content) for part in player.messages[0].parts] == [(SystemPromptPart, expected)]
 
 
 @pytest.mark.parametrize("invalid", [

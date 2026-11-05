@@ -43,16 +43,15 @@ def completed_history(messages: list[ModelMessage]) -> list[ModelMessage]:
 
 
 class AIPlayer:
-    """日志成功才提交；快照同时恢复当前上下文、全场回顾和记忆。"""
+    """日志成功才提交；快照同时恢复当前上下文和各局记忆。"""
 
     def __init__(self, name: str, system_prompt: str, letter_scope: LetterScope,
                  task_runner: TaskRunner, log: AgentLog, *, game: GameSettings):
-        """系统提示由 prompts.build_system_prompt 按阵容拼好，放在两份对话的第一条。"""
+        """系统提示由 prompts.build_system_prompt 按阵容拼好，放在对话的第一条。"""
         self.name = name
         self.game = game
         self.messages: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(system_prompt)])]
-        self.review_messages = list(self.messages)
-        self.memory = ""
+        self.memories: list[str] = []  # 每局整理的记忆，按局序；最后一项是对话里的最新一版。
         self.task_runner = task_runner
         self.letter_scope = letter_scope
         self.log = log
@@ -60,12 +59,12 @@ class AIPlayer:
 
     def checkpoint(self):
         """消息只追加或整体替换，浅拷贝列表就能恢复，包括局末重置。"""
-        return list(self.messages), list(self.review_messages), self.memory
+        return list(self.messages), list(self.memories)
 
     def rollback(self, checkpoint) -> None:
-        messages, review, self.memory = checkpoint
+        messages, memories = checkpoint
         self.messages = list(messages)
-        self.review_messages = list(review)
+        self.memories = list(memories)
 
     def _task(self, name: Task, prompt: str, title: str, context: str | None = None, *,
               coins: int = 0, letters: bool = True, brief: str | None = None) -> TaskOutput:
@@ -75,11 +74,10 @@ class AIPlayer:
         """
         spec = TASKS[name]
         entry = {"title": title, "task": name, "context": title if context is None else context}
-        if spec.history == "review":
-            entry["history_note"] = "这次请求带的是从开局到现在的全部对话，不受局末记忆重置影响；结果不写回对话历史。"
-        history = self.review_messages if spec.history == "review" else self.messages
+        if spec.history == "none":
+            entry["history_note"] = "这次请求接在当前对话后面，结果不写回对话历史。"
         try:
-            result = self.task_runner(spec, prompt, history, game=self.game, coins=coins,
+            result = self.task_runner(spec, prompt, self.messages, game=self.game, coins=coins,
                                       letters=self.letter_scope if spec.can_write_letters and letters else None,
                                       brief=brief)
         except CallFailedError as exc:
@@ -93,15 +91,12 @@ class AIPlayer:
             entry["history_reset"] = memory_message
             entry["history_note"] = f"此后对话从系统提示和一条消息重新开始，消息内容是“{MEMORY_HEADER}”加上面的结果。"
         self.log.success(entry, result)
-        if spec.history != "review":
+        if spec.history == "reset":
+            self.memories.append(result.output.memory)
+            self.messages = [self.messages[0], ModelRequest(parts=[UserPromptPart(memory_message)])]
+        elif spec.history == "append":
             # 日志保留原始响应；下一任务沿用去推理后的原生对话与纠错往返。
-            projection = completed_history(result.messages)
-            self.review_messages.extend(projection)
-            if spec.history == "reset":
-                self.memory = result.output.memory
-                self.messages = [self.messages[0], ModelRequest(parts=[UserPromptPart(memory_message)])]
-            else:
-                self.messages.extend(projection)
+            self.messages.extend(completed_history(result.messages))
         return result.output
 
     def bid(self, obs: Observation, received: dict[str, str], title: str) -> BidOutput:
@@ -127,6 +122,6 @@ class AIPlayer:
         """全部公开发言公布后整理；日志成功才替换记忆并清空历局对话。"""
         return self._task("memory", user_text, title)
 
-    def final_summary(self, user_text: str, title: str) -> SummaryOutput:
-        """用开局以来的全部对话写观众总结；请求和结果都不写回历史。"""
-        return self._task("summary", user_text, title)
+    def final_summary(self, others_speeches: dict[str, str], title: str) -> SummaryOutput:
+        """接着当前对话写观众总结，最新一版记忆已在对话里，请求补上之前各版；请求和结果都不写回历史。"""
+        return self._task("summary", prompts.final_summary_request(others_speeches, self.memories[:-1]), title)

@@ -157,7 +157,7 @@ def test_blank_summary_gets_output_correction(tmp_path):
     runner = fake_task_runner(["  \n", "给观众的话"])
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
-    assert player.final_summary("总结", "观众总结（仅观众可见）").text == "给观众的话"
+    assert player.final_summary({}, "观众总结（仅观众可见）").text == "给观众的话"
     assert len(runner.calls) == 2 and player.messages == before
     assert "retry-prompt" in ModelMessagesTypeAdapter.dump_json(runner.calls[-1]).decode()
 
@@ -167,7 +167,7 @@ def test_double_blank_summary_fails_and_keeps_history(tmp_path):
     player = make_player(runner, tmp_path)
     before = deepcopy(player.messages)
     with pytest.raises(OutputFailedError):
-        player.final_summary("总结", "观众总结（仅观众可见）")
+        player.final_summary({}, "观众总结（仅观众可见）")
     assert player.messages == before and len(runner.calls) == 2
 
 
@@ -218,7 +218,6 @@ def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
     director = director_module.AIDirector([player], continuous_controller(), tmp_path, game=TEST_GAME)
     monkeypatch.setattr(director_module.prompts, "final_speech_request",
                         lambda standings, log, *, received: "请发表最终感言")
-    monkeypatch.setattr(director_module.prompts, "final_summary_request", lambda others: "请总结")
     director.final([], None)
     assert request_text(player.task_runner, 0) == "请发表最终感言\n\n" + output_requirement(SPEECH)
 

@@ -82,7 +82,7 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         assert "signed_old_reasoning" in audit and "redacted_old_reasoning" in audit
     player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     before = player.checkpoint()
-    assert player.final_summary("audience review", "观众总结（仅观众可见）").text == "audience"
+    assert player.final_summary({}, "观众总结（仅观众可见）").text == "audience"
     assert player.checkpoint() == before
     for _, body in h.requests[2:]:
         wire = json.dumps(body, ensure_ascii=False)
@@ -106,7 +106,7 @@ def test_sdk_plain_memory_and_cross_match_replacement(protocol, tmp_path):
     player.give_speech("old match raw", "第 1 局局末发言")
     player.save_memory(prompts.memory_request({"Bravo": "other signal"}, 1), "第 1 局累计私有记忆")
     assert "不加格式标签或 JSON 外壳" in json.dumps(h.requests[-1][1], ensure_ascii=False)
-    assert player.memory == "cumulative-v1"
+    assert player.memories == ["cumulative-v1"]
     player.plan_strategy(prompts.next_match_plan_request(make_logs(1), [], player.game), "第 2 局策略规划（含首日出价）")
     wire = json.dumps(h.requests[-1][1], ensure_ascii=False)
     assert "cumulative-v1" in wire and "最新累计成绩" in wire and "第 2 局" in wire
@@ -119,17 +119,17 @@ def test_sdk_plain_memory_and_cross_match_replacement(protocol, tmp_path):
     assert "second match signals" not in wire and len(h.requests) == h.closes == 5
 
 
-def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_path):
+def test_cumulative_memory_replaces_prior_context_and_summary_gets_old_versions(tmp_path):
     long_memory = "第二版累计经验" + "观察与猜测。" * 2500
     runner = fake_task_runner([speech_reply("own raw signal"), {"memory": "第一版经验"},
                                bid_reply(1), speech_reply("match two signal"), {"memory": long_memory},
-                               bid_reply(2), "review"])
+                               bid_reply(2), "audience"])
     player = make_player(runner, tmp_path)
     player.give_speech("first match raw", "开局发言")
     checkpoint = player.checkpoint()
     player.save_memory(prompts.memory_request({"Bravo": "other raw signal"}, 1), "第 1 局累计私有记忆")
     assert "own raw signal" in encoded(runner.calls[-1]) and "other raw signal" in encoded(runner.calls[-1])
-    assert player.memory == "第一版经验"
+    assert player.memories == ["第一版经验"]
     assert "first match raw" not in encoded(player.messages)
     standings = make_standings({"Alpha": [3], "Bravo": [1]})
     player.plan_strategy(prompts.next_match_plan_request(make_logs(1), standings, player.game), "第 2 局策略规划（含首日出价）")
@@ -139,20 +139,24 @@ def test_cumulative_memory_replaces_prior_context_but_review_preserves_game(tmp_
     player.give_speech("second match raw", "第 2 局局末发言")
     player.save_memory("all second match signals", "第 2 局累计私有记忆")
     assert "第一版经验" in encoded(runner.calls[-1]) and "second match raw" in encoded(runner.calls[-1])
-    assert player.memory == long_memory and "第一版经验" not in encoded(player.messages)
+    assert player.memories == ["第一版经验", long_memory] and "第一版经验" not in encoded(player.messages)
     player.plan_strategy(prompts.next_match_plan_request(make_logs(2), standings, player.game), "第 3 局策略规划（含首日出价）")
     third_input = encoded(runner.calls[-1])
     assert long_memory in third_input and "second match raw" not in third_input
     assert "第一版经验" not in third_input and len(runner.calls) == 6  # 超软目标只请求一次
-    player.final_summary("review all matches", "观众总结（仅观众可见）")
-    assert "first match raw" in encoded(runner.calls[-1]) and "second match raw" in encoded(runner.calls[-1])
+    history_before_summary = list(player.messages)
+    player.final_summary({"Bravo": "final words"}, "观众总结（仅观众可见）")
+    summary_input = encoded(runner.calls[-1])
+    assert "【第 1 局结束时】第一版经验" in summary_input and summary_input.count(long_memory) == 1
+    assert "final words" in summary_input and "first match raw" not in summary_input
+    assert player.messages == history_before_summary
     entries = task_entries(player.log.path)
     assert entries[4]["history_reset"] == f"【累计私有记忆，仅自己可见】\n{long_memory}"
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert markdown.count("此后对话从系统提示和一条消息重新开始") == 2
-    assert "这次请求带的是从开局到现在的全部对话" in markdown
+    assert "这次请求接在当前对话后面" in markdown
     player.rollback(checkpoint)
-    assert player.memory == "" and player.checkpoint() == checkpoint
+    assert player.memories == [] and player.checkpoint() == checkpoint
 
 
 @pytest.mark.parametrize("invalid", ["", "\r\n\t "])
@@ -160,10 +164,10 @@ def test_memory_requires_nonempty_plain_body_and_shared_correction(invalid, tmp_
     runner = fake_task_runner([invalid, {"memory": "saved"}])
     player = make_player(runner, tmp_path)
     player.save_memory("整理", "第 1 局累计私有记忆")
-    assert player.memory == "saved" and len(runner.calls) == 2
+    assert player.memories == ["saved"] and len(runner.calls) == 2
 
 
-def test_failed_memory_keeps_context_review_cache_and_memory(tmp_path):
+def test_failed_memory_keeps_context_and_memories(tmp_path):
     player = make_player(fake_task_runner([bid_reply(2), {"memory": " "}, {"memory": " "}]), tmp_path)
     player.plan_strategy("old context", "第 1 局策略规划（含首日出价）")
     before = deepcopy(player.checkpoint())

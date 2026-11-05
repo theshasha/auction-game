@@ -91,10 +91,14 @@ class TestSpeechFields:
         assert "| 2 | 甲 | 12 | 8 | 4 | 3 |" in text
 
     def test_final_summary_is_private_and_includes_speeches(self):
-        text = prompts.final_summary_request({"甲": "感言A", "乙": "感言B"})
+        text = prompts.final_summary_request({"甲": "感言A", "乙": "感言B"}, [])
         assert text.startswith("以下是其他玩家的最终感言：\n\n【甲】感言A\n\n【乙】感言B\n\n最后")
         assert "只给观众看的总结发言" in text
         assert "用第一人称" in text
+
+    def test_final_summary_labels_old_memories_by_match(self):
+        text = prompts.final_summary_request({"甲": "感言A"}, ["旧记忆一", "旧记忆二"])
+        assert "【第 1 局结束时】旧记忆一\n\n【第 2 局结束时】旧记忆二\n\n最后" in text
 
 
 @pytest.mark.parametrize("match_index", [1, 2])

@@ -229,10 +229,10 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
     assert player.give_speech("speak", "最终感言").speech == "public"
     player.plan_strategy("next plan", "第 2 局策略规划（含首日出价）")
     before = deepcopy(player.messages)
-    assert player.final_summary("original summary request and other players' speeches", "观众总结（仅观众可见）").text == long_summary
+    assert player.final_summary({"Bravo": "other players' speeches"}, "观众总结（仅观众可见）").text == long_summary
     assert player.messages == before and len(h.requests) == h.closes == 5
     body = json.dumps(h.requests[-1][1], ensure_ascii=False)
-    assert body.count("【你的身份】") == 1 and "original summary request" in body
+    assert body.count("【你的身份】") == 1 and "只给观众看的总结发言" in body
     assert "private" in body and "other players' speeches" in body
     outputs = [text_reply(GOOD), text_reply(GOOD),
                text_reply({"strategy": "private", "speech": "public"}), text_reply(GOOD)]
@@ -277,7 +277,8 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     factory = llm_client.make_model_factory(provider="channel-name-is-not-protocol", channel=channel,
                                            model="custom-model-alias", protocol=protocol,
                                            timeout=17, max_tokens=321,
-                                           model_settings={"anthropic_thinking": {"type": "adaptive"},
+                                           model_settings={"anthropic_cache_messages": "1h",
+                                                           "anthropic_thinking": {"type": "adaptive"},
                                                            "anthropic_effort": "high"} if protocol == "anthropic"
                                            else {"openai_reasoning_effort": "high"})
     assert factory.base_url == channel["base_url"]
@@ -292,6 +293,7 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
         assert body["reasoning_effort"] == "high"
     else:
         assert body["thinking"] == {"type": "adaptive"} and body["output_config"]["effort"] == "high"
+        assert body["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     assert request.extensions["timeout"]["read"] == 17 and h.closes == 1
 
 

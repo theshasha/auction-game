@@ -142,7 +142,7 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
                        fn=lambda p=p: p.save_memory("all published speeches", "第 1 局累计私有记忆")) for p in players]
     with running(controller, lambda: controller.run_round(tasks, "累计记忆")) as (thread, outcome):
         assert gate.wait(timeout=5)
-        assert alpha.memory == "alpha cumulative" and len(alpha.messages) == 2
+        assert alpha.memories == ["alpha cumulative"] and len(alpha.messages) == 2
         assert bravo.checkpoint() == before[1]
         successful = alpha.checkpoint()
         controller.offer_command(command)
@@ -153,7 +153,7 @@ def test_memory_round_keeps_successful_reset_and_can_restore_whole_round(command
         else:
             assert outcome.get("result") == {"Alpha": MemoryOutput("alpha cumulative"),
                                              "Bravo": MemoryOutput("bravo cumulative")}
-            assert alpha.checkpoint() == successful and bravo.memory == "bravo cumulative"
+            assert alpha.checkpoint() == successful and bravo.memories == ["bravo cumulative"]
             assert len(alpha.task_runner.calls) == 2 and len(bravo.task_runner.calls) == 3
 
 

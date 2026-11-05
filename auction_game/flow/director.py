@@ -156,5 +156,5 @@ class AIDirector:
             prompts.final_speech_request(standings, log, received=received), label, letters=False))
         summary_label = "观众总结（仅观众可见）"
         summaries = self._run_round(summary_label, lambda p, _: p.final_summary(
-            prompts.final_summary_request(self._others(speeches, p.name)), summary_label))
+            self._others(speeches, p.name), summary_label))
         publish_speeches(self.paths, summary_label, {name: output.text for name, output in summaries.items()})

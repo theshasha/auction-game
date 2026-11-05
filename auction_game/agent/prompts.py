@@ -343,6 +343,9 @@ def final_speech_request(standings: list[StandingsEntry], log: MatchLog, *,
     ])
 
 
-def final_summary_request(others_speeches: dict[str, str]) -> str:
+def final_summary_request(others_speeches: dict[str, str], old_memories: list[str]) -> str:
+    """old_memories 是最新一版之前的各版记忆，第 N 项写于第 N 局结束时；这些旧版已被替换，对话里只有最新一版。"""
+    memories = {f"第 {index} 局结束时": text for index, text in enumerate(old_memories, 1)}
     return "\n\n".join([_quoted("以下是其他玩家的最终感言：", others_speeches),
+                        *([_quoted("以下是你之前各局结束时整理的记忆，后来都被新版替换了：", memories)] if memories else []),
                         "最后，请写一段只给观众看的总结发言，用第一人称，直接写正文。"])

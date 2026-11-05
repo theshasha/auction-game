@@ -136,14 +136,14 @@ class TaskSpec:
     """一种任务的格式、校验和结果去向。
 
     second 是 strategy 之后那一块，None 表示直接返回正文；decision 块的出价要通过出价校验。
-    history 是结果写回对话的方式：append 追加，reset 用记忆替换之前的对话，review 只读全场回顾、不写回。
+    history 是结果写回对话的方式：append 追加，reset 用记忆替换之前的对话，none 不写回。
     """
 
     name: Task
     second: Literal["decision", "speech", "队内信件区"] | None
     output: type
     can_write_letters: bool
-    history: Literal["append", "reset", "review"]
+    history: Literal["append", "reset", "none"]
 
 
 TASKS: dict[str, TaskSpec] = {
@@ -152,7 +152,7 @@ TASKS: dict[str, TaskSpec] = {
     "speech": TaskSpec("speech", SPEECH, SpeechOutput, True, "append"),
     "discussion": TaskSpec("discussion", BOARD, DiscussionOutput, False, "append"),
     "memory": TaskSpec("memory", None, MemoryOutput, False, "reset"),
-    "summary": TaskSpec("summary", None, SummaryOutput, False, "review"),
+    "summary": TaskSpec("summary", None, SummaryOutput, False, "none"),
 }
 
 
