@@ -17,7 +17,7 @@ teams:
       - model: qwen_flash
         persona_title: "无"
         persona_text: "无"
-      - model: glm_pro
+      - model: glm_flash
         persona_title: "无"
         persona_text: "无"
       - model: deepseek_flash
