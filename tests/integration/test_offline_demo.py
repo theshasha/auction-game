@@ -93,7 +93,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
             "protocol": execution.protocol, **{field: getattr(execution, field) for field in capability_fields}}
         assert identity.model != execution.model
     assert all(f.settings["max_tokens"] == configs[0].execution.max_tokens for f in factories)
-    assert all(f.settings["openai_reasoning_effort"] == "medium" for f in factories)
+    assert all(f.settings["openai_reasoning_effort"] == "high" for f in factories)
     assert (run_dir / "RULES.md").read_text(encoding="utf-8") == prompts.render_rules(
         game, Lineup(tuple(pc.profile for pc in configs)))
 

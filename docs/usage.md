@@ -19,7 +19,7 @@
 每次请求允许的最大输出取自能力快照 `data/model_capabilities.json` 里该模型的最大输出；快照里没有时用 64000。推理档位按以下顺序确定：
 
 1. 模型条目里写了 `reasoning_effort: low | medium | high`，就用它。
-2. 否则模型的来源列出了 `medium`，就用 `medium`。
+2. 否则模型的来源列出了 `high`，就用 `high`。
 3. 其余情况用渠道默认档位。
 
 `anthropic` 协议的请求都申请 1 小时提示缓存，实际时长由渠道决定：`hub_anthropic` 实测按 5 分钟写入。其他协议由渠道自行缓存。

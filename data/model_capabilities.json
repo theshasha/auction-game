@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-11-05T16:25:47.194298+00:00",
+  "fetched_at": "2026-11-06T11:18:17.149373+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -271,6 +271,35 @@
       },
       "reasoning": true,
       "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      ]
+    },
+    "claude_haiku": {
+      "source": {
+        "provider": "anthropic",
+        "model": "claude-haiku-5-5"
+      },
+      "status": "matched",
+      "matched_id": "claude-haiku-5-5",
+      "limit": {
+        "context": 1000000,
+        "input": null,
+        "output": 128000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
+        },
         {
           "type": "effort",
           "values": [

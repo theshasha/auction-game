@@ -69,7 +69,7 @@ def test_test_model_checks_one_target_with_its_settings(config_files, monkeypatc
                         lambda **kwargs: calls.append(kwargs) or runner.executor.factory)
     assert check_llm.main(["--test-model"]) == 0
     assert [(call["model"], call["protocol"], call["model_settings"]) for call in calls] == [
-        ("test-model-c", "responses", {"openai_reasoning_effort": "medium"})]
+        ("test-model-c", "responses", {"openai_reasoning_effort": "high"})]
 
 
 def test_code_changes_between_runs_and_only_the_system_prompt_has_it(config_files, monkeypatch):

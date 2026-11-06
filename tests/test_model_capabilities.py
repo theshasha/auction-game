@@ -68,7 +68,7 @@ def test_sync_preview_write_repeat_and_runtime_offline(config_files, tmp_path, c
     assert players[0].execution.model_settings == {}
     assert players[1].execution.capabilities["output_fallback_reason"]
     _, testing = load_configuration(*config_files, test_model=True)
-    assert all(p.execution.max_tokens == 1900 and p.execution.model_settings == {"openai_reasoning_effort": "medium"}
+    assert all(p.execution.max_tokens == 1900 and p.execution.model_settings == {"openai_reasoning_effort": "high"}
                and p.execution.capabilities == config["models"]["substitute"].capabilities for p in testing)
 
 
@@ -122,21 +122,21 @@ def test_missing_or_changed_source_uses_defaults(config_files):
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
-def test_medium_uses_protocol_setting_without_manual_binding(config_files, protocol):
+def test_high_uses_protocol_setting_without_manual_binding(config_files, protocol):
     catalog = load_model_entries(config_files[2])
     catalog["substitute"] = replace(catalog["substitute"], protocol=protocol)
     snapshot = build_snapshot(catalog, public_data(), "synthetic")
     effective = effective_capabilities(catalog["substitute"], snapshot)
     assert effective["model_settings"] == ({"anthropic_cache_messages": "1h", "anthropic_thinking": {"type": "adaptive"},
-                                            "anthropic_effort": "medium"}
+                                            "anthropic_effort": "high"}
                                            if protocol == "anthropic"
-                                           else {"openai_reasoning_effort": "medium"})
-    assert effective["capabilities"]["reasoning_status"] == "medium"
+                                           else {"openai_reasoning_effort": "high"})
+    assert effective["capabilities"]["reasoning_status"] == "high"
 
 
 @pytest.mark.parametrize("options", [[{"type": "toggle"}], [{"type": "budget_tokens", "min": 1, "max": 10000}],
-                                     [{"type": "effort", "values": ["high"]}], []])
-def test_options_without_medium_keep_channel_default(config_files, options):
+                                     [{"type": "effort", "values": ["medium"]}], []])
+def test_options_without_high_keep_channel_default(config_files, options):
     catalog = load_model_entries(config_files[2])
     data = public_data()
     data["official"]["models"]["source-c"]["reasoning_options"] = options

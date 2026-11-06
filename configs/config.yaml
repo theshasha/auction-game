@@ -3,7 +3,7 @@
 test_model: deepseek_flash
 prompts:
   enable_predictions: false
-  enable_personas: false
+  enable_personas: true
   # 开启后把 configs/writing_style.md 接在每位玩家系统提示的最后。
   enable_writing_style: true
 llm:
@@ -18,3 +18,7 @@ llm:
     hub_anthropic:
       base_url: https://hub.oaifree.com
       api_key_env: HUB_API_KEY
+    # Anthropic 接口；地址不带 /v1。
+    oaipro:
+      base_url: https://api.oaipro.com
+      api_key_env: OAIPRO_API_KEY

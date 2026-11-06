@@ -35,14 +35,14 @@ def effective_capabilities(model: ModelEntry, snapshot: dict) -> dict:
     limit = entry.get("limit", {})
     output = limit.get("output")
     options = entry.get("reasoning_options", [])
-    has_medium = any(option.get("type") == "effort" and "medium" in option.get("values", [])
-                     for option in options)
+    has_high = any(option.get("type") == "effort" and "high" in option.get("values", [])
+                   for option in options)
     # 比赛一轮常超过 5 分钟。消息级缓存点是兼容网关用的写法，不依赖请求顶层的 cache_control。
     settings = {"anthropic_cache_messages": "1h"} if model.protocol == "anthropic" else {}
     if model.reasoning_effort is not None:
         status, detail = model.reasoning_effort, "models.yaml 指定"
-    elif has_medium:
-        status, detail = "medium", "来源列出 medium"
+    elif has_high:
+        status, detail = "high", "来源列出 high"
     else:
         status, detail = "default", "沿用渠道默认"
     if status != "default" and model.protocol == "anthropic":

@@ -1,5 +1,5 @@
 # 目录键供 players.yaml、teams.yaml 和 config.yaml 的 test_model 引用；models_dev 是该模型在 models.dev 里的条目，可能和渠道的 model ID 不同。
-# 来源没有 medium 档位的模型显式指定 low，其余按能力快照用 medium；见 docs/usage.md。
+# 来源没有 high 档位但有 medium 的模型显式指定 medium，其余按能力快照用 high；见 docs/usage.md。
 models:
   gpt_astra:
     name: GPT姐姐
@@ -30,7 +30,6 @@ models:
     model: deepseek-flash
     provider: hub
     protocol: chat
-    reasoning_effort: low
     models_dev:
       provider: deepseek
       model: deepseek-flash
@@ -55,7 +54,6 @@ models:
     model: glm-5.3
     provider: hub
     protocol: chat
-    reasoning_effort: low
     models_dev:
       provider: zhipuai
       model: glm-5.3
@@ -64,7 +62,6 @@ models:
     model: glm-5.3-flash
     provider: hub
     protocol: chat
-    reasoning_effort: low
     models_dev:
       provider: zhipuai
       model: glm-5.3-flash
@@ -73,7 +70,6 @@ models:
     model: deepseek-v4-pro
     provider: hub
     protocol: chat
-    reasoning_effort: low
     models_dev:
       provider: deepseek
       model: deepseek-v4-pro
@@ -93,6 +89,14 @@ models:
     models_dev:
       provider: anthropic
       model: claude-sonnet-5-5
+  claude_haiku:
+    name: Claude妹妹
+    model: claude-haiku-5-5
+    provider: oaipro
+    protocol: anthropic
+    models_dev:
+      provider: anthropic
+      model: claude-haiku-5-5
   claude_opus:
     name: Claude姐姐
     model: claude-opus-5-5
@@ -122,7 +126,6 @@ models:
     model: kimi-k3.1-pro
     provider: hub
     protocol: chat
-    reasoning_effort: low
     models_dev:
       provider: moonshotai
       model: kimi-k3.1-pro
@@ -131,6 +134,7 @@ models:
     model: qwen3.8-flash
     provider: hub
     protocol: chat
+    reasoning_effort: medium
     models_dev:
       provider: alibaba
       model: qwen3.8-flash
