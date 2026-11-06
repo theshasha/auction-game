@@ -30,6 +30,7 @@
 - 模型调用、提示、对话历史和发言：`auction_game/agent/AGENTS.md`。
 - 私信和信件格式：`docs/letters.md`。
 - 团队赛：`docs/team-mode.md`。
+- 人设：`docs/design/personas.md`。
 - 日志和统计：`auction_game/reporting/AGENTS.md`，统计口径见 `docs/analyze.md`。
 - 用户命令和日志说明：`docs/usage.md`。
 
