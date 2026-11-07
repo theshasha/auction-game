@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from auction_game.game.engine import team_standings
-from auction_game.game.models import MatchLog, PlayerDayResult, StandingsEntry, TeamStandingsEntry
+from auction_game.game.models import DayResult, MatchLog, PlayerDayResult, StandingsEntry, TeamStandingsEntry
 
 # 正常出价结果在出价表里的写法；被狙也写作撞车。
 OUTCOME_TEXT = {"won": "获胜", "collided": "撞车", "refunded": "退款"}
@@ -16,8 +16,34 @@ def super_cells(result: PlayerDayResult) -> tuple[str, str]:
     return str(result.super_bid), "命中" if result.super_hit else "落空"
 
 
+def _player_cells(day: DayResult) -> list[str]:
+    """每名玩家一格：正常出价和结果，用了超级出价时再加价位和命中情况。"""
+    cells = []
+    for result in day.players:
+        cell = f"{result.bid}（{OUTCOME_TEXT[result.outcome]}）"
+        if result.super_bid is not None:
+            super_bid, hit = super_cells(result)
+            cell += f"；超级出价 {super_bid}（{hit}）"
+        cells.append(cell)
+    return cells
+
+
+def _score_text(day: DayResult) -> str:
+    return "、".join(f"{result.player} {result.score}" for result in day.players if result.score) or "—"
+
+
+def render_bid_table(log: MatchLog) -> str:
+    """请求里给模型看的出价表：结果和撞车价位能从单元格读出，各局得分在排名表里。"""
+    player_names = [result.player for result in log.days[0].players]
+    return "\n".join([
+        "| 天 | 奖池 | " + " | ".join(player_names) + " | 当日得分 |",
+        "|" + " --- |" * (len(player_names) + 3),
+        *(f"| {day.day} | {day.pool} | {' | '.join(_player_cells(day))} | {_score_text(day)} |" for day in log.days),
+    ])
+
+
 def render_match_log(log: MatchLog) -> str:
-    """生成共用出价表：每行是一天的结算，表后是本局各人的得分和拍卖分。"""
+    """场次报告的出价表：每行是一天的结算，表后是本局各人的得分和拍卖分。"""
     summary = [
         "本局得分：" + "、".join(f"{name} {score} 分" for name, score in log.scores.items()),
         "本局拍卖分：" + "、".join(f"{name} {score} 分" for name, score in log.auction_scores.items()),
@@ -27,21 +53,14 @@ def render_match_log(log: MatchLog) -> str:
     separator = "|" + " --- |" * (len(player_names) + 5)
     rows = []
     for day in log.days:
-        cells = []
-        for result in day.players:
-            cell = f"{result.bid}（{OUTCOME_TEXT[result.outcome]}）"
-            if result.super_bid is not None:
-                super_bid, hit = super_cells(result)
-                cell += f"；超级出价 {super_bid}（{hit}）"
-            cells.append(cell)
         if day.is_void:
             outcome = "流局（奖池作废）"
         else:
             outcome = f"{day.winner} 以 {day.winning_bid} 金币获胜"
         collision_text = "、".join(str(value) for value in day.collision_values) or "—"
-        score_text = "、".join(f"{result.player} {result.score}" for result in day.players if result.score) or "—"
         rows.append(
-            f"| {day.day} | {day.pool} | {' | '.join(cells)} | {outcome} | {collision_text} | {score_text} |"
+            f"| {day.day} | {day.pool} | {' | '.join(_player_cells(day))} | {outcome} | {collision_text} "
+            f"| {_score_text(day)} |"
         )
     scoring_note = "当日得分仅列非零玩家，未列者为 0 分。"
     lines = [

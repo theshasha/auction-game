@@ -31,7 +31,7 @@ class TestSystemPrompt:
             system = prompts.build_system_prompt(profile, lineup, TEST_GAME)
             assert "甲 50%" in system and "己 0%" in system  # 全员可见，含他人与自己的
         system = prompts.build_system_prompt(lineup.profiles[0], lineup, TEST_GAME)
-        assert "乙、丙、丁、戊、己" in system  # 其他五位玩家名单
+        assert "（甲、乙、丙、丁、戊、己）" in system  # 玩家名单在规则第一节
 
     @pytest.mark.parametrize("enable_predictions", [False, True])
     @pytest.mark.parametrize("enable_personas", [False, True])
@@ -62,10 +62,9 @@ class TestSystemPrompt:
             assert text.endswith("\n" + writing_style)
 
     @pytest.mark.parametrize("enable_personas", [False, True])
-    def test_team_identity_names_teammates_and_opponents_without_predictions(self, enable_personas):
+    def test_team_identity_names_own_team_without_predictions(self, enable_personas):
         lineup = make_team_lineup(persona=("独特人设标题", "独特人设正文"))
-        for seat, identity in [(1, "你叫 乙，属于红队，队友是甲、丙；对方是蓝队：丁、戊、己。"),
-                               (3, "你叫 丁，属于蓝队，队友是戊、己；对方是红队：甲、乙、丙。")]:
+        for seat, identity in [(1, "你叫 乙，属于红队。"), (3, "你叫 丁，属于蓝队。")]:
             text = prompts.build_system_prompt(lineup.profiles[seat], lineup, TEST_GAME,
                                                enable_predictions=True, enable_personas=enable_personas)
             assert text.startswith(render_rules(TEST_GAME, lineup, include_note=False) + f"\n【你的身份】\n{identity}\n")
@@ -83,9 +82,7 @@ class TestSpeechFields:
                                    scores_history={"甲": [8, 4], "乙": [12, 2]})
         text = (prompts.final_speech_request(standings, log, team=False) if final
                 else prompts.match_end_speech_request(log, standings, team=False))
-        assert "本局得分：甲 3 分、乙 0 分" in text
-        assert "排名与分数明细" in text
-        assert f"本局完整出价日志：\n\n{tables.render_match_log(log)}" in text
+        assert f"本局完整出价日志：\n\n{tables.render_bid_table(log)}" in text
         assert f"排名与分数明细：\n\n{tables.render_standings(standings)}" in text
         assert "| 1 | 乙 | 14 | 12 | 2 | 1 |" in text
         assert "| 2 | 甲 | 12 | 8 | 4 | 3 |" in text
@@ -145,7 +142,7 @@ def test_received_letters_sit_between_facts_and_task(kind):
     assert "写给你的私信" not in build(None)
 
 
-NEXT_DAY = "现在写的私信，收件人明天出价时才收到，那时已经公布今天的结果和全员余额，影响不了对方今天的出价。"
+NEXT_DAY = "这封信明天公布结果后才到，赶不上今天的出价。"
 LAST_DAY = "现在写的私信，收件人在局末发言时才收到，本局不再出价。"
 LAST_DAY_MAY_END = "现在写的私信，收件人在局末发言时才收到，本局不再出价；比赛就此结束时，在最终感言时收到。"
 
@@ -208,13 +205,12 @@ def test_team_requests_list_teammates_letters(build, written):
     assert "写的信" not in build(None).replace("现在写的信", "")
 
 
-TEAM_NEXT_DAY = "现在写的信，队友明天出价时才看到，那时已经公布今天的结果和全员余额，影响不了今天的出价。"
 TEAM_LAST_DAY = "现在写的信，队友在局末发言时才看到，本局不再出价。"
 TEAM_LAST_DAY_MAY_END = "现在写的信，队友在局末发言时才看到，本局不再出价；比赛就此结束时，在最终感言时看到。"
 
 
 @pytest.mark.parametrize("match_index,day,expected", [
-    (1, 2, TEAM_NEXT_DAY),
+    (1, 2, NEXT_DAY),
     (1, 3, TEAM_LAST_DAY),
     (TEST_GAME.regular_matches, 3, TEAM_LAST_DAY_MAY_END),
 ], ids=["next-day", "last-day", "may-end"])
@@ -227,8 +223,8 @@ def test_team_bids_say_when_letters_arrive(match_index, day, expected):
 def test_team_plans_and_speeches_say_when_letters_arrive():
     game = replace(TEST_GAME, daily_pool=(1, 1, 1))
     assert prompts.opening_speech_request(team=True).endswith("\n\n现在写的信，队友在开局讨论第 1 轮看到。")
-    assert prompts.opening_plan_request({}, game, team=True).endswith(f"\n\n{TEAM_NEXT_DAY}")
-    assert prompts.team_next_match_plan_request(2, game).endswith(f"\n\n{TEAM_NEXT_DAY}")
+    assert prompts.opening_plan_request({}, game, team=True).endswith(f"\n\n{NEXT_DAY}")
+    assert prompts.team_next_match_plan_request(2, game).endswith(f"\n\n{NEXT_DAY}")
     assert prompts.match_end_speech_request(make_log(), TEAM_STANDINGS, team=True).endswith(
         "局末发言（不超过 300 字）。\n\n现在写的信，队友整理记忆时看到，信的原文不会带到下一局。")
 
@@ -250,8 +246,8 @@ def test_first_discussion_round_lists_speeches_before_letters():
 def test_later_discussion_lists_past_matches_before_the_task():
     logs = make_logs(2)
     info = prompts.past_matches_info(logs, TEAM_STANDINGS, TEST_GAME)
-    assert f"第 1 局（正赛局）：\n\n{tables.render_match_log(logs[0])}" in info
-    assert f"第 2 局（正赛局）：\n\n{tables.render_match_log(logs[1])}" in info
+    assert f"第 1 局（正赛局）：\n\n{tables.render_bid_table(logs[0])}" in info
+    assert f"第 2 局（正赛局）：\n\n{tables.render_bid_table(logs[1])}" in info
     assert f"截至当前的最新累计成绩：\n\n{tables.render_standings(TEAM_STANDINGS)}" in info
     assert prompts.discussion_request(3, 1, past_matches=info).startswith(f"{info}\n\n现在是第 3 局开局讨论第 1 轮")
 
@@ -357,8 +353,8 @@ class TestPlanBidMerge:
     def test_next_match_plan_restores_all_past_match_logs(self):
         logs = [make_log(match_index=1), make_log(match_index=2, is_playoff=True)]
         text = prompts.next_match_plan_request(logs, [], TEST_GAME)
-        assert f"第 1 局（正赛局）：\n\n{tables.render_match_log(logs[0])}" in text
-        assert f"第 2 局（加赛局）：\n\n{tables.render_match_log(logs[1])}" in text
+        assert f"第 1 局（正赛局）：\n\n{tables.render_bid_table(logs[0])}" in text
+        assert f"第 2 局（加赛局）：\n\n{tables.render_bid_table(logs[1])}" in text
         assert text.index("出价日志") < text.index("最新累计成绩") < text.index("规划第 3 局")
         assert "之前各局的出价日志会另行提供" in prompts.memory_request({}, 2, team=False)
 
@@ -380,7 +376,6 @@ class TestPlanBidMerge:
         assert strategy in text and bid_task in text
         if opening:
             assert "【甲】发言A" in text and "【乙】发言B" in text
-            assert text.count("全员累计总分：全员 0 分。") == 1
         else:
             assert "局末发言" not in text and "之前整理的记忆" in text
             assert "| 排名 | 玩家 | 总分 | 第1局 | 拍卖分 |" in text

@@ -13,7 +13,7 @@ from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput
 from auction_game.agent.text_output import BOARD, BRIEF_DISCUSSION_FORMAT, output_requirement
 from auction_game.flow import director as director_module
 from auction_game.llm.execution import OutputFailedError
-from auction_game.game.tables import render_match_log, render_standings
+from auction_game.game.tables import render_bid_table, render_standings
 from tests.support.factories import (TEAM_OF, TEST_GAME, StubPlayer, bid_reply, continuous_controller,
                                      discussion_reply, fake_task_runner, init_run_dir, make_ai_obs, make_log,
                                      make_player, make_standings, make_team_player, request_text, speech_reply,
@@ -208,7 +208,6 @@ def test_director_opening_plan_preserves_public_boundary_and_keeps_day_one_bids(
                      "本局还剩 3 天（含今天），剩余拍卖奖池共 6 分",
                      "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
-        assert plan_input.count("全员累计总分：全员 0 分。") == 1
 
 
 def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
@@ -440,7 +439,7 @@ def test_later_match_discussion_runs_in_the_new_conversation_and_reaches_the_pla
     memory, first, second, third, plan = (request_text(jia.task_runner, index) for index in range(1, 6))
     assert "以下是队友在局末发言时写的信：\n\n【乙】乙局末信\n\n【丙】丙局末信" in memory
     # 第 1 轮补回日志和排名，附完整格式；局末信已在整理记忆时送到，这一轮收不到信。
-    assert render_match_log(log) in first and render_standings(standings) in first
+    assert render_bid_table(log) in first and render_standings(standings) in first
     assert "现在是第 2 局开局讨论第 1 轮" in first and output_requirement(BOARD) in first
     assert "写的信：" not in first
     assert "以下是队友在开局讨论第 1 轮时写的信：\n\n【乙】乙第1轮信\n\n【丙】丙第1轮信" in second

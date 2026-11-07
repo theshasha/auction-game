@@ -67,7 +67,6 @@ class TestRulesText:
         assert "{" not in text and "}" not in text
         system = prompts.build_system_prompt(lineup.profiles[0], lineup, game)
         assert system.startswith(text)
-        assert "其他 2 位玩家是：乙、丙" in system
 
     def test_team_rules_list_teams_and_reach_system(self):
         game = replace(TEST_GAME, super_cost=3, super_bounty=5, super_hit_score=6, max_playoffs=4)

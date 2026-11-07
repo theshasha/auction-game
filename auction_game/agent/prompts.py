@@ -12,7 +12,7 @@ from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
-from auction_game.game.tables import OUTCOME_TEXT, match_title, render_match_log, render_standings, super_cells
+from auction_game.game.tables import OUTCOME_TEXT, match_title, render_bid_table, render_standings, super_cells
 
 
 # 出价要求在系统提示的规则里，这里只提醒当前任务。
@@ -20,6 +20,7 @@ BID_HINT = "请分析局势并提交今日出价。"
 # 局末发言和最终感言收到的信写于本局最后一天出价时；一天一局时就是规划，规划请求同时交了这一天的出价。
 LAST_DAY_LETTERS = "在本局最后一天出价时"
 # 可以写信的请求在任务提示后写明这次的信什么时候送到，原因见 docs/letters.md 的"写信时的提醒"。
+NEXT_DAY_LETTER_DELIVERY = "这封信明天公布结果后才到，赶不上今天的出价。"
 OPENING_LETTER_DELIVERY = "现在写的私信，收件人在第 1 天出价时收到。"
 TEAM_OPENING_LETTER_DELIVERY = "现在写的信，队友在开局讨论第 1 轮看到。"
 MATCH_END_LETTER_DELIVERY = "现在写的私信，收件人整理记忆时收到，信的原文不会带到下一局。"
@@ -39,12 +40,8 @@ def build_system_prompt(
     赛前预测按座位列出阵容里每人的 predicted_win_rate；团队赛没有预测，不看 enable_predictions。
     """
     teams = lineup.teams
-    if teams:
-        teammates = "、".join(name for name in teams[profile.team] if name != profile.name)
-        opponent, opponents = next((team, members) for team, members in teams.items() if team != profile.team)
-        identity = f"你叫 {profile.name}，属于{profile.team}，队友是{teammates}；对方是{opponent}：{'、'.join(opponents)}。"
-    else:
-        identity = f"你叫 {profile.name}，其他 {len(lineup.names) - 1} 位玩家是：{'、'.join(lineup.others(profile.name))}。"
+    # 玩家和阵营名单在规则第一节。
+    identity = f"你叫 {profile.name}，属于{profile.team}。" if teams else f"你叫 {profile.name}。"
     text = f"{render_rules(game, lineup, include_note=False)}\n【你的身份】\n{identity}\n"
     if enable_personas:
         text += f"【你的人设】\n{profile.persona_title}：{profile.persona_text}\n"
@@ -66,8 +63,7 @@ def opening_speech_request(*, team: bool) -> str:
 def _letter_delivery(game: GameSettings, match_index: int, day: int, team: bool) -> str:
     """规划或出价时写的信什么时候送到；day 是这次交的是第几天的出价，规划交的是第 1 天。"""
     if day < game.max_days:
-        return ("现在写的信，队友明天出价时才看到，那时已经公布今天的结果和全员余额，影响不了今天的出价。" if team else
-                "现在写的私信，收件人明天出价时才收到，那时已经公布今天的结果和全员余额，影响不了对方今天的出价。")
+        return NEXT_DAY_LETTER_DELIVERY
     text = "现在写的信，队友在局末发言时才看到，本局不再出价" if team else "现在写的私信，收件人在局末发言时才收到，本局不再出价"
     # 最后一局正赛和加赛打完，比赛可能就此结束，这时没有局末发言。
     if match_index >= game.regular_matches:
@@ -133,7 +129,7 @@ def past_matches_info(past_logs: list[MatchLog], standings: list[StandingsEntry]
     加赛局写明并列第一的玩家，团队赛写两个阵营同分：进入加赛的消息只在局末发言请求里，整理记忆后就看不到了。
     """
     match_index = len(past_logs) + 1
-    logs_text = "\n\n".join(f"{match_title(log)}：\n\n{render_match_log(log)}" for log in past_logs)
+    logs_text = "\n\n".join(f"{match_title(log)}：\n\n{render_bid_table(log)}" for log in past_logs)
     playoff_note = ""
     if match_index > game.regular_matches:
         teams = team_standings(standings)
@@ -175,42 +171,19 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
         *([] if team else [_quoted("以下是其他玩家的开局发言：", others_speeches)]),
         *_received_letters(received, f"在开局讨论第 {DISCUSSION_ROUNDS} 轮时" if team else "在开局发言时", team),
         f"请结合{'开局发言和开局讨论' if team else '他们的发言'}，规划你第一局的初步策略，并直接给出第 1 局第 1 天的出价。"
-        + _day1_constant_info(game)
-        + "\n\n全员累计总分：全员 0 分。",
+        + _day1_constant_info(game),
         _letter_delivery(game, 1, 1, team),
     ])
 
 
-def _my_last_day_line(obs: Observation) -> str:
-    """只解释本人金币结算；出价与得分由公开明细提供。
-
-    这些都能从公开记录推出，单独写出是为了避免模型算错扣款，进而误判其他玩家的余额。
-    """
+def _teammate_miss_note(obs: Observation) -> list[str]:
+    """落空而价位上有正常出价，只会是团队赛里这个价只有队友出了；照规则例子的说法写明原因。"""
     yesterday = obs.today_history[-1]
     mine = yesterday.result_of(obs.my_name)
-
-    segments = []
-    if yesterday.is_void:
-        segments.append(f"所有正常出价都撞车，昨天流局，你的正常出价扣除 {mine.bid} 金币")
-    elif mine.outcome == "won":
-        segments.append(f"正常出价获胜，扣除 {mine.bid} 金币")
-    elif mine.sniped:
-        segments.append(f"正常出价被超级出价命中，扣除 {mine.bid} 金币")
-    elif mine.outcome == "collided":
-        segments.append(f"正常出价撞车，扣除 {mine.bid} 金币")
-    else:
-        segments.append("正常出价没有撞车，但也没有获胜，金币全额退还")
-
-    if mine.super_bid is not None:
-        segment = f"超级出价花费 {obs.game.super_cost} 金币"
-        # 落空而价位上有正常出价，只会是团队赛里这个价只有队友出了；照规则例子的说法写明原因。
-        teammates = [result.player for result in yesterday.players if result.bid == mine.super_bid]
-        if not mine.super_hit and teammates:
-            segment += f"。{mine.super_bid} 上只有你的队友{'、'.join(teammates)}，所以落空"
-        segments.append(segment)
-        if mine.super_hit:
-            segments.append(f"获得 {obs.game.super_bounty} 金币悬赏")
-    return "昨日你的金币结算：\n\n" + "\n".join(f"- {segment}。" for segment in segments)
+    teammates = [result.player for result in yesterday.players if result.bid == mine.super_bid]
+    if mine.super_hit or not teammates:
+        return []
+    return [f"你的超级出价落空：{mine.super_bid} 上只有你的队友{'、'.join(teammates)}。", ""]
 
 
 def _yesterday_bids_table(obs: Observation) -> str:
@@ -227,11 +200,10 @@ def _yesterday_bids_table(obs: Observation) -> str:
 
 def bid_request(obs: Observation, *, received: dict[str, str] | None = None, team: bool) -> str:
     """第 2 天起的出价请求；第 1 天的出价在本局规划请求里交。"""
-    # 余额已经包含当天工资，注明这一点，避免重复计算。
     status_line = (
         "今日状态：\n\n"
         f"- 今日奖池：{obs.today_pool} 分。\n"
-        f"- 你的金币余额：{obs.my_coins}（已含今日工资，正常出价上限：{min(obs.game.max_bid, obs.my_coins)}）。\n"
+        f"- 你的金币余额：{obs.my_coins}（正常出价上限：{min(obs.game.max_bid, obs.my_coins)}）。\n"
         f"- 本局得分：{obs.my_match_score} 分。"
     )
     if obs.day == obs.game.max_days:
@@ -242,22 +214,13 @@ def bid_request(obs: Observation, *, received: dict[str, str] | None = None, tea
     task = "\n\n".join([*_received_letters(received, "昨天出价时", team), BID_HINT,
                         _letter_delivery(obs.game, obs.match_index, obs.day, team)])
     yesterday = obs.today_history[-1]
-    if yesterday.is_void:
-        announcement = f"昨日公布：流局，奖池 {yesterday.pool} 分作废。"
-    else:
-        announcement = (
-            f"昨日公布：{yesterday.winner} 以 {yesterday.winning_bid} 金币的正常出价获胜，"
-            f"拍卖得分 {yesterday.auction_score} 分。"
-        )
-    hit_scores = "、".join(
-        f"{result.player} {obs.game.super_hit_score} 分" for result in yesterday.players if result.super_hit
-    )
-    hit_announcement = f"昨日命中得分：{hit_scores}。" if hit_scores else "昨日无人命中。"
     lines = [
         f"当前是第 {obs.match_index} 局第 {obs.day} 天。", "",
-        announcement, "", hit_announcement, "", "昨日出价明细与当前金币（已含今日工资）：", "",
+        *([f"昨日流局，奖池 {yesterday.pool} 分作废。", ""] if yesterday.is_void else []),
+        # 余额已经包含当天工资，注明这一点，避免重复计算。
+        "昨日出价明细与当前金币（已含今日工资）：", "",
         _yesterday_bids_table(obs), "",
-        _my_last_day_line(obs), "",
+        *_teammate_miss_note(obs),
         status_line,
     ]
     return "\n".join(lines) + "\n\n" + task
@@ -268,7 +231,7 @@ def match_end_speech_request(log: MatchLog, standings: list[StandingsEntry], *,
     """只在还有下一局时调用。"""
     lines = [
         f"{match_title(log)}结束。",
-        f"本局完整出价日志：\n\n{render_match_log(log)}",
+        f"本局完整出价日志：\n\n{render_bid_table(log)}",
         f"截至当前的累计排名与分数明细：\n\n{render_standings(standings)}",
     ]
     # 正赛打完后还有下一局，说明第一名并列，进入加赛；团队赛的第一名并列就是两个阵营同分。
@@ -330,7 +293,7 @@ def final_speech_request(standings: list[StandingsEntry], log: MatchLog, *,
     """请求最终感言，并提供最后一局的出价日志；之前各局的日志已在本局规划请求或讨论第 1 轮的请求中给出。"""
     return "\n\n".join([
         f"{match_title(log)}结束，这也是最后一局。",
-        f"本局完整出价日志：\n\n{render_match_log(log)}",
+        f"本局完整出价日志：\n\n{render_bid_table(log)}",
         f"比赛全部结束。最终排名与分数明细：\n\n{render_standings(standings)}",
         *_received_letters(received, LAST_DAY_LETTERS, team),
         "请向全体玩家发表你的最终感言。",

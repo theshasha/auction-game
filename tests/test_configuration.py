@@ -329,7 +329,7 @@ def test_team_startup_records_teams_and_hands_them_to_director(
     assert directors[0].team_of == team_of
     assert "红队有 甲、乙、丙，蓝队有 丁、戊、己" in (paths.root / "RULES.md").read_text(encoding="utf-8")
     system = json.loads(paths.player(1).read_text(encoding="utf-8").splitlines()[0])["content"]
-    assert "你叫 甲，属于红队，队友是乙、丙；对方是蓝队：丁、戊、己。" in system
+    assert "你叫 甲，属于红队。" in system
 
 
 def test_missing_key_stops_before_logs(config_files, monkeypatch, capsys):

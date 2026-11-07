@@ -205,9 +205,10 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert report.count("| 流局（奖池作废） | 0、1、2 |") == 2
     assert "| 流局（奖池作废） | 0、1、2 | 丁 2 |" in report
     assert "| 3 | 3 |" in report
-    for text in [report, prompts.match_end_speech_request(log, standings, team=False),
+    assert tables.render_match_log(log) in report
+    for text in [prompts.match_end_speech_request(log, standings, team=False),
                  prompts.final_speech_request(standings, log, team=False)]:
-        assert tables.render_match_log(log) in text
+        assert tables.render_bid_table(log) in text
 
     payload = json.loads(paths.match(1).read_text(encoding="utf-8"))
     assert payload == expected

@@ -153,7 +153,7 @@ def test_plan_has_full_format_and_bids_get_one_line(tmp_path):
     assert request_text(runner, 0) == "请规划\n\n" + output_requirement(DECISION, LETTERS)
     assert request_text(runner, 1).endswith("\n\n请按本局规划时的格式提交：strategy 和 decision 两块，私信块可以不写。")
     # 送达时机写在任务提示后面，只附一句格式时也有。
-    assert "现在写的私信，收件人明天出价时才收到" in request_text(runner, 1)
+    assert "这封信明天公布结果后才到" in request_text(runner, 1)
 
 
 def test_format_error_after_one_line_prompt_gets_full_format(tmp_path):

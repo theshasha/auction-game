@@ -89,6 +89,20 @@ class TestRenderMatchLog:
         assert "本局得分：甲 2 分、乙 0 分、丙 0 分、丁 2 分" in text
 
 
+class TestRenderBidTable:
+    def test_keeps_cells_and_daily_scores_without_derivable_columns_and_summary(self):
+        log = make_log(days=[
+            make_day(1, [6, 4, 5, 3, 3, 2], super_bids={"乙": 6}),
+            make_day(2, [2, 2, 2, 1, 1, 1], super_bids={"甲": 1}),
+        ])
+        assert tables.render_bid_table(log).splitlines() == [
+            "| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 当日得分 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| 1 | 1 | 6（撞车） | 4（退款）；超级出价 6（命中） | 5（获胜） | 3（撞车） | 3（撞车） | 2（退款） | 乙 2、丙 1 |",
+            "| 2 | 1 | 2（撞车）；超级出价 1（命中） | 2（撞车） | 2（撞车） | 1（撞车） | 1（撞车） | 1（撞车） | 甲 2 |",
+        ]
+
+
 class TestRenderStandings:
     def test_renders_markdown_table_with_match_columns(self):
         standings = make_standings({"甲": [2, 1], "乙": [1, 1], "丙": [0, 0]},
