@@ -132,7 +132,7 @@ def write_readme(paths, standings=None):
 
 
 def print_day_result(log: MatchLog, standings: list[StandingsEntry]) -> None:
-    """仅在终端展示已提交的每日结算，不写文件或生成玩家提示。"""
+    """仅在终端展示已提交的每日结算，不写文件或生成玩家提示。同分的玩家名次相同，金币多的列在前面。"""
     coins = log.remaining_coins
     day = log.days[-1]
     kind = "加赛" if log.is_playoff else "正赛"
@@ -149,7 +149,7 @@ def print_day_result(log: MatchLog, standings: list[StandingsEntry]) -> None:
         print("阵营累计总分：" + "、".join(f"{team.team} {team.total_score} 分" for team in teams) + "。")
     print("| 排名 | 玩家 | 累计总分 | 金币（结算后） |")
     print("| --- | --- | --- | --- |")
-    for entry in standings:
+    for entry in sorted(standings, key=lambda entry: (entry.rank, -coins[entry.player])):
         print(f"| {entry.rank} | {entry.player} | {entry.total_score} | {coins[entry.player]} |")
 
 

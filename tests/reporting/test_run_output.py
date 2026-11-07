@@ -45,6 +45,15 @@ def test_daily_report_shows_winner_hits_void_pool_discard_and_settled_balances(c
     assert "超级出价命中：无。" in last
 
 
+def test_daily_report_lists_tied_players_by_coins_without_changing_rank(capsys):
+    # 甲以 5 获胜；其余人同为 0 分，乙的超级出价落空，余额比同分的人少。
+    log = make_log(days=[make_day(1, [5, 4, 3, 2, 1, 0], super_bids={"乙": 7})])
+    print_day_result(log, compute_standings(NAMES, [], log))
+    rows = capsys.readouterr().out.splitlines()[-6:]
+    assert rows == ["| 1 | 甲 | 1 | 2 |", "| 2 | 丁 | 0 | 7 |", "| 2 | 丙 | 0 | 7 |",
+                    "| 2 | 己 | 0 | 7 |", "| 2 | 戊 | 0 | 7 |", "| 2 | 乙 | 0 | 5 |"]
+
+
 @pytest.mark.parametrize("tied", [False, True])
 def test_final_result_counts_actual_regular_matches_and_reports_scores(capsys, tied):
     standings = make_standings(
