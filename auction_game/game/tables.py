@@ -5,8 +5,8 @@ from __future__ import annotations
 from auction_game.game.engine import team_standings
 from auction_game.game.models import DayResult, MatchLog, PlayerDayResult, StandingsEntry, TeamStandingsEntry
 
-# 正常出价结果在出价表里的写法；被狙也写作撞车。
-OUTCOME_TEXT = {"won": "获胜", "collided": "撞车", "refunded": "退款"}
+# 正常出价结果在出价表里的写法，被狙也算撞车。写明扣款，因为模型常把撞车记成退款。
+OUTCOME_TEXT = {"won": "获胜", "collided": "撞车扣款", "refunded": "退款"}
 
 
 def super_cells(result: PlayerDayResult) -> tuple[str, str]:

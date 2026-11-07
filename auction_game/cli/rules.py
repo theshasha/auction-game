@@ -7,7 +7,7 @@ import sys
 
 from auction_game.configuration import ConfigurationError, load_game_settings, load_players, load_teams
 from auction_game.game.lineup import Lineup
-from auction_game.game.rules import RulesError, render_rules
+from auction_game.game.rules import render_rules
 from auction_game.game.settings import GameSettings
 from auction_game.paths import RULES_PATH, TEAM_RULES_PATH
 
@@ -32,7 +32,7 @@ def main() -> int:
             for path, text in documents.items():
                 _write_if_changed(path, text)
                 print(f"已生成 {path}")
-    except (ConfigurationError, RulesError, OSError) as exc:
+    except (ConfigurationError, OSError) as exc:
         print(f"规则生成失败：{exc}", file=sys.stderr)
         return 1
     return 0

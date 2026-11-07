@@ -23,7 +23,7 @@ class TestRenderMatchLog:
         assert lines[1] == ""
         assert lines[2] == "| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分 |"
         assert lines[4] == "| 1 | 1 | 5（获胜） | 4（退款） | 3（退款） | 2（退款） | 1（退款） | 0（退款） | 甲 以 5 金币获胜 | — | 甲 1 |"
-        assert lines[5] == "| 2 | 1 | 3（撞车） | 3（撞车） | 2（撞车） | 2（撞车） | 2（撞车） | 0（获胜） | 己 以 0 金币获胜 | 2、3 | 己 1 |"
+        assert lines[5] == "| 2 | 1 | 3（撞车扣款） | 3（撞车扣款） | 2（撞车扣款） | 2（撞车扣款） | 2（撞车扣款） | 0（获胜） | 己 以 0 金币获胜 | 2、3 | 己 1 |"
         assert "本局得分：甲 1 分、乙 0 分、丙 0 分、丁 0 分、戊 0 分、己 1 分" in text
         assert "本局拍卖分：甲 1 分、乙 0 分、丙 0 分、丁 0 分、戊 0 分、己 1 分" in text
         assert text.count("当日得分仅列非零玩家，未列者为 0 分。") == 1
@@ -40,8 +40,8 @@ class TestRenderMatchLog:
             make_day(2, [3, 4, 5, 3, 2, 1], super_bids={"甲": 6}),
         ])
         text = tables.render_match_log(log)
-        assert "6（撞车） | 4（退款）；超级出价 6（命中） | 5（获胜）" in text
-        assert "3（撞车）；超级出价 6（落空） | 4（退款）" in text
+        assert "6（撞车扣款） | 4（退款）；超级出价 6（命中） | 5（获胜）" in text
+        assert "3（撞车扣款）；超级出价 6（落空） | 4（退款）" in text
         assert "| 乙 2、丙 1 |" in text
         assert "本局得分：甲 0 分、乙 2 分、丙 2 分" in text
         rows = [line for line in text.splitlines() if line.startswith(("| 1 |", "| 2 |"))]
@@ -60,7 +60,7 @@ class TestRenderMatchLog:
         )
         text = tables.render_match_log(log)
         assert text.count("| 流局（奖池作废） | 1、2 |") == 2
-        assert "2（撞车）" in text and "1（撞车）" in text
+        assert "2（撞车扣款）" in text and "1（撞车扣款）" in text
 
     @pytest.mark.parametrize("hit_score, expected", [(3, 5), (0, 2)])
     def test_custom_hit_score_and_void_hits(self, hit_score, expected):
@@ -98,8 +98,8 @@ class TestRenderBidTable:
         assert tables.render_bid_table(log).splitlines() == [
             "| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 当日得分 |",
             "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| 1 | 1 | 6（撞车） | 4（退款）；超级出价 6（命中） | 5（获胜） | 3（撞车） | 3（撞车） | 2（退款） | 乙 2、丙 1 |",
-            "| 2 | 1 | 2（撞车）；超级出价 1（命中） | 2（撞车） | 2（撞车） | 1（撞车） | 1（撞车） | 1（撞车） | 甲 2 |",
+            "| 1 | 1 | 6（撞车扣款） | 4（退款）；超级出价 6（命中） | 5（获胜） | 3（撞车扣款） | 3（撞车扣款） | 2（退款） | 乙 2、丙 1 |",
+            "| 2 | 1 | 2（撞车扣款）；超级出价 1（命中） | 2（撞车扣款） | 2（撞车扣款） | 1（撞车扣款） | 1（撞车扣款） | 1（撞车扣款） | 甲 2 |",
         ]
 
 

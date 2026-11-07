@@ -201,7 +201,7 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert "[本场规则](RULES.md)" in report
     assert (paths.matches_report.parent / "RULES.md").is_file()
     assert "奖池和得分的单位为分，正常出价的单位为金币。\n\n| 天 | 奖池 | 甲 | 乙 | 丙 | 丁 | 戊 | 己 | 结果 | 撞车价位 | 当日得分 |" in report
-    assert "4（撞车） | 4（撞车）；超级出价 3（落空） | 9（获胜） | 2（退款）；超级出价 4（命中）" in report
+    assert "4（撞车扣款） | 4（撞车扣款）；超级出价 3（落空） | 9（获胜） | 2（退款）；超级出价 4（命中）" in report
     assert report.count("| 流局（奖池作废） | 0、1、2 |") == 2
     assert "| 流局（奖池作废） | 0、1、2 | 丁 2 |" in report
     assert "| 3 | 3 |" in report

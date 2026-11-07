@@ -15,7 +15,7 @@ from auction_game.llm.client import MissingApiKeyError, make_model_factory
 from auction_game.agent.tasks import TaskRunner
 from auction_game.cli.rules import sync_root_rules
 from auction_game.game.lineup import Lineup
-from auction_game.game.rules import RulesError, render_rules
+from auction_game.game.rules import render_rules
 from auction_game.reporting.run_output import initialize_run, make_run_dir, print_final_result
 
 # 场次快照里实际调用的模型只记这些字段，来源和推理档位已在 capabilities 里。
@@ -48,7 +48,7 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
         task_runners = make_task_runners(config, player_configs, make_model_factory,
                                          signals=controller.signals)
-    except (ConfigurationError, RulesError, MissingApiKeyError) as exc:
+    except (ConfigurationError, MissingApiKeyError) as exc:
         print(f"[配置错误] {exc}")
         return 1
     run_type = ("team" if team else "ai") + ("-test" if test_model else "")

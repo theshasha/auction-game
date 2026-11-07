@@ -76,7 +76,7 @@ class TestRulesText:
         assert "6 名玩家分成两个阵营参赛，团队赛：红队有 甲、乙、丙，蓝队有 丁、戊、己。" in text
         assert "阵营总分是 3 名队员的总分之和" in text
         assert "最多加赛 4 局，到上限仍同分时算平局" in text
-        assert "乙、戊、己各付 3 金币；戊、己各得 5 金币悬赏和 6 命中分" in text
+        assert "使用者都获得 5 金币悬赏和 6 命中分" in text
         assert "{" not in text and "}" not in text
         assert prompts.build_system_prompt(lineup.profiles[0], lineup, game).startswith(text)
 

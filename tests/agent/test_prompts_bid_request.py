@@ -108,12 +108,12 @@ class TestBidRequest:
         ), team=False)
         lines = text.splitlines()
 
-        assert "| 甲 | 6 | 撞车 | — | — | 7 |" in lines  # 被狙中也算撞车
+        assert "| 甲 | 6 | 撞车扣款 | — | — | 7 |" in lines  # 被狙中也算撞车
         assert "| 乙 | 5 | 获胜 | — | — | 7 |" in lines
         assert "| 丙 | 4 | 退款 | 6 | 命中 | 7 |" in lines
         assert "| 丁 | 3 | 退款 | 7 | 落空 | 7 |" in lines
-        assert "| 戊 | 2 | 撞车 | — | — | 7 |" in lines
-        assert "| 己 | 2 | 撞车 | — | — | 7 |" in lines
+        assert "| 戊 | 2 | 撞车扣款 | — | — | 7 |" in lines
+        assert "| 己 | 2 | 撞车扣款 | — | — | 7 |" in lines
 
     def test_void_day_says_pool_is_forfeited(self):
         text = prompts.bid_request(make_prompt_obs(
@@ -191,11 +191,11 @@ class TestEngineScorePrompts:
         "bids, super_bids, winner, scores, outcomes",
         [
             ([4, 6, 2, 1, 0, 0], {"甲": 6}, "甲", [7, 0, 0, 0, 0, 0],
-             ["获胜", "撞车", "退款", "退款", "撞车", "撞车"]),
+             ["获胜", "撞车扣款", "退款", "退款", "撞车扣款", "撞车扣款"]),
             ([4, 4, 2, 2, 0, 0], {"戊": 4, "己": 4}, None, [0, 0, 0, 0, 5, 5],
-             ["撞车"] * 6),
+             ["撞车扣款"] * 6),
             ([4, 3, 2, 1, 0, 0], {"甲": 2, "乙": 4}, "乙", [5, 7, 0, 0, 0, 0],
-             ["撞车", "获胜", "撞车", "退款", "撞车", "撞车"]),
+             ["撞车扣款", "获胜", "撞车扣款", "退款", "撞车扣款", "撞车扣款"]),
         ],
         ids=["winner-also-hits", "void-multiple-hits-on-natural-collision", "sniped-also-hits"],
     )
