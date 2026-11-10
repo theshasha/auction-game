@@ -5,4 +5,4 @@
 ## 原则
 
 - 统计和展示只读本场日志和配置快照，不读当前配置。
-- `analyze.py` 只读日志和计算，打印和命令行入口在 `auction_game/cli/analyze.py`。
+- 计算模块只读日志和计算，打印和命令行入口在 `auction_game/cli/` 的同名或对应命令里：`analyze.py` 对应 `cli/analyze.py`，`team_metrics.py` 对应 `cli/team_report.py`。

@@ -91,6 +91,15 @@ python -m auction_game.cli.analyze                    # 最新的真实 AI 场�
 python -m auction_game.cli.analyze "logs/场次目录"   # 指定场次，离线赛要这样指定
 ```
 
+团队赛两队对比的指标，包括贴上限、按余额狙击、去掉超级出价重算和队内撞车重算，用另一个命令，可以一次传多场：
+
+```bash
+python -m auction_game.cli.team_report                                      # 最新的真实团队赛
+python -m auction_game.cli.team_report "logs/场次目录" ["logs/场次目录" ...]   # 指定一场或多场，离线赛要这样指定
+```
+
+输出是 Markdown 表格，每场一列；多场的阵营名相同时最后一列是合计。
+
 各项指标的口径见[统计说明](analyze.md)。
 
 ## 连通检查

@@ -13,17 +13,19 @@ from auction_game.game.settings import GameSettings
 from auction_game.paths import LOG_DIR
 from auction_game.reporting.run_paths import RunPaths
 
-# 真实 AI 场次的时间戳目录，排除离线赛和 archive 等归档目录；目录名的类型取自场次的 run_type。
-RUN_DIR_PATTERN = re.compile(r"^\d{8}_\d{6}_(?:ai|team)(?:-test)?(_\d+)?$")
 TASK_LABELS = {"speech": "发言", "discussion": "讨论", "plan": "规划", "bid": "出价", "memory": "记忆",
                "summary": "观众总结"}
 
 
-def find_latest_ai_run() -> Path:
+def find_latest_ai_run(kinds: tuple[str, ...] = ("ai", "team")) -> Path:
+    """logs/ 下最新的、至少完成一局的真实 AI 场次；kinds 是目录名里的赛制，每种都含 -test。"""
+    # 真实 AI 场次的时间戳目录，排除离线赛和 archive 等归档目录；目录名的类型取自场次的 run_type。
+    pattern = re.compile(rf"^\d{{8}}_\d{{6}}_(?:{'|'.join(kinds)})(?:-test)?(_\d+)?$")
     candidates = [path for path in (LOG_DIR.iterdir() if LOG_DIR.exists() else ())
-                  if RUN_DIR_PATTERN.match(path.name) and any((path / "data" / "matches").glob("*.json"))]
+                  if pattern.match(path.name) and any((path / "data" / "matches").glob("*.json"))]
     if not candidates:
-        sys.exit("logs/ 下没有已完成至少一局的真实 AI 场次（ai、ai-test、team 或 team-test）；离线模拟赛请显式指定目录")
+        names = "、".join(f"{kind}、{kind}-test" for kind in kinds)
+        sys.exit(f"logs/ 下没有已完成至少一局的真实 AI 场次（{names}）；离线模拟赛请显式指定目录")
     return max(candidates, key=lambda path: (path.name[:15], int(path.name.rsplit('_', 1)[1])
                                            if path.name.rsplit('_', 1)[1].isdigit() else 1))
 

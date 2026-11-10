@@ -186,7 +186,7 @@ def test_default_analysis_rejects_only_offline(tmp_path, monkeypatch):
     monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
     write_matches(tmp_path / "20261016_120000_offline", make_matches())
     write_matches(tmp_path / "20261016_120000_team-offline", make_matches(), run_type="team-offline")
-    with pytest.raises(SystemExit, match="没有.*ai、ai-test、team 或 team-test"):
+    with pytest.raises(SystemExit, match="没有.*ai、ai-test、team、team-test"):
         find_latest_ai_run()
 
 

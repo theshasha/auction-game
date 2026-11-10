@@ -96,3 +96,36 @@ def make_team_match() -> dict:
         make_day(2, [2, 2, 2, 0, 3, 6], super_bids={"甲": 3, "戊": 6}, game=ANALYZE_GAME, team_of=TEAM_OF),
     ]
     return make_log(days=days, game=ANALYZE_GAME).to_dict()
+
+
+# 团队赛对比用的参数：出价上限 7、超级出价成本 2 都不是生产值；日工资 1 小于成本，第 2 天能出现余额不够开枪的人。
+TEAM_REPORT_GAME = replace(TEST_GAME, daily_salary=1, daily_pool=(1, 2))
+
+
+def make_team_report_match(match_index=1) -> dict:
+    """看余额狙击的一局，甲乙丙红队、丁戊己蓝队。
+
+    第 1 天：全员余额 7，出价 [7,0,1,2,3,4]；戊狙 5（红队带狙的上限）落空；甲以 7 获胜，余额剩 0。
+    第 2 天：余额 甲1 乙8 丙8 丁8 戊6 己8，出价 [1,6,7,2,0,4]。
+              乙狙 2 命中丁，丁的余额价是 7、6，2 不是；
+              丁狙 1 命中甲（余额 1 不够开枪，余额价只有 1），戊狙 6 命中乙（带狙出余额减 2），
+              己狙 7 命中丙（余额 8，不带狙的上限封顶 7）；己以 4 获胜。
+              去掉全部超级出价时丙以 7 获胜，超级出价把这天从红队换成蓝队。
+    """
+    days = [
+        make_day(1, [7, 0, 1, 2, 3, 4], pool=1, super_bids={"戊": 5}, game=TEAM_REPORT_GAME, team_of=TEAM_OF),
+        make_day(2, [1, 6, 7, 2, 0, 4], pool=2, super_bids={"乙": 2, "丁": 1, "戊": 6, "己": 7},
+                 game=TEAM_REPORT_GAME, team_of=TEAM_OF),
+    ]
+    return make_log(match_index=match_index, days=days, game=TEAM_REPORT_GAME).to_dict()
+
+
+def make_team_void_match() -> dict:
+    """超级出价造成流局、两队都有队内撞车的一天。
+
+    出价 [5,1,1,3,0,0]；乙丙同出 1、戊己同出 0；乙狙 3 命中丁，戊狙 5 命中甲，当天流局。
+    去掉全部超级出价时甲以 5 获胜。只留乙丙中的一人，红队以 1 获胜；只留戊己中的一人，蓝队以 0 获胜。
+    """
+    day = make_day(1, [5, 1, 1, 3, 0, 0], pool=1, super_bids={"乙": 3, "戊": 5}, game=TEAM_REPORT_GAME,
+                   team_of=TEAM_OF)
+    return make_log(days=[day], game=TEAM_REPORT_GAME).to_dict()
