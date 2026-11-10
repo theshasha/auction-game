@@ -33,5 +33,6 @@ python main.py
 - [团队赛](docs/team-mode.md)：团队赛和个人赛不同的赛制、规则、队内信件区和显示。
 - [规则设计备忘](docs/design/rules.md)：规则和信件时序的取舍，以及调参时要看的数据。
 - [未采用的方向](docs/design/rejected.md)：讨论过但没有采用的方案和原因。
-- [测试赛结论](docs/design/playtests.md)：测试赛看到的现象和待观察项。
+- [测试赛结论](docs/design/playtests.md)：现行配置下仍成立的测试赛结论和待观察项。
+- [测试赛记录](docs/design/playtests-log.md)：每场测试赛的数字和依据。
 - [开发约定](AGENTS.md)：改代码前要遵守的要求和代码入口。

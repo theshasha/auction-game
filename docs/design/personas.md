@@ -1,6 +1,6 @@
 # 人设
 
-本文存档可以再用的人设，不参与比赛。开关见 `docs/usage.md` 的"常用调整"，人设在测试赛里的效果写在 `docs/design/playtests.md`。
+本文存档可以再用的人设，不参与比赛。开关见 `docs/usage.md` 的"常用调整"，人设在测试赛里的效果见 `docs/design/playtests.md`，各场细节见 `docs/design/playtests-log.md`。
 
 ## 存档
 
