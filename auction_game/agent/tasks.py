@@ -51,6 +51,10 @@ class BidOutput:
     def to_log(self) -> dict:
         return {"strategy": self.strategy, "bid": self.bid, "super_bid": self.super_bid, "letters": self.letters}
 
+    @classmethod
+    def from_log(cls, data: dict) -> BidOutput:
+        return cls(**data)
+
     def render(self) -> list[str]:
         super_bid = self.super_bid if self.super_bid is not None else "未使用"
         return _strategy_and_letters(self.strategy, self.letters,
@@ -69,6 +73,10 @@ class SpeechOutput:
 
     def to_log(self) -> dict:
         return {"strategy": self.strategy, "speech": self.speech, "letters": self.letters}
+
+    @classmethod
+    def from_log(cls, data: dict) -> SpeechOutput:
+        return cls(**data)
 
     def render(self) -> list[str]:
         return _strategy_and_letters(self.strategy, self.letters, f"### 公开发言\n\n{self.speech}")
@@ -92,6 +100,10 @@ class DiscussionOutput:
     def to_log(self) -> dict:
         return {"strategy": self.strategy, "letters": self.letters}
 
+    @classmethod
+    def from_log(cls, data: dict) -> DiscussionOutput:
+        return cls(data["strategy"], data["letters"][0]["text"])
+
     def render(self) -> list[str]:
         return [f"### 私有策略\n\n{self.strategy}", f"### {BOARD}\n\n{self.letter}"]
 
@@ -107,6 +119,10 @@ class MemoryOutput:
 
     def to_log(self) -> dict:
         return {"memory": self.memory}
+
+    @classmethod
+    def from_log(cls, data: dict) -> MemoryOutput:
+        return cls(data["memory"])
 
     def render(self) -> list[str]:
         return [f"### 累计私有记忆\n\n{self.memory}"]
@@ -124,6 +140,10 @@ class SummaryOutput:
     def to_log(self) -> str:
         return self.text
 
+    @classmethod
+    def from_log(cls, data: str) -> SummaryOutput:
+        return cls(data)
+
     def render(self) -> list[str]:
         return [f"### 总结\n\n{self.text}"]
 
@@ -137,6 +157,7 @@ class TaskSpec:
 
     second 是 strategy 之后那一块，None 表示直接返回正文；decision 块的出价要通过出价校验。
     history 是结果写回对话的方式：append 追加，reset 用记忆替换之前的对话，none 不写回。
+    output 的 from_log 是 to_log 的反向，续跑时从任务日志还原结果。
     """
 
     name: Task
@@ -183,6 +204,11 @@ def make_agent(model, spec: TaskSpec, letters: LetterScope | None = None):
     return agent
 
 
+def request_prompt(spec: TaskSpec, prompt: str, letters: LetterScope | None = None, brief: str | None = None) -> str:
+    """发给模型的完整请求文本：提示后附输出格式，brief 不为空时只附这一句。续跑用它比对日志里的输入。"""
+    return f"{prompt}\n\n{brief or output_requirement(spec.second, letters)}"
+
+
 class TaskRunner:
     """在提示后追加输出格式，交给执行器运行。"""
 
@@ -192,7 +218,6 @@ class TaskRunner:
     def __call__(self, spec: TaskSpec, prompt: str, history: list[ModelMessage], *, game: GameSettings,
                  coins: int = 0, letters: LetterScope | None = None, brief: str | None = None) -> ExecutionResult:
         """brief 不为空时，请求后只附这一句格式提示，纠错时仍给完整格式。"""
-        requirement = brief or output_requirement(spec.second, letters)
         # retries=1 是纠错次数；request_limit 另外限定整个任务最多两次请求。
-        return self.executor(make_agent(None, spec, letters), f"{prompt}\n\n{requirement}", history,
+        return self.executor(make_agent(None, spec, letters), request_prompt(spec, prompt, letters, brief), history,
                              deps=AuctionDeps(game, coins), usage_limits=UsageLimits(request_limit=2))

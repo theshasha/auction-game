@@ -98,6 +98,30 @@ def load_configuration(
             config["writing_style"] = WRITING_STYLE_PATH.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
             raise ConfigurationError(f"{WRITING_STYLE_PATH}：写作要求读取失败：{exc}") from exc
+    channels = _llm_settings(config, config_path)["channels"]
+    catalog = load_model_catalog(models_path, snapshot_path=snapshot_path)
+    for key, model in catalog.items():
+        if model.provider not in channels:
+            raise ConfigurationError(
+                f"{ROOT_DIR / models_path}：models.{key}.provider 未知渠道：{model.provider!r}"
+            )
+    test_key = config.get("test_model")
+    if not isinstance(test_key, str) or test_key not in catalog:
+        raise ConfigurationError(f"{config_path}：test_model 必须引用 models.yaml 中的目录键")
+    config["models"] = catalog
+    lineup = load_teams(teams_path, catalog) if team else load_players(players_path, catalog)
+    return config, [PlayerConfig(profile, catalog[key], catalog[test_key if test_model else key])
+                    for profile, key in lineup]
+
+
+def load_llm_settings(config_path: str | Path = CONFIG_PATH) -> dict:
+    """只读 config.yaml 的 llm 段：渠道、超时和并发。续跑用它，参数、阵容和模型取自场次快照。"""
+    config_path = ROOT_DIR / config_path
+    return _llm_settings(_read_mapping(config_path), config_path)
+
+
+def _llm_settings(config: dict, config_path: Path) -> dict:
+    """给 config 的 llm 段补上默认值并校验，返回这一段。"""
     llm = config.setdefault("llm", {})
     if not isinstance(llm, dict):
         raise ConfigurationError(f"{config_path}：llm 必须是键值配置")
@@ -120,20 +144,7 @@ def load_configuration(
             raise ConfigurationError(f"{config_path}：{field}.base_url 必须是 HTTP(S) 地址")
         if not isinstance(channel.get("api_key_env"), str):
             raise ConfigurationError(f"{config_path}：{field}.api_key_env 必须是环境变量名")
-
-    catalog = load_model_catalog(models_path, snapshot_path=snapshot_path)
-    for key, model in catalog.items():
-        if model.provider not in channels:
-            raise ConfigurationError(
-                f"{ROOT_DIR / models_path}：models.{key}.provider 未知渠道：{model.provider!r}"
-            )
-    test_key = config.get("test_model")
-    if not isinstance(test_key, str) or test_key not in catalog:
-        raise ConfigurationError(f"{config_path}：test_model 必须引用 models.yaml 中的目录键")
-    config["models"] = catalog
-    lineup = load_teams(teams_path, catalog) if team else load_players(players_path, catalog)
-    return config, [PlayerConfig(profile, catalog[key], catalog[test_key if test_model else key])
-                    for profile, key in lineup]
+    return llm
 
 
 def load_game_settings(path: str | Path = GAME_PATH, *, test_model: bool = False) -> GameSettings:

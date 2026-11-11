@@ -4,11 +4,12 @@ import json
 
 import pytest
 
-from auction_game.llm.execution import CallFailedError, ExecutionResult
+from auction_game.llm.execution import CallFailedError, ExecutionResult, TaskCancelledError
 from auction_game.agent.tasks import SpeechOutput, SummaryOutput, TaskRunner
 from auction_game.agent.text_output import LetterNames, SPEECH, output_requirement
-from auction_game.agent.log import AgentLog, render_markdown_entry
-from tests.support.factories import ALL_NAMES, bid_reply, fake_task_runner, make_ai_obs, make_player, task_entries
+from auction_game.agent.log import AgentLog, ResumeError, render_markdown_entry
+from tests.support.factories import (ALL_NAMES, bid_reply, fake_task_runner, make_ai_obs, make_player, reopen_player,
+                                     task_entries)
 from tests.support.wire import Harness, reply
 
 
@@ -181,3 +182,74 @@ def test_private_log_lists_letters_after_result(tmp_path):
     assert ("### 提交出价\n\n正常出价 1；超级出价 未使用\n\n"
             "### 私信\n\n写给 Bravo：第一行\n第二行\n\n写给 Charlie：另一封\n\n---") in markdown
     assert markdown.count("### 私信") == 1
+
+
+def test_reopened_log_rebuilds_markdown_and_continues_numbering_and_rerun_links(tmp_path):
+    """关掉前一个任务成功、一个失败；重新打开后可读日志原样重建，补跑接在原来的失败后面。"""
+    h = Harness("chat", [reply(), 401, 401, 401, 401, reply()])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    player.plan_strategy("规划输入", "第 1 局策略规划（含首日出价）")
+    with pytest.raises(CallFailedError):
+        player.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价")
+    markdown = player.log.readable_path.read_bytes()
+    records = player.log.path.read_bytes()
+    player.log.readable_path.unlink()
+
+    reopened = reopen_player(player, TaskRunner(h.factory))
+    reopened.log.restore_files()
+    assert player.log.readable_path.read_bytes() == markdown and player.log.path.read_bytes() == records
+    reopened.plan_strategy("规划输入", "第 1 局策略规划（含首日出价）")
+    assert reopened.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价").submission == (2, None)
+    assert len(h.requests) == 6
+
+    entries = task_entries(player.log.path)
+    assert [(entry["task_id"], entry["status"], entry["reruns"]) for entry in entries] == [
+        ("task-0001", "success", 0), ("task-0002", "failed", 0), ("task-0003", "success", 1)]
+    assert entries[2]["first_task"] == entries[2]["previous_task"] == "task-0002"
+    text = player.log.readable_path.read_text(encoding="utf-8")
+    assert text.count("## 系统提示") == 1 and text.count("### 输入原文") == 2
+    assert "## 第1局第2天出价补跑1\n\n补跑后成功。\n\n输入与[首次输入](#第1局第2天出价)相同" in text
+    assert player.log.path.read_text(encoding="utf-8").count('"task": "system"') == 1
+
+
+def test_reopened_log_skips_half_written_last_line_and_truncates_it_on_restore(tmp_path):
+    player = make_player(fake_task_runner([bid_reply(1)]), tmp_path)
+    player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
+    complete = player.log.path.read_bytes()
+    damaged = complete + '{"task_id": "task-0002", "title": "第 1 局第 3 天'.encode()
+    player.log.path.write_bytes(damaged)
+
+    log = AgentLog.open("Alpha", player.log.path, readable_path=player.log.readable_path)
+    assert log.next_recorded()["title"] == "第 1 局第 2 天出价"
+    assert player.log.path.read_bytes() == damaged  # 核对通过之前不动文件
+    log.restore_files()
+    assert player.log.path.read_bytes() == complete
+
+
+@pytest.mark.parametrize("content", [None, b"", b'{"task": "system", "content": "half'])
+def test_log_without_complete_system_prompt_cannot_be_reopened(content, tmp_path):
+    path = tmp_path / "player.jsonl"
+    if content is not None:
+        path.write_bytes(content)
+    with pytest.raises(ResumeError, match="这场还没开始"):
+        AgentLog.open("Alpha", path, readable_path=tmp_path / "player.md")
+
+
+def test_reopened_log_rebuilds_failed_and_cancelled_records_as_written(tmp_path):
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    log = AgentLog("Alpha", tmp_path / "player.jsonl", readable_path=tmp_path / "player.md")
+    log.system_prompt("系统提示原文")
+    entry = {"title": "开局发言", "task": "speech", "context": "开局发言"}
+    request = [ModelRequest(parts=[UserPromptPart("发言输入")])]
+    log.failure(entry, CallFailedError("status_code: 429", messages=request))
+    log.cancelled(entry, TaskCancelledError(messages=request))
+    log.success(entry, ExecutionResult(SpeechOutput("策略", "发言", [{"to": "Bravo", "text": "信"}]), request, []))
+    markdown = log.readable_path.read_bytes()
+    assert "补跑时被取消。".encode() in markdown and "### 私信".encode() in markdown
+    log.readable_path.unlink()
+
+    reopened = AgentLog.open("Alpha", log.path, readable_path=log.readable_path)
+    reopened.restore_files()
+    assert log.readable_path.read_bytes() == markdown
+    assert reopened.next_recorded()["task_id"] == "task-0003"

@@ -15,7 +15,8 @@ from auction_game.llm import client as llm_client
 from auction_game.llm.execution import CallFailedError, OutputFailedError, TaskCancelledError
 from auction_game.agent.tasks import TASKS, TaskRunner
 from auction_game.llm.client import BufferedRequest, RunSignals, wait_before_retry
-from tests.support.factories import CHANNELS, TEST_GAME, make_player, make_ai_obs, text_reply, task_entries
+from tests.support.factories import (CHANNELS, TEST_GAME, make_player, make_ai_obs, reopen_player, text_reply,
+                                     task_entries)
 from tests.support.wire import Harness, PROTOCOLS, make_agent, reply, run, sse, GOOD
 
 
@@ -326,3 +327,35 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
     assert body["reasoning"]["effort"] == "high"
     output = capsys.readouterr().out
     assert "比赛预算=4096" in output and "本次探测预算=2048" in output
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_player_rebuilt_from_log_sends_the_same_requests_on_wire(protocol, tmp_path):
+    """续跑从任务日志重建对话：局内的下一条请求、整理记忆后的第一条请求，都和不中断时逐字相同。"""
+    def play(player, steps):
+        tasks = [lambda: player.plan_strategy("plan", "第 1 局策略规划（含首日出价）"),
+                 lambda: player.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价"),
+                 lambda: player.give_speech("speak", "第 1 局局末发言"),
+                 lambda: player.bid(make_ai_obs(day=3), {}, "第 1 局第 3 天出价"),
+                 lambda: player.save_memory("memory", "第 1 局累计私有记忆"),
+                 lambda: player.plan_strategy("next plan", "第 2 局策略规划（含首日出价）")]
+        for task in tasks[steps]:
+            task()
+
+    # 规划带思考，第 2 天的出价先纠错一次：思考不进后续请求，纠错往返留在对话里。
+    original = Harness(protocol, [
+        reply(thinking="private reasoning"), reply(text="<strategy>\nno decision\n</strategy>"), reply(),
+        reply({"strategy": "private", "speech": "public"}), reply(), reply({"memory": "cumulative"}), reply()])
+    player = make_player(TaskRunner(original.factory), tmp_path)
+    done = 0
+    for interrupted_before in (3, 5):
+        play(player, slice(done, interrupted_before))
+        resumed = Harness(protocol, [reply()])
+        rebuilt = reopen_player(player, TaskRunner(resumed.factory), copy_to=tmp_path / f"copy{interrupted_before}")
+        play(rebuilt, slice(0, interrupted_before))
+        assert not resumed.requests
+        done = interrupted_before + 1
+        play(rebuilt, slice(interrupted_before, done))
+        play(player, slice(interrupted_before, done))
+        assert resumed.requests[0][1] == original.requests[-1][1]
+    assert len(original.requests) == 7 and "private reasoning" not in json.dumps(original.requests[-1][1])

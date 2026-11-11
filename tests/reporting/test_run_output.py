@@ -12,8 +12,10 @@ from auction_game.game import tables
 from auction_game.game.engine import compute_standings
 from auction_game.game.models import MatchLog
 from auction_game.game.rules import render_rules
-from auction_game.reporting.run_output import (initialize_run, print_day_result, print_final_result, publish_match,
-                                               write_readme)
+from auction_game.reporting import run_output
+from auction_game.reporting.run_output import (SUMMARY_TITLE, find_unfinished_run, initialize_run, is_finished,
+                                               print_day_result, print_final_result, publish_match, publish_speeches,
+                                               record_letters, reset_reports, write_readme)
 from tests.support.factories import (NAMES, TEAM_OF, TEST_GAME, bids_by_day, make_day, make_lineup, make_log,
                                      make_standings, make_team_lineup, run_one_match, run_scenario)
 
@@ -247,3 +249,55 @@ def test_match_report_is_concise_and_json_keeps_full_settlement(tmp_path):
     assert [day["pool"] for day in days] == [1, 2, 3]
     assert [(result["player"], result["super_hit"]) for result in days[1]["players"]
             if result["super_bid"] is not None] == [("丁", True)]
+
+
+def started_run(run_dir):
+    return initialize_run(run_dir, {"run_type": "ai", "mode": "regular", "game": TEST_GAME.to_dict(),
+                                    "players": [{"name": name, "team": None} for name in NAMES]}, "测试规则")
+
+
+def test_run_is_finished_once_the_audience_summary_is_published(tmp_path, capsys):
+    paths = started_run(tmp_path / "run")
+    assert not is_finished(paths)
+    publish_speeches(paths, "最终感言", {"甲": f"我等着看{SUMMARY_TITLE}"})
+    assert not is_finished(paths)
+    publish_speeches(paths, SUMMARY_TITLE, {"甲": "总结"}, quiet=True)
+    assert is_finished(paths)
+    output = capsys.readouterr().out
+    assert "===== 最终感言 =====" in output and f"===== {SUMMARY_TITLE} =====" not in output
+
+
+def test_reset_reports_returns_public_files_to_the_start_of_the_run(tmp_path):
+    paths = started_run(tmp_path / "run")
+    empty_report = paths.matches_report.read_bytes()
+    publish_speeches(paths, "开局发言", {"甲": "发言"}, quiet=True)
+    record_letters(paths, "开局发言", [("甲", "乙", "信")])
+    log = run_one_match({name: lambda obs: 0 for name in NAMES})
+    publish_match(paths, log, compute_standings(NAMES, [log]), quiet=True)
+    assert paths.matches_report.read_bytes() != empty_report
+    reset_reports(paths)
+    assert not paths.speeches.exists() and not paths.letters.exists()
+    assert paths.matches_report.read_bytes() == empty_report
+
+
+def test_latest_unfinished_real_run_is_found_among_finished_offline_and_archived_ones(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_output, "LOG_DIR", tmp_path)
+    assert find_unfinished_run() is None
+
+    def run(name, done):
+        paths = started_run(tmp_path / name)
+        if done:
+            publish_speeches(paths, SUMMARY_TITLE, {"甲": "总结"}, quiet=True)
+
+    run("20261101_090000_ai", done=False)
+    run("20261102_090000_team-test", done=False)
+    run("20261102_090000_team-test_2", done=False)
+    run("20261103_090000_team", done=True)
+    run("20261104_090000_offline", done=False)
+    run("20261105_090000_team-offline", done=False)
+    run("archive_20261106", done=False)
+    (tmp_path / "20261107_090000_ai-test").mkdir()  # 刚建目录、还没写快照就被关掉
+    assert find_unfinished_run() == tmp_path / "20261102_090000_team-test_2"
+    for name in ("20261101_090000_ai", "20261102_090000_team-test", "20261102_090000_team-test_2"):
+        publish_speeches(run_output.RunPaths(tmp_path / name), SUMMARY_TITLE, {"甲": "总结"}, quiet=True)
+    assert find_unfinished_run() is None

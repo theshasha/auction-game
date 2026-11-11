@@ -2,7 +2,7 @@
 
 暂停后任务不再重发失败的请求，进行中的请求和输出纠错照常完成。
 服务或输出失败时恢复该任务的检查点，程序错误直接抛出。q 通过取消信号马上中断已启动的任务，
-把整轮恢复到开始时的状态并中止比赛。
+把整轮恢复到开始时的状态并中止比赛；已成功的任务留在日志里，续跑时沿用。
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ class Controller:
                 self._mode = "step"
                 self._gate.set()
                 message = ("[暂停] 停止新任务和失败请求的重发，等进行中的请求结束。成功结果保留。"
-                           "回车或 c：等请求结束后继续；q：马上取消已启动的任务，撤销本轮并退出比赛。")
+                           "回车或 c：等请求结束后继续；q：马上取消已启动的任务并退出比赛，已成功的结果续跑时沿用。")
             elif command in ("", "c"):
                 if self._pause_requested:
                     self._resume_requested = True
@@ -80,7 +80,7 @@ class Controller:
                 self._quit_requested = True
                 self.signals.cancelled.set()
                 self._gate.set()
-                message = "[退出] 正在取消已启动的任务，撤销本轮并退出比赛。"
+                message = "[退出] 正在取消已启动的任务并退出比赛，已成功的结果续跑时沿用。"
             else:
                 # 用 repr 显示终端混入的控制字符，便于判断按键是否被破坏。
                 message = f"[控制] 无法识别：{command!r}"
@@ -207,7 +207,7 @@ class Controller:
                                    f"未启动 {len(unstarted)}。成功结果已保留。")
                 if failed:
                     notices.append(f"[失败] {'、'.join(failed)}：回车或 c 只补跑失败和未启动任务，"
-                                   "成功任务不重跑；q 撤销本轮并退出比赛。")
+                                   "成功任务不重跑；q 退出比赛，成功的结果续跑时沿用。")
                     for detail in failed.values():
                         notices.append(f"  {detail}")
                 gate_label = (f"{label}（补跑 {len(pending)} 项）" if pending

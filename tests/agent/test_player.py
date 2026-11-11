@@ -9,9 +9,10 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart, RetryPrompt
 
 from auction_game.llm.execution import OutputFailedError
 from auction_game.agent.text_output import BOARD, DECISION, LetterNames, SPEECH, TeamBoard, output_requirement
+from auction_game.agent.log import ResumeError
 from tests.support.factories import (ALL_NAMES, TEST_GAME, TEST_LINEUP, bid_reply, discussion_reply, fake_task_runner,
-                                     make_ai_obs, make_player, make_team_player, request_text, speech_reply, text_reply,
-                                     task_entries)
+                                     make_ai_obs, make_player, make_team_player, reopen_player, request_text,
+                                     speech_reply, text_reply, task_entries)
 from auction_game.agent import prompts
 
 LETTERS = LetterNames("Alpha", tuple(ALL_NAMES[1:]))
@@ -236,3 +237,44 @@ def test_team_bid_writes_to_the_board_and_gets_team_format_line(tmp_path):
     assert request_text(runner, 1).endswith("\n\n请按本局规划时的格式提交：strategy 和 decision 两块，队内信件区的信可以不写。")
     markdown = player.log.readable_path.read_text(encoding="utf-8")
     assert "### 队内信件区\n\n我明天守高位" in markdown
+
+
+def play_one_match(player):
+    """发言、规划（先纠错一次）、出价、整理记忆和下一局规划各一次，返回各任务的结果。"""
+    return [player.give_speech("发言输入", "开局发言"),
+            player.plan_strategy("规划输入", "第 1 局策略规划（含首日出价）"),
+            player.bid(make_ai_obs(day=2), {"Bravo": "一封信"}, "第 1 局第 2 天出价"),
+            player.save_memory("整理输入", "第 1 局累计私有记忆"),
+            player.plan_strategy("下一局规划输入", "第 2 局策略规划（含首日出价）")]
+
+
+def test_reopened_player_takes_recorded_results_without_requests_and_rebuilds_state(tmp_path):
+    letters = [{"to": "Bravo", "text": "给 Bravo 的信"}]
+    player = make_player(fake_task_runner([
+        speech_reply("公开发言"), bid_reply("bad"), {**bid_reply(3, 1), "letters": letters}, bid_reply(2),
+        {"memory": "第一版记忆"}, bid_reply(4)]), tmp_path)
+    outputs = play_one_match(player)
+    records = player.log.path.read_bytes()
+
+    silent = fake_task_runner([])
+    reopened = reopen_player(player, silent)
+    assert reopened.recorded_title() == "开局发言"
+    assert play_one_match(reopened) == outputs
+    assert outputs[1].letters == letters and outputs[1].submission == (3, 1)
+    def contents(messages):
+        return [[(type(part), part.content) for part in message.parts] for message in messages]
+    assert contents(reopened.messages) == contents(player.messages) and len(player.messages) == 4
+    assert reopened.memories == player.memories == ["第一版记忆"]
+    assert reopened.recorded_title() is None and not silent.calls
+    assert player.log.path.read_bytes() == records
+
+
+def test_recorded_result_for_a_different_request_is_refused_and_left_in_place(tmp_path):
+    player = make_player(fake_task_runner([speech_reply("公开发言")]), tmp_path)
+    player.give_speech("发言输入", "开局发言")
+    silent = fake_task_runner([])
+    reopened = reopen_player(player, silent)
+    history = list(reopened.messages)
+    with pytest.raises(ResumeError, match="Alpha 在“开局发言”的输入和日志里的不一样"):
+        reopened.give_speech("另一版提示", "开局发言")
+    assert reopened.recorded_title() == "开局发言" and reopened.messages == history and not silent.calls

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,11 @@ from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TY
 # 节标题是写信的环节，说明送达时机，免得读成收信的时候。
 LETTERS_HEADER = "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
 TEAM_LETTERS_HEADER = "# 队内信件区\n\n每节是这一环节里写到队内信件区的信，队友在下一次行动时看到。\n"
+MATCHES_HEADER = "# 逐局结果\n\n[本场规则](RULES.md)\n"
+# 一场比赛最后一轮的标题；speeches.md 里有这一节，这场就打完了。
+SUMMARY_TITLE = "观众总结（仅观众可见）"
+# make_run_dir 给真实 AI 场次起的目录名：时间戳、赛制，同名时的序号。
+REAL_RUN_DIR = re.compile(r"^(\d{8}_\d{6})_(?:ai|team)(?:-test)?(?:_(\d+))?$")
 
 
 def make_run_dir(mode: str) -> Path:
@@ -36,8 +42,11 @@ def make_run_dir(mode: str) -> Path:
     return run_dir
 
 
-def publish_match(paths: RunPaths, log: MatchLog, standings: list[StandingsEntry]) -> None:
-    """每局结束时写入该局的完整结算 JSON，并把出价表和累计排名追加到 matches.md，终端只提示阅读位置。"""
+def publish_match(paths: RunPaths, log: MatchLog, standings: list[StandingsEntry], *, quiet: bool = False) -> None:
+    """每局结束时写入该局的完整结算 JSON，并把出价表和累计排名追加到 matches.md，终端只提示阅读位置。
+
+    quiet 时只写文件：续跑补写已有的局。
+    """
     payload = {
         "match": log.to_dict(),
         "standings_after_match": [asdict(entry) for entry in standings],
@@ -53,14 +62,45 @@ def publish_match(paths: RunPaths, log: MatchLog, standings: list[StandingsEntry
     )
     _append(paths.matches_report, text)
     write_readme(paths, standings)
-    print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {paths.matches_report}")
+    if not quiet:
+        print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {paths.matches_report}")
 
 
-def publish_speeches(paths: RunPaths, title: str, speeches: dict[str, str]) -> None:
-    """公开发言按配置中的玩家顺序追加到 speeches.md，并打印到终端。"""
-    text = "\n".join([f"\n===== {title} =====", *(f"【{name}】{speech}" for name, speech in speeches.items())])
+def _speeches_heading(title: str) -> str:
+    return f"\n===== {title} ====="
+
+
+def publish_speeches(paths: RunPaths, title: str, speeches: dict[str, str], *, quiet: bool = False) -> None:
+    """公开发言按配置中的玩家顺序追加到 speeches.md，并打印到终端；quiet 时只写文件：续跑补写已有的发言。"""
+    text = "\n".join([_speeches_heading(title), *(f"【{name}】{speech}" for name, speech in speeches.items())])
     _append(paths.speeches, text + "\n")
-    print(text)
+    if not quiet:
+        print(text)
+
+
+def is_finished(paths: RunPaths) -> bool:
+    """这场是否打完：观众总结是最后写的内容。
+
+    不看任务日志：最后一轮全员成功、还没发布就被关掉的场次，任务日志是全的，续跑要补上这一节和最终结果。
+    """
+    return paths.speeches.exists() and _speeches_heading(SUMMARY_TITLE) in paths.speeches.read_text(encoding="utf-8")
+
+
+def find_unfinished_run() -> Path | None:
+    """logs/ 下最新一场没打完的真实 AI 场次，没有时为 None；离线赛、归档目录和还没写快照的空场次不算。"""
+    runs = []
+    for path in LOG_DIR.iterdir() if LOG_DIR.exists() else ():
+        match = REAL_RUN_DIR.match(path.name)
+        if match and RunPaths(path).config.exists() and not is_finished(RunPaths(path)):
+            runs.append(((match[1], int(match[2] or 1)), path))
+    return max(runs)[1] if runs else None
+
+
+def reset_reports(paths: RunPaths) -> None:
+    """续跑补写之前把公开发言、信和逐局结果清回开场时的样子；局日志 JSON 和 README 补写时整份覆盖。"""
+    paths.speeches.unlink(missing_ok=True)
+    paths.letters.unlink(missing_ok=True)
+    paths.matches_report.write_text(MATCHES_HEADER, encoding="utf-8")
 
 
 def record_letters(paths: RunPaths, title: str, letters: list[tuple[str, str, str]], *, team: bool = False) -> None:
@@ -89,7 +129,7 @@ def initialize_run(run_dir, snapshot, rules):
     paths.prepare()
     paths.config.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (run_dir / "RULES.md").write_text(rules, encoding="utf-8")
-    paths.matches_report.write_text("# 逐局结果\n\n[本场规则](RULES.md)\n", encoding="utf-8")
+    paths.matches_report.write_text(MATCHES_HEADER, encoding="utf-8")
     write_readme(paths)
     return paths
 

@@ -1,19 +1,19 @@
-"""保存原始任务日志，将已完成任务的结果提供给模型；局末用累计记忆替换旧对话。"""
+"""保存原始任务日志，将已完成任务的结果提供给模型；局末用累计记忆替换旧对话。续跑时日志里已成功的任务直接取用。"""
 
 from __future__ import annotations
 
 from copy import deepcopy
 
 from pydantic_ai.messages import (
-    ModelMessage, ModelRequest, ModelResponse, SystemPromptPart, UserPromptPart,
+    ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, SystemPromptPart, UserPromptPart,
     ThinkingPart, TextPart,
 )
 
 from auction_game.agent import prompts
 from auction_game.llm.execution import CallFailedError, TaskCancelledError
-from auction_game.agent.log import AgentLog
+from auction_game.agent.log import AgentLog, ResumeError, logged_inputs
 from auction_game.agent.tasks import (TASKS, BidOutput, DiscussionOutput, MemoryOutput, SpeechOutput, SummaryOutput,
-                                      Task, TaskOutput, TaskRunner)
+                                      Task, TaskOutput, TaskRunner, request_prompt)
 from auction_game.agent.text_output import BRIEF_DISCUSSION_FORMAT, LetterScope
 from auction_game.game.settings import GameSettings
 from auction_game.game.models import Observation
@@ -47,7 +47,10 @@ class AIPlayer:
 
     def __init__(self, name: str, system_prompt: str, letter_scope: LetterScope,
                  task_runner: TaskRunner, log: AgentLog, *, game: GameSettings):
-        """系统提示由 prompts.build_system_prompt 按阵容拼好，放在对话的第一条。"""
+        """系统提示由 prompts.build_system_prompt 按阵容拼好，放在对话的第一条。
+
+        续跑时 log 是 AgentLog.open 打开的已有日志，system_prompt 传它的 system_text，不再写一遍。
+        """
         self.name = name
         self.game = game
         self.messages: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart(system_prompt)])]
@@ -55,7 +58,8 @@ class AIPlayer:
         self.task_runner = task_runner
         self.letter_scope = letter_scope
         self.log = log
-        self.log.system_prompt(system_prompt)
+        if log.system_text is None:
+            self.log.system_prompt(system_prompt)
 
     def checkpoint(self):
         """消息只追加或整体替换，浅拷贝列表就能恢复，包括局末重置。"""
@@ -73,31 +77,53 @@ class AIPlayer:
         brief 是只附一句格式提示时的那一句，不传就附完整格式。
         """
         spec = TASKS[name]
-        entry = {"title": title, "task": name, "context": title if context is None else context}
-        if spec.history == "none":
-            entry["history_note"] = "这次请求接在当前对话后面，结果不写回对话历史。"
-        try:
-            result = self.task_runner(spec, prompt, self.messages, game=self.game, coins=coins,
-                                      letters=self.letter_scope if spec.can_write_letters and letters else None,
-                                      brief=brief)
-        except CallFailedError as exc:
-            self.log.failure(entry, exc)
-            raise
-        except TaskCancelledError as exc:
-            self.log.cancelled(entry, exc)
-            raise
+        scope = self.letter_scope if spec.can_write_letters and letters else None
+        recorded = self.log.next_recorded()
+        if recorded is not None:
+            output, messages = self._take_recorded(recorded, name, title, request_prompt(spec, prompt, scope, brief))
+        else:
+            entry = {"title": title, "task": name, "context": title if context is None else context}
+            if spec.history == "none":
+                entry["history_note"] = "这次请求接在当前对话后面，结果不写回对话历史。"
+            try:
+                result = self.task_runner(spec, prompt, self.messages, game=self.game, coins=coins,
+                                          letters=scope, brief=brief)
+            except CallFailedError as exc:
+                self.log.failure(entry, exc)
+                raise
+            except TaskCancelledError as exc:
+                self.log.cancelled(entry, exc)
+                raise
+            if spec.history == "reset":
+                entry["history_reset"] = f"{MEMORY_HEADER}\n{result.output.memory}"
+                entry["history_note"] = f"此后对话从系统提示和一条消息重新开始，消息内容是“{MEMORY_HEADER}”加上面的结果。"
+            self.log.success(entry, result)
+            output, messages = result.output, result.messages
         if spec.history == "reset":
-            memory_message = f"{MEMORY_HEADER}\n{result.output.memory}"
-            entry["history_reset"] = memory_message
-            entry["history_note"] = f"此后对话从系统提示和一条消息重新开始，消息内容是“{MEMORY_HEADER}”加上面的结果。"
-        self.log.success(entry, result)
-        if spec.history == "reset":
-            self.memories.append(result.output.memory)
-            self.messages = [self.messages[0], ModelRequest(parts=[UserPromptPart(memory_message)])]
+            self.memories.append(output.memory)
+            self.messages = [self.messages[0],
+                             ModelRequest(parts=[UserPromptPart(f"{MEMORY_HEADER}\n{output.memory}")])]
         elif spec.history == "append":
             # 日志保留原始响应；下一任务沿用去推理后的原生对话与纠错往返。
-            self.messages.extend(completed_history(result.messages))
-        return result.output
+            self.messages.extend(completed_history(messages))
+        return output
+
+    def recorded_title(self) -> str | None:
+        """续跑时下一条待取用记录所在轮次的标题；取完或不是续跑时为 None。"""
+        recorded = self.log.next_recorded()
+        return recorded and recorded["title"]
+
+    def _take_recorded(self, recorded: dict, name: Task, title: str, text: str) -> tuple[TaskOutput, list[ModelMessage]]:
+        """取用日志里下一条成功记录，返回结果和当次新增的消息；text 是这次重新拼出的完整请求文本。
+
+        任务和请求文本都要和这次重走流程的一致：两次运行之间改过代码或提示词，前后半场就不是同一场比赛。
+        记录属于哪一轮由 director 在取用前核对。
+        """
+        if recorded["task"] != name or logged_inputs(recorded) != [text]:
+            raise ResumeError(f"{self.name} 在“{title}”的输入和日志里的不一样。这场是用另一版代码或提示词跑的。")
+        self.log.take_recorded()
+        return (TASKS[name].output.from_log(recorded["result"]),
+                ModelMessagesTypeAdapter.validate_python(recorded["messages"]))
 
     def bid(self, obs: Observation, received: dict[str, str], title: str) -> BidOutput:
         """received 是收到的信，写信人到正文。出价请求从第 2 天起发出，第 1 天的出价由本局规划交出。"""

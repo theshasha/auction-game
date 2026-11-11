@@ -33,6 +33,9 @@ class RecordingPlayer:
     def rollback(self, checkpoint):
         pass
 
+    def recorded_title(self):
+        return None
+
     def give_speech(self, text, title):
         self.calls.append((title, text))
         return SpeechOutput("策略", f"发言{self.name}", [])

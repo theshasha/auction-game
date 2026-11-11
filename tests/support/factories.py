@@ -192,6 +192,9 @@ class StubPlayer:
     def rollback(self, checkpoint):
         pass
 
+    def recorded_title(self):
+        return None
+
     def _submission(self, match_index, day):
         bid, super_bid = self.table.get((match_index, day), {}).get(self.name, (0, None))
         return BidOutput("策略", bid, super_bid, [])
@@ -315,6 +318,20 @@ def make_team_player(task_runner, tmp_path, game=TEST_GAME, name="甲"):
     return AIPlayer(name, prompts.build_system_prompt(profile, lineup, game), TeamBoard(), task_runner,
                     AgentLog(name, tmp_path / f"ai_{name}.jsonl", readable_path=tmp_path / f"ai_{name}.md"),
                     game=game)
+
+
+def reopen_player(player, task_runner, copy_to=None):
+    """像续跑那样重建一名玩家：打开 player 的日志，系统提示取日志里的。
+
+    copy_to 是目录时打开的是复制过去的任务日志，两名玩家之后各写各的。
+    """
+    path, readable_path = player.log.path, player.log.readable_path
+    if copy_to is not None:
+        copy_to.mkdir()
+        path, readable_path = copy_to / path.name, copy_to / readable_path.name
+        path.write_bytes(player.log.path.read_bytes())
+    log = AgentLog.open(player.name, path, readable_path=readable_path)
+    return AIPlayer(player.name, log.system_text, player.letter_scope, task_runner, log, game=player.game)
 
 
 def continuous_controller():

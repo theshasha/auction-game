@@ -1,4 +1,7 @@
-"""整场 AI 比赛的流程：开局发言、团队赛每局的开局讨论、规划、每天出价、局末发言、整理记忆和终局；信在收件人的下一轮送达。"""
+"""整场 AI 比赛的流程：开局发言、团队赛每局的开局讨论、规划、每天出价、局末发言、整理记忆和终局；信在收件人的下一轮送达。
+
+续跑时从头重走同一套流程：日志里已有成功记录的任务直接取用，结算、信箱和排名随流程重新算出。
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from auction_game.agent import prompts
+from auction_game.agent.log import ResumeError
 from auction_game.agent.player import AIPlayer
 from auction_game.agent.tasks import TaskOutput
 from auction_game.agent.text_output import BOARD
@@ -14,7 +18,8 @@ from auction_game.game.engine import MatchState, compute_standings
 from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.tournament import TournamentResult, has_next_match
-from auction_game.reporting.run_output import print_day_result, publish_match, publish_speeches, record_letters
+from auction_game.reporting.run_output import (SUMMARY_TITLE, print_day_result, publish_match, publish_speeches,
+                                               record_letters, reset_reports)
 from auction_game.reporting.run_paths import RunPaths
 
 Bid = tuple[int, int | None]  # (正常出价, 超级出价或 None)
@@ -24,8 +29,8 @@ class AIDirector:
     """每个环节由全员并发完成一轮任务，经过 controller 的单步与暂停控制。"""
 
     def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path, *, game: GameSettings,
-                 team_of: dict[str, str] | None = None):
-        """team_of 是团队赛的玩家到阵营，交给结算和排名；个人赛为 None。"""
+                 team_of: dict[str, str] | None = None, resuming: bool = False):
+        """team_of 是团队赛的玩家到阵营，交给结算和排名；个人赛为 None。resuming 时玩家带着已有日志，先重放。"""
         self.players = players
         self.controller = controller
         self.paths = RunPaths(log_dir)
@@ -34,6 +39,8 @@ class AIDirector:
         self.team = team_of is not None
         # 待送达的信：收件人到 {写信人: 正文}，写信人按配置顺序。
         self.mailbox: dict[str, dict[str, str]] = {}
+        # 重放期间记下的公开文件写入，核对通过后按顺序补写；不在重放时为 None。
+        self._deferred: list[Callable[[bool], None]] | None = [] if resuming else None
 
     def run(self) -> TournamentResult:
         """按顺序跑完整场比赛，返回最终结果。
@@ -50,15 +57,40 @@ class AIDirector:
             for day in range(1, self.game.max_days + 1):
                 observations = match.start_day()
                 match.settle(day1_bids if day == 1 else self.bid_round(observations))
-                print_day_result(match.log, match.standings())
+                if self._deferred is None:
+                    print_day_result(match.log, match.standings())
             logs.append(match.log)
             standings = compute_standings(names, logs, team_of=self.team_of)
-            publish_match(self.paths, match.log, standings)
+            self._report(lambda quiet, log=match.log, standings=standings: publish_match(
+                self.paths, log, standings, quiet=quiet))
             if not has_next_match(logs, standings, self.game):
                 break
             day1_bids = self.match_end(logs, standings)
         self.final(standings, logs[-1])
+        self._end_replay()  # 最后一轮全员成功、还没发布就被关掉的场次，重放一直走到这里。
         return TournamentResult(logs, standings)
+
+    def _report(self, write: Callable[[bool], None]) -> None:
+        """write(quiet) 写公开文件并打印。重放期间先记下：核对通过前不动这场已有的文件。"""
+        if self._deferred is None:
+            write(False)
+        else:
+            self._deferred.append(write)
+
+    def _end_replay(self) -> bool:
+        """重放的记录都核对通过后，把场次文件补到重放结束时的样子，不打印；返回这次是否结束了重放。
+
+        截掉任务日志的半行，重写私人对话，公开发言、信和逐局结果清空后按记下的顺序补写。
+        """
+        if self._deferred is None:
+            return False
+        for player in self.players:
+            player.log.restore_files()
+        reset_reports(self.paths)
+        for write in self._deferred:
+            write(True)
+        self._deferred = None
+        return True
 
     def _run_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], TaskOutput]) -> dict[str, TaskOutput]:
         """全员执行 run(玩家, 收到的信)；按配置中的玩家顺序返回各人的输出。
@@ -66,17 +98,32 @@ class AIDirector:
         label 是这一轮的标题，也是私人日志、失败公告和 letters.md 的节标题。收到的信在轮开始前取出，补跑时不变。
         controller.run_round 只在整轮成功并确认后返回，这时才记下这一轮写的信、再用它们替换邮箱，
         所以退出时邮箱仍是轮开始时的状态。
+
+        续跑时，下一条记录正是这一轮的玩家直接取用，其余的才交给 controller；整轮都有记录就不经过 controller。
         """
         inbox = self.mailbox
-        tasks = [RoundTask(key=player.name, participant=player,
-                           fn=lambda player=player: run(player, inbox.get(player.name, {})))
-                 for player in self.players]
-        results = self.controller.run_round(tasks, label)
+        results: dict[str, TaskOutput] = {}
+        tasks = []
+        for player in self.players:
+            recorded = player.recorded_title()
+            if recorded == label:
+                results[player.name] = run(player, inbox.get(player.name, {}))
+            elif recorded is not None:
+                # 发任何请求之前就停下：流程和日志里的轮次顺序对不上。
+                raise ResumeError(f"{player.name} 的下一条记录是“{recorded}”，流程走到的是“{label}”。"
+                                  "这场是用另一版代码跑的。")
+            else:
+                tasks.append(RoundTask(key=player.name, participant=player,
+                                       fn=lambda player=player: run(player, inbox.get(player.name, {}))))
+        if tasks:
+            if self._end_replay():
+                print(f"已恢复到：{label}（{len(self.players)} 人中 {len(results)} 人已完成）")
+            results.update(self.controller.run_round(tasks, label))
         outputs = {player.name: results[player.name] for player in self.players}
         letters = [(sender, letter["to"], letter["text"]) for sender, output in outputs.items()
                    for letter in output.letters]
-        record_letters(self.paths, label, [(sender, self.team_of[sender] if to == BOARD else to, text)
-                                           for sender, to, text in letters], team=self.team)
+        logged = [(sender, self.team_of[sender] if to == BOARD else to, text) for sender, to, text in letters]
+        self._report(lambda quiet: record_letters(self.paths, label, logged, team=self.team))
         mailbox: dict[str, dict[str, str]] = {}
         for sender, to, text in letters:
             for recipient in self._teammates(sender) if to == BOARD else [to]:
@@ -94,7 +141,7 @@ class AIDirector:
     def _speech_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], TaskOutput]) -> dict[str, str]:
         """发言或感言的一轮：公布并返回各人的公开发言。"""
         speeches = {name: output.speech for name, output in self._run_round(label, run).items()}
-        publish_speeches(self.paths, label, speeches)
+        self._report(lambda quiet: publish_speeches(self.paths, label, speeches, quiet=quiet))
         return speeches
 
     def _submission_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], TaskOutput]) -> dict[str, Bid]:
@@ -154,7 +201,7 @@ class AIDirector:
         label = "最终感言"
         speeches = self._speech_round(label, lambda p, received: p.give_speech(
             prompts.final_speech_request(standings, log, received=received, team=self.team), label, letters=False))
-        summary_label = "观众总结（仅观众可见）"
-        summaries = self._run_round(summary_label, lambda p, _: p.final_summary(
-            self._others(speeches, p.name), summary_label))
-        publish_speeches(self.paths, summary_label, {name: output.text for name, output in summaries.items()})
+        summaries = self._run_round(SUMMARY_TITLE, lambda p, _: p.final_summary(
+            self._others(speeches, p.name), SUMMARY_TITLE))
+        texts = {name: output.text for name, output in summaries.items()}
+        self._report(lambda quiet: publish_speeches(self.paths, SUMMARY_TITLE, texts, quiet=quiet))

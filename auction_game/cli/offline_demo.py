@@ -17,7 +17,7 @@ from auction_game.agent.tasks import Task, TaskRunner
 from auction_game.agent.text_output import BOARD, LetterScope, TeamBoard
 from auction_game.game.lineup import Lineup
 from auction_game.game.settings import GameSettings
-from auction_game.runners import make_task_runners, play_ai
+from auction_game.runners import execution_calls, make_task_runners, play_ai
 from auction_game.reporting.run_output import make_run_dir
 from auction_game.cli.rules import sync_root_rules
 from auction_game.game.rules import render_rules
@@ -223,7 +223,7 @@ def generate_demo(output: Path | None = None, *, test_model=False, team=False):
         factories.append(item)
         return item
 
-    task_runners = make_task_runners(config, configs, factory, runner=OfflineTaskRunner)
+    task_runners = make_task_runners(config["llm"], execution_calls(configs), factory, runner=OfflineTaskRunner)
     run_type = "team-offline" if team else "offline"
     if output is None:
         output = make_run_dir(run_type)

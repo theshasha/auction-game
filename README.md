@@ -21,7 +21,7 @@ python main.py --test-model
 python main.py
 ```
 
-团队赛加 `--team`，阵容在 `configs/teams.yaml`；第一次跑团队赛同样先用测试模型。
+团队赛加 `--team`，阵容在 `configs/teams.yaml`；第一次跑团队赛同样先用测试模型。比赛中途关掉后，用 `python main.py --resume` 接着跑，见[中断后续跑](docs/usage.md#中断后续跑)。
 
 **这些命令都会调用真实服务，可能收费。**
 
