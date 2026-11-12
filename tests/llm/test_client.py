@@ -305,7 +305,7 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
     from auction_game.configuration import PlayerConfig, ResolvedModel
     from auction_game.game.lineup import PlayerProfile
     monkeypatch.setattr(check_llm.secrets, "token_hex", lambda nbytes: "c0de")
-    h = Harness("responses", [response])
+    h = Harness("responses", [response, reply(text="好"), reply(text="好")])
     model = ResolvedModel(key="fake", provider="fake", model="alias", protocol="responses",
                           models_dev={"provider": "fake", "model": "alias"}, max_tokens=4096,
                           model_settings={"openai_reasoning_effort": "high"},
@@ -321,7 +321,8 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
                        model_settings=kwargs["model_settings"])
     monkeypatch.setattr(check_llm, "make_model_factory", factory)
     assert check_llm.main([]) == status
-    assert len(h.requests) == h.closes == 1
+    # 通过后还有两次缓存检查请求。
+    assert len(h.requests) == h.closes == (3 if status == 0 else 1)
     body = h.requests[0][1]
     assert body["stream"] is True
     assert body["reasoning"]["effort"] == "high"

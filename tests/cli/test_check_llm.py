@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 
 import pytest
+from pydantic_ai.usage import RequestUsage
 
 from auction_game.cli import check_llm
 from auction_game.configuration import load_configuration
@@ -41,7 +42,7 @@ def test_help_names_model_configuration_and_separate_check_budget(capsys):
 
 def test_check_reports_targets_cost_and_budget(config_files, monkeypatch, capsys, fixed_code):
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
-    runner = fake_task_runner([CODE])
+    runner = fake_task_runner([CODE, "好", "好"])
     calls = []
 
     def factory(**kwargs):
@@ -52,9 +53,9 @@ def test_check_reports_targets_cost_and_budget(config_files, monkeypatch, capsys
     assert check_llm.main(["--model", "substitute", "--model", "substitute", "--max-tokens", "100"]) == 0
     output = capsys.readouterr().out
     assert "1 个检查目标，会请求真实服务，可能收费" in output
-    assert "每个目标至多请求一次，不重试" in output
+    assert "都不重试" in output
     assert "比赛预算=789，本次探测预算=100" in output
-    assert len(calls) == len(runner.calls) == 1
+    assert len(calls) == 1 and len(runner.calls) == 3
     assert calls[0]["max_tokens"] == 100 and calls[0]["request_attempts"] == 1
     assert check_llm.main(["--model", "absent"]) == 1
     assert "models.yaml：未知模型配置名 'absent'" in capsys.readouterr().out
@@ -63,7 +64,7 @@ def test_check_reports_targets_cost_and_budget(config_files, monkeypatch, capsys
 
 def test_test_model_checks_one_target_with_its_settings(config_files, monkeypatch, fixed_code):
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
-    runner = fake_task_runner([CODE])
+    runner = fake_task_runner([CODE, "好", "好"])
     calls = []
     monkeypatch.setattr(check_llm, "make_model_factory",
                         lambda **kwargs: calls.append(kwargs) or runner.executor.factory)
@@ -88,14 +89,19 @@ def test_code_changes_between_runs_and_only_the_system_prompt_has_it(config_file
 @pytest.mark.parametrize(("protocol", "input_tokens"), [("chat", 0), ("responses", 2), ("anthropic", 2)])
 def test_probe_sends_the_code_and_passes_when_it_comes_back(
         protocol, input_tokens, config_files, monkeypatch, capsys, fixed_code):
-    harness = probe_with(protocol, [reply(text=f"核对码：{CODE}")], config_files, monkeypatch)
+    harness = probe_with(protocol, [reply(text=f"核对码：{CODE}"), reply(text="好"), reply(text="好")],
+                         config_files, monkeypatch)
     assert check_llm.main(["--model", "substitute"]) == 0
     output = capsys.readouterr().out
     assert "[通过]" in output
     assert f"输入 {input_tokens} token" in output
     assert f"回复: 核对码：{CODE}" in output
     assert CODE in json.dumps(harness.requests[0][1])
-    assert len(harness.requests) == harness.closes == 1
+    # 通过后发两次完全相同的长请求看缓存；测试传输层不报缓存命中。
+    assert len(harness.requests) == harness.closes == 3
+    assert harness.requests[1][1] == harness.requests[2][1]
+    assert CODE not in json.dumps(harness.requests[1][1])
+    assert "[无缓存]" in output
 
 
 @pytest.mark.parametrize("text", ["OK", "无"])
@@ -115,3 +121,19 @@ def test_probe_transport_failure_has_no_retry(protocol, config_files, monkeypatc
     assert check_llm.main(["--model", "substitute"]) == 1
     assert "[调用失败]" in capsys.readouterr().out
     assert len(harness.requests) == harness.closes == 1
+
+
+def test_cache_report_looks_at_the_second_request():
+    hit = check_llm.cache_report("m", RequestUsage(input_tokens=5000), RequestUsage(input_tokens=5000, cache_read_tokens=4096))
+    assert hit == "[缓存] m  第 1 次输入 5000、命中 0；第 2 次输入 5000、命中 4096"
+    miss = check_llm.cache_report("m", RequestUsage(input_tokens=5000, cache_read_tokens=4096), RequestUsage(input_tokens=5000))
+    assert miss.startswith("[无缓存] m")
+
+
+def test_cache_request_failure_counts_as_failure(config_files, monkeypatch, capsys, fixed_code):
+    harness = probe_with("chat", [reply(text=CODE), 503], config_files, monkeypatch)
+    assert check_llm.main(["--model", "substitute"]) == 1
+    output = capsys.readouterr().out
+    assert "[通过]" in output and "[缓存检查失败]" in output
+    assert "失败 1 个" in output
+    assert len(harness.requests) == 2
