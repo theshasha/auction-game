@@ -34,7 +34,7 @@
 - 日志和统计：`auction_game/reporting/AGENTS.md`，统计口径见 `docs/analyze.md`。
 - 用户命令和日志说明：`docs/usage.md`。
 
-以上改动都先看 `docs/design/rejected.md` 的相关条目，测试赛结论见 `docs/design/playtests.md`，每场的数字和依据在 `docs/design/playtests-log.md`，核对依据时再读。
+以上改动都先看 `docs/design/rejected.md` 的相关条目。
 
 ## 费用边界
 
@@ -42,7 +42,7 @@
 
 ## 临时文件
 
-分析某场比赛用的脚本和中间结果放在 `.tmp/<场次目录名>/`，例如 `.tmp/20261107_180624_team/`。结论写进文档并提交后，删掉这个目录。
+分析某场比赛用的脚本和中间结果放在 `.tmp/<场次目录名>/`，例如 `.tmp/20261107_180624_team/`。结论只在回复里说，会改变某个决定的才写到那个决定所在的文档。分析结束后删掉这个目录。
 
 ## 离线验证
 

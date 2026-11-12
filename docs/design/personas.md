@@ -1,10 +1,8 @@
 # 人设
 
-本文存档可以再用的人设，不参与比赛。开关见 `docs/usage.md` 的"常用调整"，人设在测试赛里的效果见 `docs/design/playtests.md`，各场细节见 `docs/design/playtests-log.md`。
+本文存档不在当前阵容里、可以再用的人设组合。开关见 `docs/usage.md` 的"常用调整"。
 
 ## 存档
-
-按阵容分组，组名下写首次上场的场次。
 
 ### 海与星
 
@@ -23,7 +21,7 @@ DeepSeek队对双子队，早期版本首次上场于 `logs/20261106_190340_team
 
 ### 诗
 
-Claude队，三人都是 `claude-haiku-5-5`，对手是 Gemini队，首次上场于 `logs/20261107_094019_team`。
+Claude队，三人都是 `claude-haiku-5-5`，对手是 Gemini队，首次上场于 `logs/20261107_094019_team`。三条正文从 `logs/20261107_125518_team` 起由 DeepSeek队的凪、澜、鲲沿用。
 
 | 玩家 | 阵营 | 标题 | 正文 |
 |---|---|---|---|

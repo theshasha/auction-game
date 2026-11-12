@@ -14,14 +14,14 @@ python -m auction_game.cli.offline_demo --team  # 假模型团队赛
 
 ## 使用真实模型
 
-按[使用说明](docs/usage.md#准备配置)配置模型和 `.env` 密钥，先跑一场全员使用测试模型的完整比赛，确认结果后再跑常规阵容：
+按[使用说明](docs/usage.md#准备配置)配置模型和 `.env` 密钥后运行：
 
 ```bash
-python main.py --test-model
+python main.py --test-model  # 全员使用测试模型
 python main.py
 ```
 
-团队赛加 `--team`，阵容在 `configs/teams.yaml`；第一次跑团队赛同样先用测试模型。比赛中途关掉后，用 `python main.py --resume` 接着跑，见[中断后续跑](docs/usage.md#中断后续跑)。
+团队赛加 `--team`，阵容在 `configs/teams.yaml`。比赛中途关掉后，用 `python main.py --resume` 接着跑，见[中断后续跑](docs/usage.md#中断后续跑)。
 
 **这些命令都会调用真实服务，可能收费。**
 
@@ -33,6 +33,5 @@ python main.py
 - [团队赛](docs/team-mode.md)：团队赛和个人赛不同的赛制、规则、队内信件区和显示。
 - [规则设计备忘](docs/design/rules.md)：规则和信件时序的取舍，以及调参时要看的数据。
 - [未采用的方向](docs/design/rejected.md)：讨论过但没有采用的方案和原因。
-- [测试赛结论](docs/design/playtests.md)：现行配置下仍成立的测试赛结论和待观察项。
-- [测试赛记录](docs/design/playtests-log.md)：每场测试赛的数字和依据。
+- [测试赛里模型的表现](docs/design/findings.md)：测试赛里观察到的模型行为。
 - [开发约定](AGENTS.md)：改代码前要遵守的要求和代码入口。
