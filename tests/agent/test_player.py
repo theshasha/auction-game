@@ -161,7 +161,7 @@ def test_format_error_after_one_line_prompt_gets_full_format(tmp_path):
     runner = fake_task_runner(["随手写的出价", bid_reply(1)])
     player = make_player(runner, tmp_path)
     assert player.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价").submission == (1, None)
-    assert retry_text(runner, 1) == ("必须先依次提交 strategy 与 decision 两块，标签各占一行且各出现一次，私信块放在最后。\n"
+    assert retry_text(runner, 1) == ("缺少单独占一行的 <strategy>。必须先依次提交 strategy 与 decision 两块，标签各占一行且各出现一次，私信块放在最后。\n"
                                      + output_requirement(DECISION, LETTERS))
 
 
@@ -223,7 +223,7 @@ def test_format_error_in_later_discussion_round_gets_full_format(tmp_path):
     runner = fake_task_runner(["随手写的信", discussion_reply("补上格式")])
     player = make_team_player(runner, tmp_path)
     assert player.discuss("请求", "开局讨论第 2 轮", first=False).letter == "补上格式"
-    assert retry_text(runner, 1) == ("必须依次提交 strategy 与 队内信件区 两块，标签各占一行且各出现一次。\n"
+    assert retry_text(runner, 1) == ("缺少单独占一行的 <strategy>。必须依次提交 strategy 与 队内信件区 两块，标签各占一行且各出现一次。\n"
                                      + output_requirement(BOARD))
 
 

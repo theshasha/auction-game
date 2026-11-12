@@ -132,6 +132,24 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     return result
 
 
+def _tag(marker: tuple[str, str]) -> str:
+    return f"<{marker[0]}{marker[1]}>"
+
+
+def _order_problem(found: list[tuple[str, str]], second: str) -> str | None:
+    """指出第一个对不上的标签；只报总规则时，模型常看不出自己漏的是哪个结束标签，重交还是同样的错。"""
+    expected = [("", "strategy"), ("/", "strategy"), ("", second), ("/", second)]
+    for index, want in enumerate(expected):
+        if index == len(found):
+            return f"缺少单独占一行的 {_tag(want)}。"
+        if found[index] != want:
+            return f"第 {index + 1} 个单独占一行的标签应是 {_tag(want)}，实际是 {_tag(found[index])}。"
+    extra = next((index for index, marker in enumerate(found[4:], 5) if marker[1] in (*FIXED_TAGS, second)), None)
+    if extra is not None:
+        return f"第 {extra} 个单独占一行的标签 {_tag(found[extra - 1])} 是多出来的。"
+    return None
+
+
 def parse_text_output(second: str | None, text: str, letters: LetterScope | None = None) -> str | Blocks:
     """完整匹配协议边界，只裁剪字段两端空白，保留正文内部原文；second 为 None 时返回正文。
 
@@ -145,12 +163,12 @@ def parse_text_output(second: str | None, text: str, letters: LetterScope | None
 
     block_tags = (*FIXED_TAGS, second)
     markers = list(_marker_pattern((*block_tags, *(() if letters is None else letters.tags))).finditer(text))
-    expected = [("", "strategy"), ("/", "strategy"), ("", second), ("/", second)]
-    if ([marker.groups() for marker in markers[:4]] != expected
-            or any(marker[2] in block_tags for marker in markers[4:])):
+    problem = _order_problem([marker.groups() for marker in markers], second)
+    if problem is not None:
         if letters is None:
-            raise OutputFormatError(f"必须依次提交 strategy 与 {second} 两块，标签各占一行且各出现一次。")
-        raise OutputFormatError(f"必须先依次提交 strategy 与 {second} 两块，标签各占一行且各出现一次，{letters.order_note}。")
+            raise OutputFormatError(f"{problem}必须依次提交 strategy 与 {second} 两块，标签各占一行且各出现一次。")
+        raise OutputFormatError(
+            f"{problem}必须先依次提交 strategy 与 {second} 两块，标签各占一行且各出现一次，{letters.order_note}。")
     letter_markers = markers[4:]
     pairs = list(zip(letter_markers[::2], letter_markers[1::2]))
     if len(letter_markers) % 2 or any(start[1] or not end[1] or start[2] != end[2] for start, end in pairs):
