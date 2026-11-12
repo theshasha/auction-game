@@ -12,7 +12,9 @@ from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.rules import render_rules
-from auction_game.game.tables import OUTCOME_TEXT, match_title, render_bid_table, render_standings, super_cells
+from auction_game.game.tables import (
+    OUTCOME_TEXT, markdown_table, match_title, render_bid_table, render_standings,
+)
 
 
 # 出价要求在系统提示的规则里，这里只提醒当前任务。
@@ -187,15 +189,31 @@ def _teammate_miss_note(obs: Observation) -> list[str]:
 
 
 def _yesterday_bids_table(obs: Observation) -> str:
-    """昨日出价与当前余额按玩家对齐；正常出价结果与局末出价日志的写法一致。团队赛在玩家后加一列阵营。"""
+    """昨日出价按价位从高到低排，只列有人出价的价位：结算只取决于每个价位上有谁，撞车和狙击在同一行就能读出。
+
+    同一价位上的正常出价结果必然相同，单列一格，写法与局末出价日志一致；团队赛里同一价位的超级出价可能有人命中、
+    有人落空，所以命中情况跟在名字后面，命中的在前。
+    """
+    players = obs.today_history[-1].players
+    values = {result.bid for result in players} | {result.super_bid for result in players if result.super_bid is not None}
+    rows = []
+    for value in sorted(values, reverse=True):
+        bidders = [result for result in players if result.bid == value]
+        snipers = [result for result in players if result.super_bid == value]
+        groups = [f"{'、'.join(result.player for result in group)}（{label}）"
+                  for label, group in (("命中", [r for r in snipers if r.super_hit]),
+                                       ("落空", [r for r in snipers if not r.super_hit])) if group]
+        rows.append([str(value), "、".join(result.player for result in bidders) or "—",
+                     OUTCOME_TEXT[bidders[0].outcome] if bidders else "—", "；".join(groups) or "—"])
+    return markdown_table(["价位", "正常出价", "结果", "超级出价"], rows)
+
+
+def _coins_table(obs: Observation) -> str:
+    """团队赛在玩家后加一列阵营：昨日明细只写名字。"""
     team_of = {entry.player: entry.team for entry in obs.standings if entry.team is not None}
-    headers = ["玩家", *(["阵营"] if team_of else []), "正常出价", "正常出价结果", "超级出价", "命中情况", "当前金币"]
-    lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
-    for result in obs.today_history[-1].players:
-        cells = [result.player, *([team_of[result.player]] if team_of else []), str(result.bid),
-                 OUTCOME_TEXT[result.outcome], *super_cells(result), str(obs.all_coins[result.player])]
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
+    return markdown_table(["玩家", *(["阵营"] if team_of else []), "当前金币"],
+                          [[result.player, *([team_of[result.player]] if team_of else []),
+                            str(obs.all_coins[result.player])] for result in obs.today_history[-1].players])
 
 
 def bid_request(obs: Observation, *, received: dict[str, str] | None = None, team: bool) -> str:
@@ -217,10 +235,12 @@ def bid_request(obs: Observation, *, received: dict[str, str] | None = None, tea
     lines = [
         f"当前是第 {obs.match_index} 局第 {obs.day} 天。", "",
         *([f"昨日流局，奖池 {yesterday.pool} 分作废。", ""] if yesterday.is_void else []),
-        # 余额已经包含当天工资，注明这一点，避免重复计算。
-        "昨日出价明细与当前金币（已含今日工资）：", "",
+        "昨日出价明细：", "",
         _yesterday_bids_table(obs), "",
         *_teammate_miss_note(obs),
+        # 余额已经包含当天工资，注明这一点，避免重复计算。
+        "当前金币（已含今日工资）：", "",
+        _coins_table(obs), "",
         status_line,
     ]
     return "\n".join(lines) + "\n\n" + task

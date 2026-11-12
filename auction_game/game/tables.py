@@ -86,16 +86,16 @@ def render_standings(standings: list[StandingsEntry]) -> str:
 
     teams = team_standings(standings)
     if teams is None:
-        return _table(["排名", "玩家", *score_headers],
-                      [[str(entry.rank), entry.player, *score_cells(entry)] for entry in standings])
-    team_table = _table(["排名", "阵营", *score_headers],
-                        [[str(team.rank), team.team, *score_cells(team)] for team in teams])
-    player_table = _table(["排名", "玩家", "阵营", *score_headers],
-                          [[str(entry.rank), entry.player, entry.team, *score_cells(entry)] for entry in standings])
+        return markdown_table(["排名", "玩家", *score_headers],
+                              [[str(entry.rank), entry.player, *score_cells(entry)] for entry in standings])
+    team_table = markdown_table(["排名", "阵营", *score_headers],
+                                [[str(team.rank), team.team, *score_cells(team)] for team in teams])
+    player_table = markdown_table(["排名", "玩家", "阵营", *score_headers],
+                                  [[str(entry.rank), entry.player, entry.team, *score_cells(entry)] for entry in standings])
     return f"{team_table}\n\n{player_table}"
 
 
-def _table(headers: list[str], rows: list[list[str]]) -> str:
+def markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
     return "\n".join([*lines, *("| " + " | ".join(row) + " |" for row in rows)])
 
