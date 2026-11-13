@@ -7,7 +7,7 @@ import yaml
 
 from auction_game.cli import check_llm
 from auction_game import runners
-from auction_game.configuration import ConfigurationError, load_configuration
+from auction_game.configuration import ConfigurationError, load_configuration, load_llm_settings
 from auction_game.game.lineup import Lineup
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS
 from auction_game.reporting.run_paths import RunPaths
@@ -27,8 +27,20 @@ def test_defaults_and_preserved_values(config_files):
     assert config["prompts"] == {"enable_predictions": True, "enable_personas": True,
                                  "enable_writing_style": True}
     assert config["writing_style"] == "【写作要求】\n合成写作要求。\n"
-    assert [player.profile.predicted_win_rate for player in players] == [23, 0]
+    assert [player.profile.predicted_win_rate for player in players] == [23, 17]
     assert [p.execution.protocol for p in players] == ["chat", "anthropic"]
+
+
+def test_predicted_win_rate_required_only_when_predictions_enabled(config_files):
+    config_path, players_path, _ = config_files
+    rewrite(players_path, lambda data: data["players"][1].pop("predicted_win_rate"))
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value) == (f"{players_path}：players[1] 缺少 predicted_win_rate；"
+                              f"{config_path} 开启了 prompts.enable_predictions")
+    rewrite(config_path, lambda data: data.update(prompts={"enable_predictions": False}))
+    _, players = load_configuration(*config_files)
+    assert [player.profile.predicted_win_rate for player in players] == [23, None]
 
 
 def test_missing_prompt_switch_defaults_to_true(config_files):
@@ -72,6 +84,32 @@ def test_invalid_config_values(config_files, change, field):
     with pytest.raises(ConfigurationError, match=field) as exc:
         load_configuration(*config_files)
     assert str(config_files[0]) in str(exc.value)
+
+
+@pytest.mark.parametrize("change,message", [
+    (lambda data: data.update(prompt={"enable_personas": False}), "不支持字段：prompt"),
+    (lambda data: data.update(prompts={"enable_persona": False}), "prompts 不支持字段：enable_persona"),
+    (lambda data: data["llm"].update(timeout_second=900), "llm 不支持字段：timeout_second"),
+    (lambda data: data["llm"]["channels"]["hub"].update(api_key="sk"), "llm.channels.hub 不支持字段：api_key"),
+], ids=["root", "prompts", "llm", "channel"])
+def test_unknown_config_fields_rejected(config_files, change, message):
+    config_path = config_files[0]
+    rewrite(config_path, change)
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value) == f"{config_path}：{message}"
+
+
+@pytest.mark.parametrize("change,message", [
+    (lambda data: data.update(prompt={}), "不支持字段：prompt"),
+    (lambda data: data["llm"].update(max_concurrent=3), "llm 不支持字段：max_concurrent"),
+], ids=["root", "llm"])
+def test_resume_settings_reject_unknown_fields(config_files, change, message):
+    config_path = config_files[0]
+    rewrite(config_path, change)
+    with pytest.raises(ConfigurationError) as exc:
+        load_llm_settings(config_path)
+    assert str(exc.value) == f"{config_path}：{message}"
 
 
 @pytest.mark.parametrize("file_index,text,field", [
@@ -372,11 +410,11 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
         assert output.count("[预算提醒]") == 2
     assert f"暂用 {DEFAULT_MAX_TOKENS} tokens" in output
     assert "python -m auction_game.cli.sync_models --write" in output
+    assert "并发上限：3，单次请求超时：7 秒" in output
     assert "操作：回车=下一轮" in output
     snapshot = json.loads((tmp_path / ("ai-test" if test_model else "ai") / "data" / "run_config.json")
                           .read_text(encoding="utf-8"))
     assert snapshot["mode"] == ("test_model" if test_model else "regular")
-    assert snapshot["max_concurrency"] == 3
     first = factories[0]
     assert (first["model"], first["protocol"], first["channel"], first["timeout"]) == (
         ("test-model-c", "responses") if test_model else ("test-model-a", "chat")) + (CHANNELS["hub"], 7)

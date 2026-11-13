@@ -60,7 +60,7 @@ def test_resume_builds_lineup_and_models_from_snapshot_and_channels_from_current
     assert runners.resume_ai(started_run) == 0
     output = capsys.readouterr().out
     assert f"续跑：{started_run}（团队赛测试模型真实 AI（收费），调用真实服务，可能收费）" in output
-    assert "并发上限：3" in output and "操作：回车=下一轮" in output
+    assert "并发上限：3，单次请求超时：7 秒" in output and "操作：回车=下一轮" in output
     assert f'已退出比赛。续跑：python main.py --resume "{started_run}"' in output
     execution = snapshot["players"][0]["execution_model"]
     assert [factory["model"] for factory in factories] == [execution["model"]] * 6 == ["test-model-c"] * 6

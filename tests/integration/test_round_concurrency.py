@@ -6,7 +6,6 @@ from auction_game.cli import offline_demo
 from auction_game.configuration import load_configuration
 from auction_game.flow.controller import Controller
 from auction_game.game.settings import GameSettings
-from auction_game.reporting.run_paths import RunPaths
 
 
 def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, monkeypatch, capsys):
@@ -33,5 +32,4 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
     offline_demo.generate_demo(run_dir, test_model=True)
     assert len(controllers["bid"]) == len(controllers["speech"]) == 1
     assert controllers["bid"] == controllers["speech"]
-    assert RunPaths(run_dir).read_config()["max_concurrency"] == 1
     assert "并发上限：1" in capsys.readouterr().out

@@ -15,7 +15,10 @@ from auction_game.paths import (ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, TEAMS_PATH,
                                 CAPABILITIES_PATH, WRITING_STYLE_PATH)
 PROTOCOLS = ("chat", "responses", "anthropic")
 MODEL_FIELDS = ("name", "model", "provider", "protocol", "reasoning_effort", "models_dev")
+CONFIG_FIELDS = ("test_model", "prompts", "llm")
 PROMPT_FLAGS = ("enable_predictions", "enable_personas", "enable_writing_style")
+LLM_FIELDS = ("max_concurrency", "timeout_seconds", "channels")
+CHANNEL_FIELDS = ("base_url", "api_key_env")
 # 阵容里每名玩家的字段；players.yaml 另有 predicted_win_rate，团队赛没有。
 PLAYER_FIELDS = ("name", "model", "persona_title", "persona_text")
 # 团队赛固定 2 个阵营、每队 3 人，原因见 docs/team-mode.md 的"赛制"。
@@ -72,11 +75,24 @@ def _read_mapping(path: Path) -> dict:
     return data
 
 
+def _reject_unknown(path: Path, field: str, mapping: dict, allowed) -> None:
+    """拼错的字段会静默用默认值，所以键值配置都拒收未知字段；field 为空表示根节点。"""
+    extra = set(map(str, mapping)) - set(allowed)
+    if extra:
+        raise ConfigurationError(f"{path}：{f'{field} ' if field else ''}不支持字段：{', '.join(sorted(extra))}")
+
+
+def _read_config(config_path: Path) -> dict:
+    config = _read_mapping(config_path)
+    _reject_unknown(config_path, "", config, CONFIG_FIELDS)
+    return config
+
+
 def load_configuration(
     config_path: str | Path = CONFIG_PATH,
     players_path: str | Path = PLAYERS_PATH,
     models_path: str | Path = MODELS_PATH,
-    *, test_model: bool = False, snapshot_path: str | Path | None = None,
+    *, test_model: bool = False,
     team: bool = False, teams_path: str | Path = TEAMS_PATH,
 ) -> tuple[dict, list[PlayerConfig]]:
     """返回运行设置（含 models 目录）和按座位排列的本场玩家；测试模式全员用测试模型调用。
@@ -85,10 +101,11 @@ def load_configuration(
     """
     config_path = ROOT_DIR / config_path
     players_path = ROOT_DIR / players_path
-    config = _read_mapping(config_path)
+    config = _read_config(config_path)
     prompts = config.setdefault("prompts", {})
     if not isinstance(prompts, dict):
         raise ConfigurationError(f"{config_path}：prompts 必须是键值配置")
+    _reject_unknown(config_path, "prompts", prompts, PROMPT_FLAGS)
     for field in PROMPT_FLAGS:
         if type(prompts.setdefault(field, True)) is not bool:
             raise ConfigurationError(f"{config_path}：prompts.{field} 必须是布尔值")
@@ -99,7 +116,7 @@ def load_configuration(
         except (OSError, UnicodeError) as exc:
             raise ConfigurationError(f"{WRITING_STYLE_PATH}：写作要求读取失败：{exc}") from exc
     channels = _llm_settings(config, config_path)["channels"]
-    catalog = load_model_catalog(models_path, snapshot_path=snapshot_path)
+    catalog = load_model_catalog(models_path)
     for key, model in catalog.items():
         if model.provider not in channels:
             raise ConfigurationError(
@@ -109,7 +126,15 @@ def load_configuration(
     if not isinstance(test_key, str) or test_key not in catalog:
         raise ConfigurationError(f"{config_path}：test_model 必须引用 models.yaml 中的目录键")
     config["models"] = catalog
-    lineup = load_teams(teams_path, catalog) if team else load_players(players_path, catalog)
+    if team:
+        lineup = load_teams(teams_path, catalog)
+    else:
+        lineup = load_players(players_path, catalog)
+        if prompts["enable_predictions"]:
+            for index, (profile, _) in enumerate(lineup):
+                if profile.predicted_win_rate is None:
+                    raise ConfigurationError(f"{players_path}：players[{index}] 缺少 predicted_win_rate；"
+                                             f"{config_path} 开启了 prompts.enable_predictions")
     return config, [PlayerConfig(profile, catalog[key], catalog[test_key if test_model else key])
                     for profile, key in lineup]
 
@@ -117,7 +142,7 @@ def load_configuration(
 def load_llm_settings(config_path: str | Path = CONFIG_PATH) -> dict:
     """只读 config.yaml 的 llm 段：渠道、超时和并发。续跑用它，参数、阵容和模型取自场次快照。"""
     config_path = ROOT_DIR / config_path
-    return _llm_settings(_read_mapping(config_path), config_path)
+    return _llm_settings(_read_config(config_path), config_path)
 
 
 def _llm_settings(config: dict, config_path: Path) -> dict:
@@ -125,6 +150,7 @@ def _llm_settings(config: dict, config_path: Path) -> dict:
     llm = config.setdefault("llm", {})
     if not isinstance(llm, dict):
         raise ConfigurationError(f"{config_path}：llm 必须是键值配置")
+    _reject_unknown(config_path, "llm", llm, LLM_FIELDS)
     max_concurrency = llm.setdefault("max_concurrency", 10)
     if type(max_concurrency) is not int or max_concurrency <= 0:
         raise ConfigurationError(f"{config_path}：llm.max_concurrency 必须是正整数")
@@ -139,6 +165,7 @@ def _llm_settings(config: dict, config_path: Path) -> dict:
         field = f"llm.channels.{name}"
         if not isinstance(channel, dict):
             raise ConfigurationError(f"{config_path}：{field} 必须是键值配置")
+        _reject_unknown(config_path, field, channel, CHANNEL_FIELDS)
         url = channel.get("base_url")
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):
             raise ConfigurationError(f"{config_path}：{field}.base_url 必须是 HTTP(S) 地址")
@@ -162,12 +189,11 @@ def load_game_settings(path: str | Path = GAME_PATH, *, test_model: bool = False
         raise ConfigurationError(f"{path}：{exc}") from exc
 
 
-def load_model_catalog(path: str | Path = MODELS_PATH, *,
-                       snapshot_path: str | Path | None = None) -> dict[str, ResolvedModel]:
+def load_model_catalog(path: str | Path = MODELS_PATH) -> dict[str, ResolvedModel]:
     """读取模型目录，并按能力快照补上每个条目的输出预算和推理设置。"""
     entries = load_model_entries(path)
     try:
-        snapshot = read_snapshot(ROOT_DIR / (snapshot_path if snapshot_path is not None else CAPABILITIES_PATH))
+        snapshot = read_snapshot(CAPABILITIES_PATH)
     except (OSError, ValueError) as exc:
         raise ConfigurationError(f"{ROOT_DIR / path}：能力快照读取失败：{exc}。"
                                  "请运行 python -m auction_game.cli.sync_models --write 更新快照。") from exc
@@ -186,9 +212,7 @@ def load_model_entries(path: str | Path = MODELS_PATH) -> dict[str, ModelEntry]:
         field = f"models.{key}"
         if not isinstance(model, dict):
             raise ConfigurationError(f"{path}：{field} 必须是键值配置")
-        extra = set(model) - set(MODEL_FIELDS)
-        if extra:
-            raise ConfigurationError(f"{path}：{field} 不支持字段：{', '.join(sorted(extra))}")
+        _reject_unknown(path, field, model, MODEL_FIELDS)
         for prop in ("model", "provider"):
             if not isinstance(model.get(prop), str) or not model[prop].strip():
                 raise ConfigurationError(f"{path}：{field}.{prop} 必须是非空字符串")
@@ -223,8 +247,9 @@ def load_players(path: str | Path = PLAYERS_PATH,
         field = f"players[{index}]"
         name, model_key = _lineup_player(players_path, field, player, entries, names,
                                          (*PLAYER_FIELDS, "predicted_win_rate"))
-        rate = player.get("predicted_win_rate", 0)
-        if type(rate) not in (int, float) or not 0 <= rate <= 100:
+        # 没写时为 None；开启预测时由 load_configuration 报错。
+        rate = player.get("predicted_win_rate")
+        if rate is not None and (type(rate) not in (int, float) or not 0 <= rate <= 100):
             raise ConfigurationError(f"{players_path}：{field}.predicted_win_rate 必须是 0~100 的数字")
         resolved.append((PlayerProfile(name, player["persona_title"], player["persona_text"], rate), model_key))
     return resolved
@@ -249,9 +274,7 @@ def load_teams(path: str | Path = TEAMS_PATH,
         team_field = f"teams[{team_index}]"
         if not isinstance(team, dict):
             raise ConfigurationError(f"{teams_path}：{team_field} 必须是键值配置")
-        extra = set(team) - {"name", "players"}
-        if extra:
-            raise ConfigurationError(f"{teams_path}：{team_field} 不支持字段：{', '.join(sorted(extra))}")
+        _reject_unknown(teams_path, team_field, team, ("name", "players"))
         team_name = team.get("name")
         if not isinstance(team_name, str) or not team_name.strip():
             raise ConfigurationError(f"{teams_path}：{team_field}.name 必须是非空字符串")
@@ -273,9 +296,7 @@ def _lineup_player(path, field, player, entries, names, allowed) -> tuple[str, s
     """检查阵容里的一名玩家，返回名字和目录键；names 是前面座位用过的名字，检查通过后加入本人。"""
     if not isinstance(player, dict):
         raise ConfigurationError(f"{path}：{field} 必须是键值配置")
-    extra = set(player) - set(allowed)
-    if extra:
-        raise ConfigurationError(f"{path}：{field} 不支持字段：{', '.join(sorted(extra))}")
+    _reject_unknown(path, field, player, allowed)
     for key in ("persona_title", "persona_text", "model"):
         value = player.get(key)
         if not isinstance(value, str) or not value.strip():

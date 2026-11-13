@@ -47,7 +47,7 @@ def config_files(tmp_path, monkeypatch):
         json.dumps(build_snapshot(catalog, data, "synthetic")), encoding="utf-8")
     players = [
         dict(persona_title="姐姐", persona_text="沉稳温柔", model="first", predicted_win_rate=23),
-        dict(persona_title="妹妹", persona_text="活泼好奇", model="second"),
+        dict(persona_title="妹妹", persona_text="活泼好奇", model="second", predicted_win_rate=17),
     ]
     players_path.write_text(yaml.safe_dump({"players": players}), encoding="utf-8")
     return config_path, players_path, models_path

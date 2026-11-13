@@ -100,7 +100,6 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
         "run_type": run_type,
         "mode": "test_model" if test_model else "regular",
         "game": game.to_dict(),
-        "max_concurrency": controller.max_concurrency,
         "prompts": dict(config["prompts"]),
         "players": [{
             **asdict(pc.profile),
@@ -122,7 +121,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
             ))
         for number, profile in enumerate(lineup.profiles, 1)
     ]
-    print(f"并发上限：{controller.max_concurrency}")
+    _print_llm_limits(controller.max_concurrency, config["llm"]["timeout_seconds"])
     prompt_options = config["prompts"]
     if lineup.teams:
         predictions = "不用于团队赛"
@@ -170,6 +169,7 @@ def resume_ai(run_dir: Path | None = None) -> int:
         print(f"[无法续跑] {exc}")
         return 1
     print(f"续跑：{run_dir}（{RUN_TYPES[snapshot['run_type']]}，调用真实服务，可能收费）")
+    _print_llm_limits(controller.max_concurrency, llm["timeout_seconds"])
     return continue_run(run_dir, task_runners, controller, interactive=True)
 
 
@@ -190,8 +190,11 @@ def continue_run(run_dir: Path, task_runners: dict, controller, *, interactive: 
     # 系统提示用日志里的：中途改过人设或写作要求，前后半场仍是同一份。
     players = [_make_player(profile, lineup, game, task_runners[profile.name], log, log.system_text)
                for profile, log in zip(lineup.profiles, logs)]
-    print(f"并发上限：{controller.max_concurrency}")
     return _play(players, controller, run_dir, game, lineup, resuming=True, interactive=interactive)
+
+
+def _print_llm_limits(max_concurrency: int, timeout_seconds: int | float) -> None:
+    print(f"并发上限：{max_concurrency}，单次请求超时：{timeout_seconds} 秒")
 
 
 def _make_player(profile: PlayerProfile, lineup: Lineup, game: GameSettings, task_runner, log: AgentLog,

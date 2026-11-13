@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PlayerProfile:
-    """predicted_win_rate 是 players.yaml 里虚构的公开预测，不是模型的真实表现统计；团队赛没有预测，为 None。
+    """predicted_win_rate 是 players.yaml 里虚构的公开预测，不是模型的真实表现统计；没写和团队赛为 None。
 
     team 是团队赛的阵营名，个人赛为 None。
     """
