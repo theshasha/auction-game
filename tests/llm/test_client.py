@@ -17,6 +17,7 @@ from pydantic_ai.models.function import FunctionModel
 from auction_game.llm import client as llm_client
 from auction_game.llm.execution import CallFailedError, OutputFailedError, TaskCancelledError
 from auction_game.agent.tasks import TASKS, TaskRunner
+from auction_game.agent.text_output import output_requirement
 from auction_game.llm.client import BufferedRequest, RunSignals, wait_before_retry
 from tests.support.factories import (CHANNELS, TEST_GAME, make_player, make_ai_obs, reopen_player, text_reply,
                                      task_entries)
@@ -143,17 +144,33 @@ def test_success_then_failure_in_new_loop_keeps_previous_state_and_closes(protoc
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 @pytest.mark.parametrize("task", ["bid", "summary"])
-def test_empty_complete_response_uses_one_output_correction(protocol, task):
-    h = Harness(protocol, [reply(text=""),
+@pytest.mark.parametrize("thinking", [None, "只有推理"], ids=["empty", "thinking-only"])
+def test_reply_without_body_uses_one_correction_with_full_format(protocol, task, thinking):
+    h = Harness(protocol, [reply(text="", thinking=thinking),
                            reply(text="summary") if task == "summary" else reply()])
     runner = TaskRunner(h.factory)
-    result = runner(TASKS[task], "today", [], game=TEST_GAME, coins=6)
+    result = runner(TASKS[task], "today", [], game=TEST_GAME, coins=6, brief="一句格式提示")
     if task == "summary":
         assert result.output.text == "summary"
     else:
         assert result.output.bid == 2
     assert len(h.requests) == 2 and h.closes == 1
     assert not result.request_errors
+    correction = json.dumps(h.requests[1][1], ensure_ascii=False)
+    expected = json.dumps(f"回复里没有正文。\n{output_requirement(TASKS[task].second)}", ensure_ascii=False)
+    assert expected[1:-1] in correction
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_reply_without_body_twice_fails_the_task(protocol, tmp_path):
+    h = Harness(protocol, [reply(text="", thinking="只有推理"), reply(text="", thinking="还是只有推理")])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    before = deepcopy(player.messages)
+    with pytest.raises(OutputFailedError):
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
+    assert player.messages == before and len(h.requests) == 2
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
+    assert "纠错 1 次，仍失败（回复里没有正文。）" in markdown
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

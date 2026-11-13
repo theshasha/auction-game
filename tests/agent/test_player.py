@@ -176,7 +176,7 @@ def test_speech_letters_are_parsed_and_final_speech_cannot_write_letters(tmp_pat
     assert (final.speech, final.letters) == ("感言", [])
     assert request_text(runner, 0) == "请发言\n\n" + output_requirement(SPEECH, LETTERS)
     assert request_text(runner, 1) == "请发表感言\n\n" + output_requirement(SPEECH)
-    assert retry_text(runner, 2).startswith("协议块外只允许空白，请直接提交两块正文。\n")
+    assert retry_text(runner, 2).startswith("<Bravo>、</Bravo> 不是可用的标签。协议块外只允许空白，请直接提交两块正文。\n")
     opening, final = task_entries(player.log.path)
     assert opening["result"]["letters"] == [letter]
     assert final["result"]["letters"] == []

@@ -71,24 +71,26 @@ def validate_submission(
     coins: int,
     game: GameSettings,
 ) -> str | None:
-    """检查一次完整出价，返回违规原因供模型纠正；符合规则时返回 None。"""
+    """检查一次完整出价，返回违规原因供模型纠正；符合规则时返回 None。
+
+    所有违规一起报：纠错只有一次，只报第一个时，重交后其余的违规还在。
+    """
+    problems = []
+    bid_ok = type(raw_bid) is int and 0 <= raw_bid <= game.max_bid
     if type(raw_bid) is not int:
-        return f"bid 必须是不加引号的整数，收到 {raw_bid!r}"
-    if raw_bid < 0 or raw_bid > game.max_bid:
-        return f"出价 {raw_bid} 超出 0~{game.max_bid} 的范围"
-    if raw_bid > coins:
-        return f"出价 {raw_bid} 超过当前余额 {coins}"
-    if raw_super_bid is None:
-        return None
-    if type(raw_super_bid) is not int:
-        return f"super_bid 必须是不加引号的整数，不使用超级出价时填 null，收到 {raw_super_bid!r}"
-    if raw_super_bid < 0 or raw_super_bid > game.max_bid:
-        return f"超级出价 {raw_super_bid} 超出 0~{game.max_bid} 的范围"
-    if raw_super_bid == raw_bid:
-        return f"超级出价 {raw_super_bid} 与你的正常出价相同，请选择不同的数值"
-    if raw_bid + game.super_cost > coins:
-        return (
-            f"正常出价 {raw_bid} 加超级出价成本 {game.super_cost} 金币，"
-            f"合计超过当前余额 {coins}"
-        )
-    return None
+        problems.append(f"bid 必须是不加引号的整数，收到 {raw_bid!r}")
+    elif not bid_ok:
+        problems.append(f"出价 {raw_bid} 超出 0~{game.max_bid} 的范围")
+    super_ok = type(raw_super_bid) is int and 0 <= raw_super_bid <= game.max_bid
+    if raw_super_bid is not None and type(raw_super_bid) is not int:
+        problems.append(f"super_bid 必须是不加引号的整数，不使用超级出价时填 null，收到 {raw_super_bid!r}")
+    elif raw_super_bid is not None and not super_ok:
+        problems.append(f"超级出价 {raw_super_bid} 超出 0~{game.max_bid} 的范围")
+    if bid_ok and super_ok:
+        if raw_super_bid == raw_bid:
+            problems.append(f"超级出价 {raw_super_bid} 与你的正常出价相同，请选择不同的数值")
+        if raw_bid + game.super_cost > coins:
+            problems.append(f"正常出价 {raw_bid} 加超级出价成本 {game.super_cost} 金币，合计超过当前余额 {coins}")
+    elif bid_ok and raw_bid > coins:
+        problems.append(f"出价 {raw_bid} 超过当前余额 {coins}")
+    return "；".join(problems) or None

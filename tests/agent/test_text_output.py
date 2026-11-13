@@ -104,10 +104,10 @@ def test_letters_follow_fixed_blocks_in_order(second, base, body, blocks, expect
 
 
 @pytest.mark.parametrize("raw,message", [
-    (GOOD + letter("戊"), OUTSIDE),
+    (GOOD + letter("戊"), "<戊>、</戊> 不是可用的标签。" + OUTSIDE),
     (GOOD + letter("乙") + "\n尾随正文", OUTSIDE),
-    (GOOD + "\n<戊>\n私信\n</乙>", PAIR),
-    (GOOD + "\n<乙>\n私信\n</戊>", PAIR),
+    (GOOD + "\n<戊>\n私信\n</乙>", "<戊> 不是可用的标签。" + PAIR),
+    (GOOD + "\n<乙>\n私信\n</戊>", "</戊> 不是可用的标签。" + PAIR),
     (GOOD + "\n<乙>\n私信\n</丙>", PAIR),
     (GOOD + "\n<乙>\n私信", PAIR),
     (letter("乙").lstrip() + "\n" + GOOD, "第 1 个单独占一行的标签应是 <strategy>，实际是 <乙>。" + ORDER),
@@ -135,7 +135,7 @@ def test_speech_order_error_names_speech_block():
 def test_without_letter_names_name_tags_are_plain_text():
     with pytest.raises(OutputFormatError) as exc:
         parse_text_output(SPEECH, SPEECH_TEXT + letter("乙"))
-    assert str(exc.value) == "协议块外只允许空白，请直接提交两块正文。"
+    assert str(exc.value) == "<乙>、</乙> 不是可用的标签。协议块外只允许空白，请直接提交两块正文。"
     speech = parse_text_output(SPEECH, SPEECH_TEXT.replace("发言", "<乙>\n发言\n</乙>")).body
     assert speech == "<乙>\n发言\n</乙>"
 
@@ -166,15 +166,17 @@ def test_team_letter_goes_to_the_board(second, base, body):
 
 
 @pytest.mark.parametrize("raw,message", [
-    (GOOD + letter("乙"), TEAM_OUTSIDE),
+    (GOOD + letter("乙"), "<乙>、</乙> 不是可用的标签。" + TEAM_OUTSIDE),
     (GOOD + BOARD_LETTER + "\n尾随正文", TEAM_OUTSIDE),
     (GOOD + f"\n<{BOARD}>\n信", TEAM_PAIR),
     (GOOD + f"\n<{BOARD}>\n信\n<{BOARD}>", TEAM_PAIR),
+    (GOOD + f"\n<{BOARD}>\n信\n</隊内信件区>", "</隊内信件区> 不是可用的标签。" + TEAM_PAIR),
     (BOARD_LETTER.lstrip() + "\n" + GOOD, "第 1 个单独占一行的标签应是 <strategy>，实际是 <队内信件区>。" + TEAM_ORDER),
     (GOOD + letter(BOARD, "<speech>\n嵌套\n</speech>"), "第 6 个单独占一行的标签 <speech> 是多出来的。" + TEAM_ORDER),
     (GOOD + BOARD_LETTER + BOARD_LETTER, "最多写 1 封队内信件区的信。"),
     (GOOD + letter(BOARD, " \n\t"), "队内信件区的信正文不能为空，不写信时省略整个块。"),
-], ids=["name-tag", "trailing-text", "unclosed", "mismatched", "before-strategy", "fixed-tag-inside", "two", "blank"])
+], ids=["name-tag", "trailing-text", "unclosed", "mismatched", "variant-closing-tag", "before-strategy",
+        "fixed-tag-inside", "two", "blank"])
 def test_team_letter_format_errors(raw, message):
     with pytest.raises(OutputFormatError) as exc:
         parse_text_output(DECISION, raw, TeamBoard())
@@ -195,9 +197,14 @@ DISCUSSION_ORDER = "必须依次提交 strategy 与 队内信件区 两块，标
     ("<strategy>\n策略\n</strategy>", "缺少单独占一行的 <队内信件区>。"),
     (DISCUSSION.removesuffix(f"\n</{BOARD}>"), f"缺少单独占一行的 </{BOARD}>。"),
     (DISCUSSION.replace(f"\n</{BOARD}>", f"</{BOARD}>"), f"缺少单独占一行的 </{BOARD}>。"),
-    (DISCUSSION.replace("</strategy>", "</队>"), "第 2 个单独占一行的标签应是 </strategy>，实际是 <队内信件区>。"),
+    (DISCUSSION.replace("</strategy>", "</队>"),
+     "</队> 不是可用的标签。第 2 个单独占一行的标签应是 </strategy>，实际是 <队内信件区>。"),
+    (DISCUSSION.replace(f"</{BOARD}>", "</隊内信件区>"), f"</隊内信件区> 不是可用的标签。缺少单独占一行的 </{BOARD}>。"),
+    (DISCUSSION.replace("策略", "<思考>\n策略").replace(f"</{BOARD}>", "</隊内信件区>"),
+     f"<思考>、</隊内信件区> 不是可用的标签。缺少单独占一行的 </{BOARD}>。"),
     (DISCUSSION + BOARD_LETTER, "第 5 个单独占一行的标签 <队内信件区> 是多出来的。"),
-], ids=["no-letter", "no-closing-tag", "closing-tag-inline", "skipped-tag", "two"])
+], ids=["no-letter", "no-closing-tag", "closing-tag-inline", "skipped-tag", "variant-closing-tag",
+        "tag-like-line-in-body", "two"])
 def test_discussion_order_error_names_the_first_wrong_tag(raw, problem):
     with pytest.raises(OutputFormatError) as exc:
         parse_text_output(BOARD, raw)

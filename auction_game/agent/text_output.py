@@ -123,6 +123,19 @@ def _marker_pattern(tags: tuple[str, ...]) -> re.Pattern:
     return re.compile(rf"^[ \t]*<(/?)({names})>[ \t]*\r?$", re.MULTILINE)
 
 
+# 单独占一行、形如 <名> 或 </名> 的任意行；第 1 组是整个标签，第 2 组是标签名。
+_TAG_LIKE_LINE = re.compile(r"^[ \t]*(</?([^<>/\s][^<>\n]*)>)[ \t]*\r?$", re.MULTILINE)
+
+
+def _unknown_tag_note(text: str, tags: tuple[str, ...]) -> str:
+    """引出不是可用标签的标签行；模型把标签写成繁体等变体时，只报缺了某个标签，它看不出错在哪。
+
+    正文里也可能有单独占一行的 <思考> 之类，只引第一个会漏掉真正写错的那行，所以列出前几个。
+    """
+    unknown = dict.fromkeys(match.group(1) for match in _TAG_LIKE_LINE.finditer(text) if match.group(2) not in tags)
+    return f"{'、'.join(list(unknown)[:3])} 不是可用的标签。" if unknown else ""
+
+
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     result = {}
     for key, value in pairs:
@@ -161,25 +174,30 @@ def parse_text_output(second: str | None, text: str, letters: LetterScope | None
             raise OutputFormatError("正文不能为空白。")
         return body
 
-    block_tags = (*FIXED_TAGS, second)
-    markers = list(_marker_pattern((*block_tags, *(() if letters is None else letters.tags))).finditer(text))
+    tags = (*FIXED_TAGS, second, *(() if letters is None else letters.tags))
+    markers = list(_marker_pattern(tags).finditer(text))
+
+    def boundary_error(message: str) -> OutputFormatError:
+        """块边界对不上时的报错，有不认识的标签行就先指出它。"""
+        return OutputFormatError(_unknown_tag_note(text, tags) + message)
+
     problem = _order_problem([marker.groups() for marker in markers], second)
     if problem is not None:
         if letters is None:
-            raise OutputFormatError(f"{problem}必须依次提交 strategy 与 {second} 两块，标签各占一行且各出现一次。")
-        raise OutputFormatError(
+            raise boundary_error(f"{problem}必须依次提交 strategy 与 {second} 两块，标签各占一行且各出现一次。")
+        raise boundary_error(
             f"{problem}必须先依次提交 strategy 与 {second} 两块，标签各占一行且各出现一次，{letters.order_note}。")
     letter_markers = markers[4:]
     pairs = list(zip(letter_markers[::2], letter_markers[1::2]))
     if len(letter_markers) % 2 or any(start[1] or not end[1] or start[2] != end[2] for start, end in pairs):
-        raise OutputFormatError(letters.pair_error)
+        raise boundary_error(letters.pair_error)
     blocks = [(markers[0], markers[1]), (markers[2], markers[3]), *pairs]
     gaps = [text[:markers[0].start()], text[blocks[-1][1].end():],
             *(text[before[1].end():after[0].start()] for before, after in zip(blocks, blocks[1:]))]
     if any(gap.strip() for gap in gaps):
         if letters is None:
-            raise OutputFormatError("协议块外只允许空白，请直接提交两块正文。")
-        raise OutputFormatError(letters.outside_error)
+            raise boundary_error("协议块外只允许空白，请直接提交两块正文。")
+        raise boundary_error(letters.outside_error)
 
     written = [{"to": start[2], "text": text[start.end():end.start()].strip()} for start, end in pairs]
     if letters is not None:

@@ -191,10 +191,14 @@ def make_agent(model, spec: TaskSpec, letters: LetterScope | None = None):
         except OutputFormatError as exc:
             raise ModelRetry(f"{exc}\n{output_requirement(spec.second, letters)}") from exc
 
-    agent = Agent(model, output_type=TextOutput(parse), deps_type=AuctionDeps, retries=1)
+    # 允许 None 后，没有正文的回复（只有推理或完全为空）交给下面的校验器，纠错提示才能附完整格式；
+    # 否则 pydantic-ai 自己发英文的 "Please return text."。
+    agent = Agent(model, output_type=[TextOutput(parse), None], deps_type=AuctionDeps, retries=1)
 
     @agent.output_validator
-    def validate(ctx: RunContext[AuctionDeps], result: TaskOutput) -> TaskOutput:
+    def validate(ctx: RunContext[AuctionDeps], result: TaskOutput | None) -> TaskOutput:
+        if result is None:
+            raise ModelRetry(f"回复里没有正文。\n{output_requirement(spec.second, letters)}")
         if spec.second == DECISION:
             reason = validate_submission(result.bid, result.super_bid, ctx.deps.coins, ctx.deps.game)
             if reason:
