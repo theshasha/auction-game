@@ -31,7 +31,6 @@ from tests.support.factories import (
 )
 from auction_game.flow.director import AIDirector
 from auction_game.flow.controller import Controller, RoundTask, TournamentAborted
-from auction_game.flow import controller as controller_module
 from auction_game.llm.execution import CallFailedError, TaskCancelledError
 from auction_game.agent.tasks import MemoryOutput, TaskRunner
 
@@ -847,29 +846,17 @@ class TestParallelRound:
             assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(bid_reply(2))]
 
     @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
-    def test_pause_keeps_collected_and_inflight_success(self, monkeypatch, command, tmp_path):
+    def test_pause_keeps_collected_and_inflight_success(self, command, tmp_path):
         gate_announced = threading.Event()
 
         def announce(msg):
             if msg.startswith("[单步]"):
                 gate_announced.set()
 
-        controller = Controller(mode="continuous", announce=announce)
-        alpha_collected = threading.Event()
+        # 并发为 1：Alpha 的结果收集后才派发 Bravo，所以 Bravo 开始时 Alpha 一定已收集。
+        controller = Controller(mode="continuous", announce=announce, max_concurrency=1)
         alpha_chat = fake_task_runner([bid_reply(1)])
         alpha = make_player(alpha_chat, tmp_path, name="Alpha")
-
-        original_as_completed = controller_module.as_completed
-
-        def track_collection(futures):
-            for future in original_as_completed(futures):
-                yield future
-                # yield 返回时控制器已执行 results[key] = future.result()。
-                if future.result() == (1, None):
-                    alpha_collected.set()
-
-        monkeypatch.setattr(controller_module, "as_completed", track_collection)
-
         release_bravo = threading.Event()
         bravo_started = threading.Event()
         bravo_calls = []
@@ -888,7 +875,6 @@ class TestParallelRound:
         ]
         with running(controller, lambda: controller.run_round(tasks, "测试轮"),
                      release_bravo) as (thread, outcome):
-            assert alpha_collected.wait(timeout=5)
             assert bravo_started.wait(timeout=5)
             controller.offer_command("p")
             release_bravo.set()

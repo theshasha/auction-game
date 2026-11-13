@@ -7,14 +7,14 @@ import yaml
 from auction_game.cli.sync_models import build_snapshot
 from auction_game.configuration import load_model_entries
 from tests.support.factories import CHANNELS
-from auction_game.cli import rules
+from auction_game import runners
 
 
 @pytest.fixture(autouse=True)
 def isolated_root_rules(tmp_path, monkeypatch):
     """生产启动同步仍真实执行，测试写入各自临时根规则。"""
-    monkeypatch.setattr(rules, "RULES_PATH", tmp_path / "root-RULES.md")
-    monkeypatch.setattr(rules, "TEAM_RULES_PATH", tmp_path / "root-RULES_TEAM.md")
+    monkeypatch.setattr(runners, "RULES_PATH", tmp_path / "root-RULES.md")
+    monkeypatch.setattr(runners, "TEAM_RULES_PATH", tmp_path / "root-RULES_TEAM.md")
 
 @pytest.fixture
 def config_files(tmp_path, monkeypatch):

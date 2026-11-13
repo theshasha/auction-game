@@ -11,7 +11,7 @@ import queue
 import signal
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -207,8 +207,7 @@ class Controller:
                                 self._changed.wait(POLL_SECONDS)
                                 continue
                         # 收集所有已完成的结果，包括暂停前已完成但还没收集的。
-                        # done 里都已完成；用 as_completed 是为了让竞态测试在收集时机插入等待。
-                        for future in as_completed(done):
+                        for future in done:
                             task = active.pop(future)
                             try:
                                 results[task.key] = future.result()

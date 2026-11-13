@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import traceback
-from dataclasses import asdict, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from auction_game.flow.director import AIDirector
@@ -11,15 +11,15 @@ from auction_game.agent.log import AgentLog, ResumeError
 from auction_game.agent.player import AIPlayer
 from auction_game.agent.prompts import build_system_prompt
 from auction_game.agent.text_output import LetterNames, TeamBoard
-from auction_game.configuration import ConfigurationError, load_configuration, load_game_settings, load_llm_settings
+from auction_game.configuration import (ConfigurationError, PlayerConfig, load_configuration, load_game_settings,
+                                        load_llm_settings, load_players, load_teams)
 from auction_game.flow.controller import Controller, TournamentAborted
 from auction_game.llm.client import MissingApiKeyError, make_model_factory
 from auction_game.agent.tasks import TaskRunner
-from auction_game.cli.rules import sync_root_rules
 from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.rules import render_rules
 from auction_game.game.settings import GameSettings
-from auction_game.paths import CONFIG_PATH, ROOT_DIR
+from auction_game.paths import CONFIG_PATH, ROOT_DIR, RULES_PATH, TEAM_RULES_PATH
 from auction_game.reporting.run_output import find_unfinished_run, initialize_run, is_finished, print_final_result
 from auction_game.reporting.run_paths import (OFFLINE_RUN_TYPES, RUN_TYPES, RunPaths, make_run_dir,
                                               run_type as run_type_of)
@@ -51,14 +51,45 @@ def make_task_runners(llm: dict, calls: dict[str, dict], model_factory, runner=T
     )) for name, call in calls.items()}
 
 
+def root_rules(game: GameSettings, *, team: bool) -> tuple[Path, str]:
+    """根目录规则的路径和内容：个人赛是 RULES.md，团队赛是 RULES_TEAM.md，角色名取自阵容配置，不读能力快照。"""
+    lineup = Lineup(tuple(profile for profile, _ in (load_teams() if team else load_players())))
+    return TEAM_RULES_PATH if team else RULES_PATH, render_rules(game, lineup)
+
+
+def sync_root_rules(game: GameSettings, *, team: bool) -> None:
+    """内容变了才重写根目录规则。"""
+    path, text = root_rules(game, team=team)
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class StartSetup:
+    config: dict
+    player_configs: list[PlayerConfig]
+    game: GameSettings
+    rules: str  # 按本场参数生成的规则
+
+
+def prepare_start(*, test_model: bool, team: bool) -> StartSetup:
+    """新开一场的准备，真实比赛和离线演示共用：读配置和本场参数，同步根规则，生成本场规则。
+
+    配置或规则有误时在这里报错，这时还没创建场次目录。
+    """
+    config, player_configs = load_configuration(test_model=test_model, team=team)
+    game = load_game_settings(test_model=test_model)
+    # 根规则按生产参数生成；测试模式的覆盖参数只用于本场，要单独生成一次。
+    sync_root_rules(load_game_settings(), team=team)
+    rules = render_rules(game, Lineup(tuple(pc.profile for pc in player_configs)))
+    return StartSetup(config, player_configs, game, rules)
+
+
 def run_ai(test_model: bool = False, team: bool = False) -> int:
     """真实模型比赛，team 时是团队赛；配置、规则或密钥有误时在创建场次目录前停止。"""
     try:
-        config, player_configs = load_configuration(test_model=test_model, team=team)
-        game = load_game_settings(test_model=test_model)
-        sync_root_rules(load_game_settings(), team=team)
-        # 根规则按生产参数生成；测试模式的覆盖参数只用于本场，要单独生成一次。
-        rules = render_rules(game, Lineup(tuple(pc.profile for pc in player_configs)))
+        setup = prepare_start(test_model=test_model, team=team)
+        config, player_configs = setup.config, setup.player_configs
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
         task_runners = make_task_runners(config["llm"], execution_calls(player_configs), make_model_factory,
                                          signals=controller.signals)
@@ -83,16 +114,14 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
     if warned:
         print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
               "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
-    return play_ai(config, player_configs, game, task_runners, controller,
-                   run_dir=run_dir, run_type=run_type, test_model=test_model, rules=rules, interactive=True)
+    return play_ai(setup, task_runners, controller,
+                   run_dir=run_dir, run_type=run_type, test_model=test_model, interactive=True)
 
 
-def play_ai(config, player_configs, game, task_runners, controller, *,
-            run_dir, run_type, test_model, rules, interactive=False) -> int:
-    """写场次快照并跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。
-
-    rules 是按本场参数生成的规则；入口在创建场次目录前生成它，参数有误时在那里报配置错误。
-    """
+def play_ai(setup: StartSetup, task_runners, controller, *, run_dir, run_type, test_model,
+            interactive=False) -> int:
+    """写场次快照并跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。"""
+    config, player_configs, game = setup.config, setup.player_configs, setup.game
     lineup = Lineup(tuple(pc.profile for pc in player_configs))
     calls = execution_calls(player_configs)
     # 本场配置快照，统计和展示只读它，续跑按它重建阵容和模型。
@@ -107,7 +136,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
             "execution_model": calls[pc.profile.name],
         } for pc in player_configs],
     }
-    paths = initialize_run(run_dir, snapshot, rules)
+    paths = initialize_run(run_dir, snapshot, setup.rules)
 
     players = [
         _make_player(

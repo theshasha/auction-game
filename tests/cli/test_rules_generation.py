@@ -84,12 +84,12 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, capsys, change
                                   encoding="utf-8")
     monkeypatch.setattr(rules, "TEMPLATE_PATH", template_path)
     monkeypatch.setattr(rules, "TEAM_TEMPLATE_PATH", team_template_path)
-    monkeypatch.setattr(rules_command, "RULES_PATH", document_path)
-    monkeypatch.setattr(rules_command, "TEAM_RULES_PATH", team_document_path)
+    monkeypatch.setattr(runners, "RULES_PATH", document_path)
+    monkeypatch.setattr(runners, "TEAM_RULES_PATH", team_document_path)
     monkeypatch.setattr(rules_command, "load_game_settings", lambda: configuration.load_game_settings(game_path))
-    monkeypatch.setattr(rules_command, "load_players",
+    monkeypatch.setattr(runners, "load_players",
                         lambda: configuration.load_players(players_path, configuration.load_model_entries(models_path)))
-    monkeypatch.setattr(rules_command, "load_teams",
+    monkeypatch.setattr(runners, "load_teams",
                         lambda: configuration.load_teams(teams_path, configuration.load_model_entries(models_path)))
     monkeypatch.setattr(sys, "argv", ["rules.py"])
 
@@ -145,10 +145,10 @@ def test_all_starts_sync_rules_before_logs_or_models(entry, kwargs, module, boun
     document = tmp_path / "RULES.md"
     document.write_text("旧规则", encoding="utf-8")
     lineup = make_team_lineup() if team else make_lineup(["配置甲", "配置乙"])
-    monkeypatch.setattr(rules_command, "TEAM_RULES_PATH" if team else "RULES_PATH", document)
-    monkeypatch.setattr(rules_command, "load_teams" if team else "load_players",
+    monkeypatch.setattr(runners, "TEAM_RULES_PATH" if team else "RULES_PATH", document)
+    monkeypatch.setattr(runners, "load_teams" if team else "load_players",
                         lambda: [(profile, "unused") for profile in lineup.profiles])
-    monkeypatch.setattr(module, "load_game_settings", lambda test_model=False:
+    monkeypatch.setattr(runners, "load_game_settings", lambda test_model=False:
                         replace(TEST_GAME, regular_matches=9) if test_model else TEST_GAME)
 
     class StartStopped(Exception):

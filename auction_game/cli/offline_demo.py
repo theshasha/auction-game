@@ -11,16 +11,12 @@ from pathlib import Path
 from pydantic_ai.models import override_allow_model_requests
 from pydantic_ai.models.function import FunctionModel
 
-from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.flow.controller import Controller
 from auction_game.agent.tasks import Task, TaskRunner
 from auction_game.agent.text_output import BOARD, LetterScope, TeamBoard
-from auction_game.game.lineup import Lineup
 from auction_game.game.settings import GameSettings
-from auction_game.runners import execution_calls, make_task_runners, play_ai
+from auction_game.runners import execution_calls, make_task_runners, play_ai, prepare_start
 from auction_game.reporting.run_paths import make_run_dir, run_type as run_type_of
-from auction_game.cli.rules import sync_root_rules
-from auction_game.game.rules import render_rules
 
 
 @dataclass(frozen=True)
@@ -207,11 +203,9 @@ class DemoFactory:
 
 def generate_demo(output: Path | None = None, *, test_model=False, team=False):
     """返回场次目录和各玩家的假模型工厂；team 时跑团队赛。"""
-    config, configs = load_configuration(test_model=test_model, team=team)
-    game = load_game_settings(test_model=test_model)
-    sync_root_rules(load_game_settings(), team=team)
+    setup = prepare_start(test_model=test_model, team=team)
+    config, configs = setup.config, setup.player_configs
     names = [pc.profile.name for pc in configs]
-    rules = render_rules(game, Lineup(tuple(pc.profile for pc in configs)))
     factories = []
 
     def factory(**kwargs):
@@ -232,8 +226,7 @@ def generate_demo(output: Path | None = None, *, test_model=False, team=False):
     print("离线演示：全员使用假模型，不调用真实服务，不收费。")
     controller = OfflineController(mode="continuous", max_concurrency=config["llm"]["max_concurrency"])
     with override_allow_model_requests(False):
-        play_ai(config, configs, game, task_runners, controller,
-                run_dir=output, run_type=run_type, test_model=test_model, rules=rules)
+        play_ai(setup, task_runners, controller, run_dir=output, run_type=run_type, test_model=test_model)
     return output, factories
 
 

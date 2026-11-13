@@ -3,17 +3,10 @@
 from __future__ import annotations
 
 from auction_game.game.engine import team_standings
-from auction_game.game.models import DayResult, MatchLog, PlayerDayResult, StandingsEntry, TeamStandingsEntry
+from auction_game.game.models import DayResult, MatchLog, StandingsEntry, TeamStandingsEntry
 
 # 正常出价结果在出价表里的写法，被狙也算撞车。写明扣款，因为模型常把撞车记成退款。
 OUTCOME_TEXT = {"won": "获胜", "collided": "撞车扣款", "refunded": "退款"}
-
-
-def super_cells(result: PlayerDayResult) -> tuple[str, str]:
-    """超级出价数值和命中情况；未使用时两格都是“—”。"""
-    if result.super_bid is None:
-        return "—", "—"
-    return str(result.super_bid), "命中" if result.super_hit else "落空"
 
 
 def _player_cells(day: DayResult) -> list[str]:
@@ -22,8 +15,7 @@ def _player_cells(day: DayResult) -> list[str]:
     for result in day.players:
         cell = f"{result.bid}（{OUTCOME_TEXT[result.outcome]}）"
         if result.super_bid is not None:
-            super_bid, hit = super_cells(result)
-            cell += f"；超级出价 {super_bid}（{hit}）"
+            cell += f"；超级出价 {result.super_bid}（{'命中' if result.super_hit else '落空'}）"
         cells.append(cell)
     return cells
 
@@ -75,14 +67,12 @@ def render_standings(standings: list[StandingsEntry]) -> str:
 
     总分只由拍卖分和命中分组成，命中分用两者之差得出。团队赛先列阵营排名，玩家表多一列阵营。
     """
-    match_count = max((len(entry.scores_per_match) for entry in standings), default=0)
+    match_count = len(standings[0].scores_per_match) if standings else 0
     score_headers = ["总分", *(f"第{i + 1}局" for i in range(match_count)), "拍卖分", "命中分"]
 
     def score_cells(entry: StandingsEntry | TeamStandingsEntry) -> list[str]:
-        cells = [str(score) for score in entry.scores_per_match]
-        cells += [""] * (match_count - len(cells))
-        return [str(entry.total_score), *cells, str(entry.total_auction_score),
-                str(entry.total_score - entry.total_auction_score)]
+        return [str(entry.total_score), *(str(score) for score in entry.scores_per_match),
+                str(entry.total_auction_score), str(entry.total_score - entry.total_auction_score)]
 
     teams = team_standings(standings)
     if teams is None:

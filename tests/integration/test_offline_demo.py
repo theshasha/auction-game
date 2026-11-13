@@ -9,6 +9,7 @@ import pytest
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
+from auction_game import runners
 from auction_game.reporting import analyze
 from auction_game.cli import analyze as analyze_command, offline_demo
 from auction_game.configuration import load_configuration, load_game_settings
@@ -31,7 +32,7 @@ def demo_configuration(monkeypatch, config_files):
     """完整阶段使用合成参数；生产 game.yaml 仅由独立烟测读取。"""
     def load(**kwargs):
         return load_configuration(*config_files, **kwargs)
-    monkeypatch.setattr(offline_demo, "load_configuration", load)
+    monkeypatch.setattr(runners, "load_configuration", load)
     return load(test_model=True)
 
 
@@ -48,8 +49,8 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     for index, name in enumerate(names):
         pc = templates[index % len(templates)]
         configs.append(replace(pc, profile=replace(pc.profile, name=name), identity=replace(pc.identity, name=name)))
-    monkeypatch.setattr(offline_demo, "load_configuration", lambda **_: deepcopy((config, configs)))
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
+    monkeypatch.setattr(runners, "load_configuration", lambda **_: deepcopy((config, configs)))
+    monkeypatch.setattr(runners, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "20261016_120000_offline"
     output_dir, factories = generate_demo(run_dir, test_model=True)
     assert output_dir == run_dir
@@ -182,7 +183,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     ),
 ], ids=["poor"])
 def test_offline_economic_edges_finish(game, tmp_path, monkeypatch, demo_configuration):
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
+    monkeypatch.setattr(runners, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "edge"
     _, factories = generate_demo(run_dir, test_model=True)
     matches = analyze.load_match_logs(run_dir)
@@ -207,7 +208,7 @@ def test_current_game_configuration_smoke(tmp_path, demo_configuration):
 @pytest.fixture
 def team_demo_configuration(monkeypatch, config_files, teams_file):
     """团队假模型赛读合成的 teams.yaml，阵营和 TEAM_OF 相同：红队甲乙丙，蓝队丁戊己。"""
-    monkeypatch.setattr(offline_demo, "load_configuration",
+    monkeypatch.setattr(runners, "load_configuration",
                         lambda **kwargs: load_configuration(*config_files, teams_path=teams_file, **kwargs))
 
 
@@ -235,7 +236,7 @@ def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_confi
         super_cost=3, super_bounty=5, super_hit_score=1,
         regular_matches=3, max_playoffs=5,
     )
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
+    monkeypatch.setattr(runners, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "20261016_120000_team-offline"
     _, factories = generate_demo(run_dir, test_model=True, team=True)
     matches = analyze.load_match_logs(run_dir)

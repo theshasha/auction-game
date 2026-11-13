@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+from auction_game import runners
 from auction_game.agent import prompts
 from auction_game.game import rules
 from auction_game.cli import rules as rules_command
@@ -30,8 +31,8 @@ class TestRulesText:
         lineup = Lineup(tuple(profile for profile, _ in (load_teams() if team else load_players())))
         text = render_rules(load_game_settings(), lineup)
         document = tmp_path / "RULES.md"
-        monkeypatch.setattr(rules_command, "TEAM_RULES_PATH" if team else "RULES_PATH", document)
-        rules_command.sync_root_rules(load_game_settings(), team=team)
+        monkeypatch.setattr(runners, "TEAM_RULES_PATH" if team else "RULES_PATH", document)
+        runners.sync_root_rules(load_game_settings(), team=team)
         assert document.read_text(encoding="utf-8") == text
         system = prompts.build_system_prompt(lineup.profiles[0], lineup, load_game_settings())
         body = render_rules(load_game_settings(), lineup, include_note=False)
@@ -101,7 +102,7 @@ class TestRulesText:
             render_rules(TEST_GAME, lineup)
 
     def test_runtime_render_does_not_read_generated_document(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(rules_command, "RULES_PATH", tmp_path / "missing.md")
+        monkeypatch.setattr(runners, "RULES_PATH", tmp_path / "missing.md")
         lineup = make_lineup()
         text = render_rules(TEST_GAME, lineup, include_note=False)
         system = prompts.build_system_prompt(lineup.profiles[0], lineup, TEST_GAME)
@@ -110,7 +111,7 @@ class TestRulesText:
     def test_check_command_rejects_stale_document_and_keeps_it(self, tmp_path, monkeypatch):
         document = tmp_path / "RULES.md"
         document.write_text("过期规则", encoding="utf-8")
-        monkeypatch.setattr(rules_command, "RULES_PATH", document)
+        monkeypatch.setattr(runners, "RULES_PATH", document)
         monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
         assert rules_command.main() == 1
         assert document.read_text(encoding="utf-8") == "过期规则"

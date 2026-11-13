@@ -9,7 +9,6 @@ import shutil
 import pytest
 
 from auction_game import runners
-from auction_game.cli import offline_demo
 from auction_game.cli.offline_demo import generate_demo
 from auction_game.configuration import load_configuration
 from auction_game.flow import director as director_module
@@ -36,8 +35,8 @@ def configure_demo(monkeypatch, config_files, teams_file, team, game=GAME):
     if not team:
         configs = [replace(pc, profile=replace(pc.profile, name=name), identity=replace(pc.identity, name=name))
                    for name, pc in zip("甲乙丙丁", configs * 2)]
-    monkeypatch.setattr(offline_demo, "load_configuration", lambda **_: deepcopy((config, configs)))
-    monkeypatch.setattr(offline_demo, "load_game_settings", lambda **_: game)
+    monkeypatch.setattr(runners, "load_configuration", lambda **_: deepcopy((config, configs)))
+    monkeypatch.setattr(runners, "load_game_settings", lambda **_: game)
     return {"test_model": True, "team": team}
 
 
