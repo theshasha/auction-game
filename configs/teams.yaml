@@ -15,17 +15,17 @@ teams:
         model: deepseek_flash
         persona_title: "不服输的努力家少女"
         persona_text: "你是精力过剩、好奇心旺盛的少女，也是个不服输的努力家。"
-  - name: Claude队
+  - name: GLM队
     players:
       - name: 诗织
-        model: claude_haiku
+        model: glm_pro
         persona_title: "安静文学少女"
         persona_text: "你是终日与书为伴的安静少女。你冷静又带着些许温柔。说话轻声细语。"
       - name: 诗羽
-        model: claude_haiku
+        model: glm_pro
         persona_title: "中二少女"
         persona_text: "因为现实生活太无聊，你假装自己是来自异世界的勇者，觉得现实中的困难和你幻想的异世界冒险经历比起来不值一提。"
       - name: 诗音
-        model: claude_haiku
+        model: glm_pro
         persona_title: "慵懒的博学少女"
         persona_text: "你是既聪明又懒散的少女，知道很多事情但懒得动，说话从容，偶尔带点俏皮。"
