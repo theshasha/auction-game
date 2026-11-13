@@ -69,8 +69,8 @@ def complete_records(path):
     return [json.loads(line) for line in data[:data.rfind(b"\n") + 1].decode("utf-8").split("\n") if line.strip()]
 
 
-def resume_demo(run_dir, switch=None, histories=None):
-    """用假模型接着跑一场离线赛，返回 continue_run 的退出码；并发为 1。
+def resume_demo(run_dir, switch=None, histories=None, max_concurrency=1):
+    """用假模型接着跑一场离线赛，返回 continue_run 的退出码。
 
     假模型按调用次数推算局、天和信件编号，这里接着日志里的成功记录往下数。
     """
@@ -93,7 +93,7 @@ def resume_demo(run_dir, switch=None, histories=None):
                 factory.letters_written += len(entry["result"].get("letters", ()))
         runners[pc["name"]] = runner
     with override_allow_model_requests(False):
-        return continue_run(run_dir, runners, OfflineController(mode="continuous", max_concurrency=1))
+        return continue_run(run_dir, runners, OfflineController(mode="continuous", max_concurrency=max_concurrency))
 
 
 def run_files(run_dir):
@@ -117,7 +117,21 @@ def run_files(run_dir):
 
 
 def assert_same_run(actual_dir, expected_dir):
-    actual, expected = run_files(actual_dir), run_files(expected_dir)
+    _assert_same_files(run_files(actual_dir), run_files(expected_dir))
+
+
+def assert_same_public_files_and_successes(actual_dir, expected_dir):
+    """按 q 退出过的场次多了取消记录，私人对话的可读日志也多了取消的一节；只比较公开文件和成功记录。
+    取消记录占用一个任务编号，之后的成功记录编号不同，所以也不比编号。"""
+    def kept(files):
+        return {name: [{key: value for key, value in record.items() if key != "task_id"}
+                       for record in content if record.get("status") in (None, "success")]
+                if name.endswith(".jsonl") else content
+                for name, content in files.items() if not name.startswith("players/")}
+    _assert_same_files(kept(run_files(actual_dir)), kept(run_files(expected_dir)))
+
+
+def _assert_same_files(actual, expected):
     assert list(actual) == list(expected)
     for name in expected:
         assert actual[name] == expected[name], name

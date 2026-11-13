@@ -6,13 +6,20 @@ from auction_game.game.lineup import Lineup
 from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.paths import TEAM_TEMPLATE_PATH, TEMPLATE_PATH
 
-GENERATED_NOTE = "<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动生成：python -m auction_game.cli.rules -->\n"
-TEAM_GENERATED_NOTE = ("<!-- 由 RULES_TEAM.template.md 与本场参数生成；团队赛启动自动同步；"
-                       "手动生成：python -m auction_game.cli.rules -->\n")
+def rules_document(game: GameSettings, lineup: Lineup, *, root: bool) -> str:
+    """规则文件的全文：一行生成说明加正文。root 为项目根目录那份，否则是场次目录里的本场规则。"""
+    template = TEAM_TEMPLATE_PATH.name if lineup.teams else TEMPLATE_PATH.name
+    if root:
+        mode = "团队赛" if lineup.teams else "个人赛"
+        note = (f"由 {template} 按 configs/ 里的生产参数和阵容生成，{mode}启动时自动同步；"
+                "手动生成：python -m auction_game.cli.rules")
+    else:
+        note = f"由 {template} 按本场参数和阵容生成"
+    return f"<!-- {note} -->\n" + render_rules(game, lineup)
 
 
-def render_rules(game: GameSettings, lineup: Lineup, *, include_note: bool = True) -> str:
-    """按本场参数和阵容渲染规则，阵容有阵营时用团队赛模板；include_note=False 只取正文，供模型提示使用。"""
+def render_rules(game: GameSettings, lineup: Lineup) -> str:
+    """按本场参数和阵容渲染规则正文，阵容有阵营时用团队赛模板；模型提示直接使用正文。"""
     if len(set(game.daily_pool)) == 1:
         pool_description = (
             f"每天拍卖 {game.daily_pool[0]} 分，每局共 {game.auction_pool_per_match} 分拍卖奖池。"
@@ -34,11 +41,10 @@ def render_rules(game: GameSettings, lineup: Lineup, *, include_note: bool = Tru
     }
     teams = lineup.teams
     if teams:
-        template_path, note = TEAM_TEMPLATE_PATH, TEAM_GENERATED_NOTE
+        template_path = TEAM_TEMPLATE_PATH
         values["team_lineup"] = "，".join(f"{team}有 {'、'.join(members)}" for team, members in teams.items())
         values["team_size"] = len(next(iter(teams.values())))
         values["discussion_rounds"] = DISCUSSION_ROUNDS
     else:
-        template_path, note = TEMPLATE_PATH, GENERATED_NOTE
-    body = template_path.read_text(encoding="utf-8").format_map(values).strip() + "\n"
-    return note + body if include_note else body
+        template_path = TEMPLATE_PATH
+    return template_path.read_text(encoding="utf-8").format_map(values).strip() + "\n"

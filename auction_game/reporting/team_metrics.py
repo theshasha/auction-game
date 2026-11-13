@@ -11,7 +11,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from auction_game.game.engine import resolve_bids
+from auction_game.game.engine import resolve_bids, team_standings
+from auction_game.game.models import StandingsEntry
 from auction_game.game.settings import GameSettings
 from auction_game.reporting.analyze import collect_team_stats, load_match_logs
 from auction_game.reporting.run_paths import RunPaths
@@ -209,11 +210,9 @@ def collect_team_metrics(matches: list[dict], team_of: dict[str, str]) -> dict:
             for r in own:
                 balance, bid, value, hit = coins[r["player"]], r["bid"], r["super_bid"], r["super_hit"]
                 day_scores[team] += r["score"]
-                totals["score"] += r["score"]
                 totals["person_days"] += 1
                 counts[team]["score"] += r["score"]
                 if r["outcome"] == "won":
-                    totals["auction"] += pool
                     totals["days_won"] += 1
                     counts[team]["days_won"] += 1
                 if r["outcome"] == "collided":
@@ -274,6 +273,8 @@ def collect_team_metrics(matches: list[dict], team_of: dict[str, str]) -> dict:
         day_diffs.append(day_scores[teams[0]] - day_scores[teams[1]])
 
     collisions = collect_team_stats(matches, team_of)
+    standings = {entry.team: entry for entry in team_standings(
+        [StandingsEntry(**entry) for entry in matches[-1]["standings_after_match"]])}
 
     def pair(make):
         return tuple(make(team) for team in teams)
@@ -292,9 +293,9 @@ def collect_team_metrics(matches: list[dict], team_of: dict[str, str]) -> dict:
         "match_count": len(matches),
         "playoff_count": sum(payload["match"]["is_playoff"] for payload in matches),
         # 得分
-        "total_score": pair(lambda team: c[team]["score"]),
-        "auction_score": pair(lambda team: c[team]["auction"]),
-        "hit_score": pair(lambda team: c[team]["score"] - c[team]["auction"]),
+        "total_score": pair(lambda team: standings[team].total_score),
+        "auction_score": pair(lambda team: standings[team].total_auction_score),
+        "hit_score": pair(lambda team: standings[team].total_score - standings[team].total_auction_score),
         "days_won": pair(lambda team: c[team]["days_won"]),
         "score_by_day": {number: pair(lambda team: counts[team]["score"])
                          for number, counts in sorted(by_day_index.items())},
@@ -317,7 +318,7 @@ def collect_team_metrics(matches: list[dict], team_of: dict[str, str]) -> dict:
         "switched_to_own": pair(lambda team: c[team]["switched_to_own"]),
         "switched_to_own_points": pair(lambda team: c[team]["switched_to_own_points"]),
         "win_to_void": pair(lambda team: c[team]["win_to_void"]),
-        "super_auction_gain": pair(lambda team: c[team]["auction"] - c[team]["auction_without_all"]),
+        "super_auction_gain": pair(lambda team: standings[team].total_auction_score - c[team]["auction_without_all"]),
         "balance_shots": ratio("balance_shots", "super_uses"),
         "balance_hits": ratio("balance_hits", "balance_shots"),
         "balance_max": ratio("balance_max_hits", "balance_max_shots"),

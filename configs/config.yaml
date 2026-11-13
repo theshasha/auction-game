@@ -1,4 +1,3 @@
-# models.yaml 的 provider 引用这里的渠道；OpenAI 地址保留 /v1。
 # --test-model 时全员使用的模型目录键。
 test_model: deepseek_flash
 prompts:
@@ -10,15 +9,16 @@ llm:
   # 同时请求的任务数上限，1 为串行。
   max_concurrency: 10
   timeout_seconds: 900
+  # 渠道写法见 docs/usage.md 的"接入模型"。
   channels:
     hub:
       base_url: https://hub.oaifree.com/v1
       api_key_env: HUB_API_KEY
-    # 同一个 hub 的 Anthropic 接口；Anthropic SDK 自己追加 /v1/messages。
+    # 同一个 hub 的 Anthropic 接口。
     hub_anthropic:
       base_url: https://hub.oaifree.com
       api_key_env: HUB_API_KEY
-    # Anthropic 接口；地址不带 /v1。
+    # Anthropic 接口。
     oaipro:
       base_url: https://api.oaipro.com
       api_key_env: OAIPRO_API_KEY

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 import json
 
+import yaml
 from pydantic_ai.models.function import FunctionModel
 from auction_game.agent.tasks import (BidOutput, DiscussionOutput, MemoryOutput, SpeechOutput, SummaryOutput,
                                       TaskRunner)
@@ -33,6 +34,13 @@ CHANNELS = {
     "hub": {"base_url": "https://offline.invalid/v1", "api_key_env": "FAKE_KEY"},
     "anthropic": {"base_url": "https://offline.invalid/anthropic", "api_key_env": "FAKE_KEY"},
 }
+
+
+def rewrite_yaml(path, change):
+    """读出 YAML 文件，交给 change 原地修改，再写回。"""
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    change(data)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
 
 
 # ---------- 数据对象 ----------

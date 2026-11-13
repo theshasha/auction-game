@@ -41,7 +41,6 @@ def test_playoffs_continue_while_first_place_is_tied(matches, expected):
 
 
 def test_playoffs_stop_at_cap_even_if_tied():
-    assert next_after(played(JIA, YI, BING)) is True
     logs = played(JIA, YI, BING, ([3, 3, 3], [3, 3, 3]))
     assert first_place_tied(compute_standings(NAMES, logs))
     assert next_after(logs) is False

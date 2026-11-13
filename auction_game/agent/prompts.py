@@ -44,7 +44,7 @@ def build_system_prompt(
     teams = lineup.teams
     # 玩家和阵营名单在规则第一节。
     identity = f"你叫 {profile.name}，属于{profile.team}。" if teams else f"你叫 {profile.name}。"
-    text = f"{render_rules(game, lineup, include_note=False)}\n【你的身份】\n{identity}\n"
+    text = f"{render_rules(game, lineup)}\n【你的身份】\n{identity}\n"
     if enable_personas:
         text += f"【你的人设】\n{profile.persona_title}：{profile.persona_text}\n"
     if enable_predictions and not teams:

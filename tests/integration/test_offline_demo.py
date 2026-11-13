@@ -1,8 +1,6 @@
 """一条生产 AI 完整赛：Agent、控制器、导演、结算和日志均真实执行。"""
 
 import json
-from copy import deepcopy
-from dataclasses import replace
 import re
 import pytest
 
@@ -14,11 +12,12 @@ from auction_game.reporting import analyze
 from auction_game.cli import analyze as analyze_command, offline_demo
 from auction_game.configuration import load_configuration, load_game_settings
 from auction_game.cli.offline_demo import generate_demo
-from auction_game.agent import prompts
 from auction_game.game.lineup import Lineup
+from auction_game.game.rules import rules_document
 from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_paths import RunPaths
 from tests.support.factories import TEAM_OF, task_entries, text_reply
+from tests.support.offline import OFFLINE_GAME, configure_offline_demo
 
 
 def super_uses(day):
@@ -36,21 +35,11 @@ def demo_configuration(monkeypatch, config_files):
     return load(test_model=True)
 
 
-def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuration):
-    game = GameSettings(
-        initial_coins=12, daily_salary=6, daily_pool=(3, 3, 3), max_bid=10,
-        super_cost=3, super_bounty=5, super_hit_score=1,
-        regular_matches=3, max_playoffs=5,
-    )
-    config, templates = demo_configuration
+def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, config_files, teams_file):
+    game = OFFLINE_GAME
+    config, configs = configure_offline_demo(monkeypatch, config_files, teams_file)
     config["prompts"] = {"enable_predictions": True, "enable_personas": False, "enable_writing_style": True}
     names = ["甲", "乙", "丙", "丁"]
-    configs = []
-    for index, name in enumerate(names):
-        pc = templates[index % len(templates)]
-        configs.append(replace(pc, profile=replace(pc.profile, name=name), identity=replace(pc.identity, name=name)))
-    monkeypatch.setattr(runners, "load_configuration", lambda **_: deepcopy((config, configs)))
-    monkeypatch.setattr(runners, "load_game_settings", lambda **_: game)
     run_dir = tmp_path / "20261016_120000_offline"
     output_dir, factories = generate_demo(run_dir, test_model=True)
     assert output_dir == run_dir
@@ -95,8 +84,8 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
         assert identity.model != execution.model
     assert all(f.settings["max_tokens"] == configs[0].execution.max_tokens for f in factories)
     assert all(f.settings["openai_reasoning_effort"] == "high" for f in factories)
-    assert (run_dir / "RULES.md").read_text(encoding="utf-8") == prompts.render_rules(
-        game, Lineup(tuple(pc.profile for pc in configs)))
+    assert (run_dir / "RULES.md").read_text(encoding="utf-8") == rules_document(
+        game, Lineup(tuple(pc.profile for pc in configs)), root=False)
 
     system = json.loads(paths.player(1).read_text(encoding="utf-8").splitlines()[0])
     assert system["task"] == "system"
@@ -230,13 +219,9 @@ def assert_team_phases(matches, regular_matches):
     assert matches[-1]["match"]["is_playoff"] and len(set(totals.values())) == 2
 
 
-def test_complete_team_tournament(tmp_path, monkeypatch, capsys, team_demo_configuration):
-    game = GameSettings(
-        initial_coins=12, daily_salary=6, daily_pool=(3, 3, 3), max_bid=10,
-        super_cost=3, super_bounty=5, super_hit_score=1,
-        regular_matches=3, max_playoffs=5,
-    )
-    monkeypatch.setattr(runners, "load_game_settings", lambda **_: game)
+def test_complete_team_tournament(tmp_path, monkeypatch, capsys, config_files, teams_file):
+    game = OFFLINE_GAME
+    configure_offline_demo(monkeypatch, config_files, teams_file, team=True)
     run_dir = tmp_path / "20261016_120000_team-offline"
     _, factories = generate_demo(run_dir, test_model=True, team=True)
     matches = analyze.load_match_logs(run_dir)

@@ -17,7 +17,7 @@ from auction_game.flow.controller import Controller, TournamentAborted
 from auction_game.llm.client import MissingApiKeyError, make_model_factory
 from auction_game.agent.tasks import TaskRunner
 from auction_game.game.lineup import Lineup, PlayerProfile
-from auction_game.game.rules import render_rules
+from auction_game.game.rules import rules_document
 from auction_game.game.settings import GameSettings
 from auction_game.paths import CONFIG_PATH, ROOT_DIR, RULES_PATH, TEAM_RULES_PATH
 from auction_game.reporting.run_output import find_unfinished_run, initialize_run, is_finished, print_final_result
@@ -54,7 +54,7 @@ def make_task_runners(llm: dict, calls: dict[str, dict], model_factory, runner=T
 def root_rules(game: GameSettings, *, team: bool) -> tuple[Path, str]:
     """根目录规则的路径和内容：个人赛是 RULES.md，团队赛是 RULES_TEAM.md，角色名取自阵容配置，不读能力快照。"""
     lineup = Lineup(tuple(profile for profile, _ in (load_teams() if team else load_players())))
-    return TEAM_RULES_PATH if team else RULES_PATH, render_rules(game, lineup)
+    return TEAM_RULES_PATH if team else RULES_PATH, rules_document(game, lineup, root=True)
 
 
 def sync_root_rules(game: GameSettings, *, team: bool) -> None:
@@ -81,7 +81,7 @@ def prepare_start(*, test_model: bool, team: bool) -> StartSetup:
     game = load_game_settings(test_model=test_model)
     # 根规则按生产参数生成；测试模式的覆盖参数只用于本场，要单独生成一次。
     sync_root_rules(load_game_settings(), team=team)
-    rules = render_rules(game, Lineup(tuple(pc.profile for pc in player_configs)))
+    rules = rules_document(game, Lineup(tuple(pc.profile for pc in player_configs)), root=False)
     return StartSetup(config, player_configs, game, rules)
 
 

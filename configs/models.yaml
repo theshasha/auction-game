@@ -1,5 +1,5 @@
 # 目录键供 players.yaml、teams.yaml 和 config.yaml 的 test_model 引用；models_dev 是该模型在 models.dev 里的条目，可能和渠道的 model ID 不同。
-# 来源没有 high 档位但有 medium 的模型显式指定 medium，其余按能力快照用 high；见 docs/usage.md。
+# 推理档位的确定方法见 docs/usage.md 的"接入模型"。
 models:
   gpt_astra:
     name: GPT姐姐

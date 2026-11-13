@@ -3,13 +3,13 @@
 import json
 
 import pytest
-import yaml
 
 from auction_game import runners
 from auction_game.configuration import load_configuration, load_llm_settings
 from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_output import SUMMARY_TITLE, publish_speeches
 from auction_game.reporting.run_paths import RunPaths
+from tests.support.factories import rewrite_yaml
 
 
 @pytest.fixture
@@ -25,12 +25,6 @@ def started_run(config_files, teams_file, monkeypatch, tmp_path):
         patch.setattr(runners.AIDirector, "run", lambda self: (_ for _ in ()).throw(runners.TournamentAborted))
         assert runners.run_ai(test_model=True, team=True) == 0
     return tmp_path / "20261101_100000_team-test"
-
-
-def rewrite_yaml(path, change):
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    change(data)
-    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
 
 
 def test_resume_builds_lineup_and_models_from_snapshot_and_channels_from_current_config(

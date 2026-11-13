@@ -7,12 +7,12 @@ import pytest
 from auction_game.reporting.team_metrics import (Mean, Ratio, balance_prices, bid_caps, bootstrap_interval,
                                                  collect_team_metrics, load_team_run)
 from tests.support.analyze_runs import (TEAM_REPORT_GAME, make_matches, make_team_report_match, make_team_void_match,
-                                        write_matches)
+                                        with_standings, write_matches)
 from tests.support.factories import TEAM_OF, make_day, make_log
 
 
 def metrics_of(*matches):
-    return collect_team_metrics([{"match": match} for match in matches], TEAM_OF)
+    return collect_team_metrics(with_standings([{"match": match} for match in matches], TEAM_OF), TEAM_OF)
 
 
 def one_day(bids, super_bids=None, game=TEAM_REPORT_GAME):

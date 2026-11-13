@@ -4,6 +4,8 @@
 
 ## 先免费跑一场
 
+需要 Python 3.11+。
+
 ```bash
 python -m pip install -r requirements.txt
 python -m auction_game.cli.offline_demo         # 假模型完整赛，无需密钥

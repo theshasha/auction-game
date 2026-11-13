@@ -1,6 +1,5 @@
 """整场流程和各轮编排：阶段顺序、开局讨论、加赛、信的送达、公开与私有边界、规划交出的首日出价及观众总结。"""
 
-from copy import deepcopy
 from dataclasses import replace
 import json
 import threading
@@ -12,12 +11,10 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 from auction_game.agent.tasks import BidOutput, MemoryOutput, SpeechOutput
 from auction_game.agent.text_output import BOARD, BRIEF_DISCUSSION_FORMAT, output_requirement
 from auction_game.flow import director as director_module
-from auction_game.llm.execution import OutputFailedError
 from auction_game.game.tables import render_bid_table, render_standings
 from tests.support.factories import (TEAM_OF, TEST_GAME, StubPlayer, bid_reply, continuous_controller,
                                      discussion_reply, fake_task_runner, init_run_dir, make_ai_obs, make_log,
-                                     make_player, make_standings, make_team_player, request_text, speech_reply,
-                                     text_reply, task_entries)
+                                     make_player, make_standings, make_team_player, request_text, speech_reply)
 from auction_game.game.settings import GameSettings
 
 
@@ -110,88 +107,6 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
     assert players[1].calls[-1] == ("第 1 局策略规划（含首日出价）", "规划 ['乙', '丙'] 收信 ['乙', '丙']")
     assert director.paths.letters.read_text(encoding="utf-8").endswith(
         "\n## 开局发言\n\n【乙 → 甲】乙的信\n\n【甲 → 丙】甲的第一封\n\n【甲 → 乙】甲的第二封\n\n【丙 → 甲】丙的信\n")
-
-
-def test_only_public_speech_returned_without_hard_truncation(tmp_path):
-    speech = '第一段说"6 真香"。\n\n第二段。' + "很" * 600
-    runner = fake_task_runner([speech_reply(speech)])
-    player = make_player(runner, tmp_path)
-    output = player.give_speech("请发言", "开局发言")
-    assert (output.speech, output.letters) == (speech, [])
-    assert len(runner.calls) == 1
-    entry = task_entries(player.log.path)[-1]
-    assert entry["result"] == {**speech_reply(speech), "letters": []}
-    assert "烟雾弹" in ModelMessagesTypeAdapter.dump_json(player.messages).decode()
-    md = player.log.readable_path.read_text(encoding="utf-8")
-    assert speech in md and "私有策略" in md
-
-
-@pytest.mark.parametrize("invalid", [speech_reply("  "), "missing sections"])
-def test_speech_schema_failure_gets_one_correction(invalid, tmp_path):
-    runner = fake_task_runner([invalid, speech_reply("补上的发言")])
-    player = make_player(runner, tmp_path)
-    assert player.give_speech("请发言", "开局发言").speech == "补上的发言"
-    assert len(runner.calls) == 2
-
-
-def test_failed_speech_leaves_history_unchanged(tmp_path):
-    runner = fake_task_runner(["private analysis", "more private"])
-    player = make_player(runner, tmp_path)
-    before = deepcopy(player.messages)
-    with pytest.raises(OutputFailedError):
-        player.give_speech("请发言", "开局发言")
-    assert player.messages == before
-
-
-def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
-    from pydantic_ai.messages import TextPart
-    runner = fake_task_runner([bid_reply(1), speech_reply(" "), speech_reply(" ")])
-    player = make_player(runner, tmp_path)
-    player.plan_strategy("plan", "第 1 局策略规划（含首日出价）")
-    with pytest.raises(OutputFailedError):
-        player.give_speech("speech", "第 1 局局末发言")
-    entry = task_entries(player.log.path)[-1]
-    audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-    # SDK 合并历史末尾请求后，失败审计仍只包含本任务的两次原文。
-    assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
-        text_reply(speech_reply(" ")), text_reply(speech_reply(" "))]
-    assert audit[0].parts[-1].content.startswith("speech\n\n请按以下格式提交完整结果")
-
-
-def test_blank_summary_gets_output_correction(tmp_path):
-    runner = fake_task_runner(["  \n", "给观众的话"])
-    player = make_player(runner, tmp_path)
-    before = deepcopy(player.messages)
-    assert player.final_summary({}, "观众总结（仅观众可见）").text == "给观众的话"
-    assert len(runner.calls) == 2 and player.messages == before
-    assert "retry-prompt" in ModelMessagesTypeAdapter.dump_json(runner.calls[-1]).decode()
-
-
-def test_double_blank_summary_fails_and_keeps_history(tmp_path):
-    runner = fake_task_runner([" ", " \n"])
-    player = make_player(runner, tmp_path)
-    before = deepcopy(player.messages)
-    with pytest.raises(OutputFailedError):
-        player.final_summary({}, "观众总结（仅观众可见）")
-    assert player.messages == before and len(runner.calls) == 2
-
-
-@pytest.mark.parametrize("fails", [False, True])
-def test_replan_transaction_and_round_rollback(fails, tmp_path):
-    replies = [bid_reply("bad"), bid_reply(99)] if fails else [bid_reply(4)]
-    runner = fake_task_runner([bid_reply(2, 6), *replies])
-    player = make_player(runner, tmp_path)
-    player.plan_strategy("旧规划", "第 1 局策略规划（含首日出价）")
-    checkpoint = player.checkpoint()
-    before = deepcopy(player.messages)
-    if fails:
-        with pytest.raises(OutputFailedError):
-            player.plan_strategy("新规划", "第 2 局策略规划（含首日出价）")
-        assert player.messages == before
-    else:
-        assert player.plan_strategy("新规划", "第 2 局策略规划（含首日出价）").submission == (4, None)
-    player.rollback(checkpoint)
-    assert player.messages == before
 
 
 def test_director_opening_plan_preserves_public_boundary_and_keeps_day_one_bids(tmp_path):
@@ -322,6 +237,7 @@ def test_run_speaks_between_matches_only_and_plays_playoffs_until_unique(tmp_pat
     table = {(1, 2): {"甲": (1, None)}, (2, 2): {"乙": (1, None)}, (3, 2): {"甲": (1, None)}}
     director, players, result = run_stub_game(tmp_path, game, table)
     assert [(log.match_index, log.is_playoff) for log in result.match_logs] == [(1, False), (2, False), (3, True)]
+    assert [len(log.days) for log in result.match_logs] == [game.max_days] * 3
     assert result.playoff_count == 1 and not result.playoff_cap_hit
     assert [(entry.player, entry.total_score) for entry in result.final_standings] == [("甲", 2), ("乙", 1), ("丙", 0)]
     # 每局第 1 天的出价由规划交出；最后一局之后没有局末发言，直接最终感言。

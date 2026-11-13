@@ -8,13 +8,14 @@ from dataclasses import replace
 import pytest
 
 from tests.support.factories import (
+    NAMES,
     TEST_GAME,
     constant_by_name,
     constant_strategies,
     run_one_match,
     run_scenario,
 )
-from auction_game.game.engine import settle_day
+from auction_game.game.engine import MatchState, settle_day
 from auction_game.game.settings import GameSettings
 from auction_game.configuration import load_game_settings
 
@@ -132,15 +133,12 @@ class TestPoolDiscard:
         assert log.auction_scores["甲"] == 13
 
 
-class TestFixedSixDays:
-    """测试每局固定 6 天：不存在提前结束；第 6 天永远有货。"""
+class TestEachDay:
+    """每天单独结算：奖池每天 4 分，工资每天 +3。"""
 
-    def test_match_always_runs_six_days(self):
-        # 甲每天出 1 唯一获胜，其余人出 0 撞车（支付 0 无代价）：
-        # 即便甲一路通吃也打满 6 天，共拿 24 分
+    def test_unique_bid_wins_every_day(self):
+        # 甲每天出 1 独占获胜，其余人出 0 撞车（支付 0 无代价）。
         log = run_one_match(constant_strategies([1, 0, 0, 0, 0, 0]))
-        assert len(log.days) == 6
-        assert [day.pool for day in log.days] == [4, 4, 4, 4, 4, 4]
         assert all(day.winner == "甲" for day in log.days)
         assert log.auction_scores["甲"] == 24
 
@@ -160,6 +158,21 @@ class TestFixedSixDays:
             (5, 4, 19, 0),
             (6, 4, 22, 0),
         ]
+
+
+def test_log_remaining_coins_follow_match_coins_each_day():
+    """局日志按初始金币、工资和每天的金币变化推算余额，和进行中的一局记的余额一致。"""
+    match = MatchState(NAMES, 1, False, [], TEST_GAME)
+    days = [
+        {"甲": (5, None), "乙": (4, 5), "丙": (3, 6), "丁": (2, None), "戊": (1, None), "己": (0, None)},
+        {"甲": (3, None), "乙": (3, None), "丙": (1, None), "丁": (2, 3), "戊": (0, None), "己": (6, None)},
+        {"甲": (0, None), "乙": (0, None), "丙": (0, None), "丁": (1, 0), "戊": (0, 1), "己": (2, None)},
+    ]
+    for submissions in days:
+        match.start_day()
+        match.settle(submissions)
+        assert match.log.remaining_coins == match.coins
+    assert len(set(match.coins.values())) > 1
 
 
 def test_rule_breaking_bid_is_a_program_error():

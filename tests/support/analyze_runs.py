@@ -64,18 +64,25 @@ def write_matches(run_dir, matches, *, run_type="offline", players=None, team_of
     # 模型玩家创建时就写下系统提示，每人都有任务日志。
     for pc in paths.read_config()["players"]:
         player_log(run_dir, pc).system_prompt("test system prompt")
+    for payload in with_standings(matches, team_of):
+        paths.match(payload["match"]["match_index"]).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+
+
+def with_standings(matches, team_of=None) -> list[dict]:
+    """给每局原地写上累计排名 standings_after_match，返回按局序号排好的列表；各局分数取自局日志，排名用生产函数算。"""
+    first = matches[0]["match"]
     auction_scores_history = {name: [] for name in first["auction_scores"]}
     scores_history = {name: [] for name in first["scores"]}
-    for payload in sorted(matches, key=lambda payload: payload["match"]["match_index"]):
-        # 用生产排名函数准备磁盘元数据；各局分数取自场景的局日志。
+    payloads = sorted(matches, key=lambda payload: payload["match"]["match_index"])
+    for payload in payloads:
         for name in auction_scores_history:
             auction_scores_history[name].append(payload["match"]["auction_scores"].get(name, 0))
             scores_history[name].append(payload["match"]["scores"].get(name, 0))
         payload["standings_after_match"] = [asdict(entry) for entry in make_standings(
             auction_scores_history, scores_history=scores_history, team_of=team_of)]
-        paths.match(payload["match"]["match_index"]).write_text(
-            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-        )
+    return payloads
 
 
 def player_log(run_dir, pc):

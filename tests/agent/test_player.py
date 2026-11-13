@@ -278,3 +278,84 @@ def test_recorded_result_for_a_different_request_is_refused_and_left_in_place(tm
     with pytest.raises(ResumeError, match="Alpha 在“开局发言”的输入和日志里的不一样"):
         reopened.give_speech("另一版提示", "开局发言")
     assert reopened.recorded_title() == "开局发言" and reopened.messages == history and not silent.calls
+
+
+def test_only_public_speech_returned_without_hard_truncation(tmp_path):
+    speech = '第一段说"6 真香"。\n\n第二段。' + "很" * 600
+    runner = fake_task_runner([speech_reply(speech)])
+    player = make_player(runner, tmp_path)
+    output = player.give_speech("请发言", "开局发言")
+    assert (output.speech, output.letters) == (speech, [])
+    assert len(runner.calls) == 1
+    entry = task_entries(player.log.path)[-1]
+    assert entry["result"] == {**speech_reply(speech), "letters": []}
+    assert "烟雾弹" in ModelMessagesTypeAdapter.dump_json(player.messages).decode()
+    md = player.log.readable_path.read_text(encoding="utf-8")
+    assert speech in md and "私有策略" in md
+
+
+@pytest.mark.parametrize("invalid", [speech_reply("  "), "missing sections"])
+def test_speech_schema_failure_gets_one_correction(invalid, tmp_path):
+    runner = fake_task_runner([invalid, speech_reply("补上的发言")])
+    player = make_player(runner, tmp_path)
+    assert player.give_speech("请发言", "开局发言").speech == "补上的发言"
+    assert len(runner.calls) == 2
+
+
+def test_failed_speech_leaves_history_unchanged(tmp_path):
+    runner = fake_task_runner(["private analysis", "more private"])
+    player = make_player(runner, tmp_path)
+    before = deepcopy(player.messages)
+    with pytest.raises(OutputFailedError):
+        player.give_speech("请发言", "开局发言")
+    assert player.messages == before
+
+
+def test_failed_task_audit_after_prior_history_keeps_both_attempts(tmp_path):
+    runner = fake_task_runner([bid_reply(1), speech_reply(" "), speech_reply(" ")])
+    player = make_player(runner, tmp_path)
+    player.plan_strategy("plan", "第 1 局策略规划（含首日出价）")
+    with pytest.raises(OutputFailedError):
+        player.give_speech("speech", "第 1 局局末发言")
+    entry = task_entries(player.log.path)[-1]
+    audit = ModelMessagesTypeAdapter.validate_python(entry["messages"])
+    # SDK 合并历史末尾请求后，失败审计仍只包含本任务的两次原文。
+    assert [p.content for m in audit for p in m.parts if isinstance(p, TextPart)] == [
+        text_reply(speech_reply(" ")), text_reply(speech_reply(" "))]
+    assert audit[0].parts[-1].content.startswith("speech\n\n请按以下格式提交完整结果")
+
+
+def test_blank_summary_gets_output_correction(tmp_path):
+    runner = fake_task_runner(["  \n", "给观众的话"])
+    player = make_player(runner, tmp_path)
+    before = deepcopy(player.messages)
+    assert player.final_summary({}, "观众总结（仅观众可见）").text == "给观众的话"
+    assert len(runner.calls) == 2 and player.messages == before
+    assert "retry-prompt" in ModelMessagesTypeAdapter.dump_json(runner.calls[-1]).decode()
+
+
+def test_double_blank_summary_fails_and_keeps_history(tmp_path):
+    runner = fake_task_runner([" ", " \n"])
+    player = make_player(runner, tmp_path)
+    before = deepcopy(player.messages)
+    with pytest.raises(OutputFailedError):
+        player.final_summary({}, "观众总结（仅观众可见）")
+    assert player.messages == before and len(runner.calls) == 2
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_replan_transaction_and_round_rollback(fails, tmp_path):
+    replies = [bid_reply("bad"), bid_reply(99)] if fails else [bid_reply(4)]
+    runner = fake_task_runner([bid_reply(2, 6), *replies])
+    player = make_player(runner, tmp_path)
+    player.plan_strategy("旧规划", "第 1 局策略规划（含首日出价）")
+    checkpoint = player.checkpoint()
+    before = deepcopy(player.messages)
+    if fails:
+        with pytest.raises(OutputFailedError):
+            player.plan_strategy("新规划", "第 2 局策略规划（含首日出价）")
+        assert player.messages == before
+    else:
+        assert player.plan_strategy("新规划", "第 2 局策略规划（含首日出价）").submission == (4, None)
+    player.rollback(checkpoint)
+    assert player.messages == before

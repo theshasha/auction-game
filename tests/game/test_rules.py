@@ -2,19 +2,17 @@
 
 from dataclasses import replace
 import re
-import sys
 
 import pytest
 
 from auction_game import runners
 from auction_game.agent import prompts
 from auction_game.game import rules
-from auction_game.cli import rules as rules_command
 from auction_game.configuration import load_game_settings, load_players, load_teams
 from auction_game.game.lineup import Lineup
 from auction_game.paths import TEAM_TEMPLATE_PATH, TEMPLATE_PATH
 from tests.support.factories import TEST_GAME, make_lineup, make_team_lineup
-from auction_game.game.rules import render_rules
+from auction_game.game.rules import render_rules, rules_document
 
 
 def sections(path):
@@ -29,24 +27,27 @@ class TestRulesText:
     @pytest.mark.parametrize("team", [False, True])
     def test_generated_rules_matches_configuration(self, tmp_path, monkeypatch, team):
         lineup = Lineup(tuple(profile for profile, _ in (load_teams() if team else load_players())))
-        text = render_rules(load_game_settings(), lineup)
         document = tmp_path / "RULES.md"
         monkeypatch.setattr(runners, "TEAM_RULES_PATH" if team else "RULES_PATH", document)
         runners.sync_root_rules(load_game_settings(), team=team)
-        assert document.read_text(encoding="utf-8") == text
+        assert document.read_text(encoding="utf-8") == rules_document(load_game_settings(), lineup, root=True)
         system = prompts.build_system_prompt(lineup.profiles[0], lineup, load_game_settings())
-        body = render_rules(load_game_settings(), lineup, include_note=False)
-        note = rules.TEAM_GENERATED_NOTE if team else rules.GENERATED_NOTE
-        assert text == note + body
+        body = render_rules(load_game_settings(), lineup)
         assert system.startswith(body)
-        assert note not in system
+        assert "<!--" not in system
         assert "{" not in body and "}" not in body
 
-    def test_body_omits_only_generation_note(self):
-        body = render_rules(TEST_GAME, make_lineup(), include_note=False)
-        assert body.startswith("【唯一高价拍卖游戏规则】")
+    @pytest.mark.parametrize("lineup,template", [(make_lineup(), "RULES.template.md"),
+                                                 (make_team_lineup(), "RULES_TEAM.template.md")])
+    def test_root_and_run_documents_differ_only_in_note(self, lineup, template):
+        body = render_rules(TEST_GAME, lineup)
+        assert body.startswith("【唯一高价拍卖")
         assert "<!--" not in body
-        assert render_rules(TEST_GAME, make_lineup()) == rules.GENERATED_NOTE + body
+        root_note, root_body = rules_document(TEST_GAME, lineup, root=True).split("\n", 1)
+        run_note, run_body = rules_document(TEST_GAME, lineup, root=False).split("\n", 1)
+        assert root_body == run_body == body
+        assert root_note != run_note
+        assert template in root_note and template in run_note
 
     def test_custom_parameters_and_actual_names_reach_system(self):
         game = replace(
@@ -55,8 +56,7 @@ class TestRulesText:
             regular_matches=2, max_playoffs=4,
         )
         lineup = make_lineup(["甲", "乙", "丙"])
-        text = render_rules(game, lineup, include_note=False)
-        assert render_rules(game, lineup) == rules.GENERATED_NOTE + text
+        text = render_rules(game, lineup)
         assert "3 名玩家参赛（甲、乙、丙）" in text
         assert "共 2 局正赛，每局 3 天" in text
         assert "第 1 天 2 分、第 2 天 1 分、第 3 天 3 分" in text
@@ -72,8 +72,7 @@ class TestRulesText:
     def test_team_rules_list_teams_and_reach_system(self):
         game = replace(TEST_GAME, super_cost=3, super_bounty=5, super_hit_score=6, max_playoffs=4)
         lineup = make_team_lineup()
-        text = render_rules(game, lineup, include_note=False)
-        assert render_rules(game, lineup) == rules.TEAM_GENERATED_NOTE + text
+        text = render_rules(game, lineup)
         assert "6 名玩家分成两个阵营参赛，团队赛：红队有 甲、乙、丙，蓝队有 丁、戊、己。" in text
         assert "阵营总分是 3 名队员的总分之和" in text
         assert "最多加赛 4 局，到上限仍同分时算平局" in text
@@ -100,18 +99,3 @@ class TestRulesText:
         monkeypatch.setattr(rules, attribute, template)
         with pytest.raises(KeyError, match="misspelled_parameter"):
             render_rules(TEST_GAME, lineup)
-
-    def test_runtime_render_does_not_read_generated_document(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(runners, "RULES_PATH", tmp_path / "missing.md")
-        lineup = make_lineup()
-        text = render_rules(TEST_GAME, lineup, include_note=False)
-        system = prompts.build_system_prompt(lineup.profiles[0], lineup, TEST_GAME)
-        assert system.startswith(text)
-
-    def test_check_command_rejects_stale_document_and_keeps_it(self, tmp_path, monkeypatch):
-        document = tmp_path / "RULES.md"
-        document.write_text("过期规则", encoding="utf-8")
-        monkeypatch.setattr(runners, "RULES_PATH", document)
-        monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
-        assert rules_command.main() == 1
-        assert document.read_text(encoding="utf-8") == "过期规则"

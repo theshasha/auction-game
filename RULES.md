@@ -1,4 +1,4 @@
-<!-- 由 RULES.template.md 与本场参数生成；比赛启动自动同步；手动生成：python -m auction_game.cli.rules -->
+<!-- 由 RULES.template.md 按 configs/ 里的生产参数和阵容生成，个人赛启动时自动同步；手动生成：python -m auction_game.cli.rules -->
 【唯一高价拍卖游戏规则】
 
 玩法：每天所有玩家同时秘密出价，没有撞车的最高价赢得当天奖池。同价的出价全部撞车。**获胜和撞车都要全额付款，其余出价全额退还。**

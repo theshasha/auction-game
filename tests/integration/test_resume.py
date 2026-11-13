@@ -1,6 +1,6 @@
-"""中断后续跑：离线假模型赛在各种位置被强关，接着跑完的场次和一口气跑完的相同。"""
+"""中断后续跑：离线假模型赛在各种位置被强关或按 q 退出，接着跑完的场次和一口气跑完的相同。"""
 
-from copy import deepcopy
+import asyncio
 from dataclasses import replace
 from itertools import count
 import json
@@ -9,34 +9,23 @@ import shutil
 import pytest
 
 from auction_game import runners
-from auction_game.cli.offline_demo import generate_demo
-from auction_game.configuration import load_configuration
+from auction_game.cli import offline_demo
+from auction_game.cli.offline_demo import DemoFactory, OfflineController, OfflineTaskRunner, generate_demo
 from auction_game.flow import director as director_module
-from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_output import SUMMARY_TITLE, is_finished
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.resume import (Histories, Killed, KillSwitch, assert_same_run, complete_records, resume_demo,
-                                  start_demo)
+from tests.support.offline import OFFLINE_GAME, configure_offline_demo
+from tests.support.resume import (Histories, Killed, KillSwitch, assert_same_public_files_and_successes,
+                                  assert_same_run, complete_records, resume_demo, start_demo)
 
-# 正赛打平后有一局加赛，各种轮次都会出现。
-GAME = GameSettings(
-    initial_coins=12, daily_salary=6, daily_pool=(3, 3, 3), max_bid=10,
-    super_cost=3, super_bounty=5, super_hit_score=1,
-    regular_matches=3, max_playoffs=5,
-)
 # 一局正赛加一局加赛，各种轮次各出现一次。
-SHORT_GAME = replace(GAME, regular_matches=1)
+SHORT_GAME = replace(OFFLINE_GAME, regular_matches=1)
 
 
-def configure_demo(monkeypatch, config_files, teams_file, team, game=GAME):
-    """离线假模型赛读合成配置：个人赛 4 人，团队赛 6 人；并发为 1，中断位置才确定。返回 generate_demo 的参数。"""
-    config, configs = load_configuration(*config_files, test_model=True, team=team, teams_path=teams_file)
-    config["llm"]["max_concurrency"] = 1
-    if not team:
-        configs = [replace(pc, profile=replace(pc.profile, name=name), identity=replace(pc.identity, name=name))
-                   for name, pc in zip("甲乙丙丁", configs * 2)]
-    monkeypatch.setattr(runners, "load_configuration", lambda **_: deepcopy((config, configs)))
-    monkeypatch.setattr(runners, "load_game_settings", lambda **_: game)
+def configure_demo(monkeypatch, config_files, teams_file, team, game=OFFLINE_GAME, max_concurrency=1):
+    """离线假模型赛读合成配置；并发为 1 时中断位置才确定。返回 generate_demo 的参数。"""
+    config, _ = configure_offline_demo(monkeypatch, config_files, teams_file, team=team, game=game)
+    config["llm"]["max_concurrency"] = max_concurrency
     return {"test_model": True, "team": team}
 
 
@@ -80,6 +69,59 @@ def test_run_killed_every_five_tasks_resumes_to_the_uninterrupted_result(demo, t
             kills += 1
     assert status == 0 and kills > 10
     assert_same_run(run_dir, baseline)
+
+
+@pytest.mark.parametrize("target", [2, 17])
+@pytest.mark.parametrize("team", [False, True], ids=["individual", "team"])
+def test_quit_during_concurrent_round_resumes_to_the_uninterrupted_result(
+        team, target, tmp_path, monkeypatch, config_files, teams_file):
+    """并发跑一轮时按 q：进行中的几个任务都留下取消记录，已成功的结果续跑时沿用。
+
+    第 2 个任务在开局发言轮；第 17 个任务在个人赛第 1 局局末发言轮、团队赛第 1 局开局讨论第 2 轮。
+    """
+    demo = configure_demo(monkeypatch, config_files, teams_file, team, SHORT_GAME, max_concurrency=10)
+    baseline = tmp_path / "baseline"
+    generate_demo(baseline, **demo)
+
+    controllers, started = [], count(1)
+
+    class RecordingController(OfflineController):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            controllers.append(self)
+
+    class QuittingRunner(OfflineTaskRunner):
+        """任务都能收到取消信号；从第 target 个任务起，假模型一直等到被取消，第 target 个任务开始时按 q。"""
+
+        def __call__(self, spec, prompt, history, **kwargs):
+            number = next(started)
+            self.factory.signals, self.factory.hang = controllers[0].signals, number >= target
+            if number == target:
+                controllers[0].offer_command("q")
+            return super().__call__(spec, prompt, history, **kwargs)
+
+    real_stream = DemoFactory.stream
+
+    async def stream(self, messages, info):
+        if self.hang:
+            await asyncio.wait_for(asyncio.Event().wait(), 30)  # 取消没传到时超时报错，不让测试卡住
+        async for part in real_stream(self, messages, info):
+            yield part
+
+    run_dir = tmp_path / "run"
+    with monkeypatch.context() as patch:
+        patch.setattr(offline_demo, "OfflineController", RecordingController)
+        patch.setattr(offline_demo, "OfflineTaskRunner", QuittingRunner)
+        patch.setattr(DemoFactory, "stream", stream)
+        generate_demo(run_dir, **demo)
+    paths = RunPaths(run_dir)
+    statuses = [record["status"] for pc in paths.read_config()["players"]
+                for record in complete_records(paths.player(pc["number"]))[1:]]
+    # 按 q 时还没回完的任务都会被取消，所以第 target 个之前的任务也可能留下取消记录。
+    assert statuses.count("cancelled") >= 2 and set(statuses) <= {"success", "cancelled"}
+
+    assert resume_demo(run_dir, max_concurrency=10) == 0
+    assert_same_public_files_and_successes(run_dir, baseline)
 
 
 @pytest.mark.parametrize("function,fatal_call", [("publish_speeches", 2), ("publish_match", 2), ("record_letters", 4)])

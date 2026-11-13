@@ -94,11 +94,10 @@ def test_generate_and_check_isolated_rules(tmp_path, monkeypatch, capsys, change
     monkeypatch.setattr(sys, "argv", ["rules.py"])
 
     assert rules_command.main() == 0
-    assert document_path.read_text(encoding="utf-8") == (
-        rules.GENERATED_NOTE + "3人：隔离甲、隔离乙、隔离丙\n" + RENDERED_PARAMETERS)
-    assert team_document_path.read_text(encoding="utf-8") == (
-        rules.TEAM_GENERATED_NOTE
-        + "6人分两队：甲队有 隔离甲、隔离乙、隔离丙，乙队有 隔离丁、隔离戊、隔离己，每队 3 人\n" + RENDERED_PARAMETERS)
+    assert document_path.read_text(encoding="utf-8").split("\n", 1)[1] == (
+        "3人：隔离甲、隔离乙、隔离丙\n" + RENDERED_PARAMETERS)
+    assert team_document_path.read_text(encoding="utf-8").split("\n", 1)[1] == (
+        "6人分两队：甲队有 隔离甲、隔离乙、隔离丙，乙队有 隔离丁、隔离戊、隔离己，每队 3 人\n" + RENDERED_PARAMETERS)
     generated = document_path.read_bytes(), team_document_path.read_bytes()
     monkeypatch.setattr(sys, "argv", ["rules.py", "--check"])
     assert rules_command.main() == 0
@@ -155,7 +154,7 @@ def test_all_starts_sync_rules_before_logs_or_models(entry, kwargs, module, boun
         pass
 
     def stop_before_side_effect(*args, **kwargs):
-        assert document.read_text(encoding="utf-8") == rules.render_rules(TEST_GAME, lineup)
+        assert document.read_text(encoding="utf-8") == rules.rules_document(TEST_GAME, lineup, root=True)
         raise StartStopped
 
     monkeypatch.setattr(module, boundary, stop_before_side_effect)

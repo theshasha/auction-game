@@ -3,7 +3,6 @@
 import json
 
 import pytest
-import yaml
 
 from auction_game.cli import check_llm
 from auction_game import runners
@@ -11,13 +10,7 @@ from auction_game.configuration import ConfigurationError, load_configuration, l
 from auction_game.game.lineup import Lineup
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.factories import CHANNELS
-
-
-def rewrite(path, change):
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    change(data)
-    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+from tests.support.factories import CHANNELS, rewrite_yaml
 
 
 def test_defaults_and_preserved_values(config_files):
@@ -33,18 +26,18 @@ def test_defaults_and_preserved_values(config_files):
 
 def test_predicted_win_rate_required_only_when_predictions_enabled(config_files):
     config_path, players_path, _ = config_files
-    rewrite(players_path, lambda data: data["players"][1].pop("predicted_win_rate"))
+    rewrite_yaml(players_path, lambda data: data["players"][1].pop("predicted_win_rate"))
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value) == (f"{players_path}：players[1] 缺少 predicted_win_rate；"
                               f"{config_path} 开启了 prompts.enable_predictions")
-    rewrite(config_path, lambda data: data.update(prompts={"enable_predictions": False}))
+    rewrite_yaml(config_path, lambda data: data.update(prompts={"enable_predictions": False}))
     _, players = load_configuration(*config_files)
     assert [player.profile.predicted_win_rate for player in players] == [23, None]
 
 
 def test_missing_prompt_switch_defaults_to_true(config_files):
-    rewrite(config_files[0], lambda data: data.update(prompts={"enable_predictions": False}))
+    rewrite_yaml(config_files[0], lambda data: data.update(prompts={"enable_predictions": False}))
     config, _ = load_configuration(*config_files)
     assert config["prompts"] == {"enable_predictions": False, "enable_personas": True,
                                  "enable_writing_style": True}
@@ -52,7 +45,7 @@ def test_missing_prompt_switch_defaults_to_true(config_files):
 
 def test_disabled_writing_style_skips_file(config_files, tmp_path):
     (tmp_path / "writing_style.md").unlink()
-    rewrite(config_files[0], lambda data: data.update(prompts={"enable_writing_style": False}))
+    rewrite_yaml(config_files[0], lambda data: data.update(prompts={"enable_writing_style": False}))
     config, _ = load_configuration(*config_files)
     assert config["writing_style"] is None
 
@@ -80,7 +73,7 @@ def test_default_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
     (lambda data: data.update(test_model="missing"), "test_model"),
 ], ids=["prompt-switch", "timeout", "concurrency", "base-url", "test-model"])
 def test_invalid_config_values(config_files, change, field):
-    rewrite(config_files[0], change)
+    rewrite_yaml(config_files[0], change)
     with pytest.raises(ConfigurationError, match=field) as exc:
         load_configuration(*config_files)
     assert str(config_files[0]) in str(exc.value)
@@ -94,7 +87,7 @@ def test_invalid_config_values(config_files, change, field):
 ], ids=["root", "prompts", "llm", "channel"])
 def test_unknown_config_fields_rejected(config_files, change, message):
     config_path = config_files[0]
-    rewrite(config_path, change)
+    rewrite_yaml(config_path, change)
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value) == f"{config_path}：{message}"
@@ -106,7 +99,7 @@ def test_unknown_config_fields_rejected(config_files, change, message):
 ], ids=["root", "llm"])
 def test_resume_settings_reject_unknown_fields(config_files, change, message):
     config_path = config_files[0]
-    rewrite(config_path, change)
+    rewrite_yaml(config_path, change)
     with pytest.raises(ConfigurationError) as exc:
         load_llm_settings(config_path)
     assert str(exc.value) == f"{config_path}：{message}"
@@ -131,7 +124,7 @@ def test_invalid_structure(config_files, file_index, text, field):
 ])
 def test_invalid_player_fields(config_files, field, value):
     players_path = config_files[1]
-    rewrite(players_path, lambda data: data["players"][0].update({field: value}))
+    rewrite_yaml(players_path, lambda data: data["players"][0].update({field: value}))
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(players_path) in str(exc.value)
@@ -139,14 +132,14 @@ def test_invalid_player_fields(config_files, field, value):
 
 
 def test_unknown_player_field_rejected(config_files):
-    rewrite(config_files[1], lambda data: data["players"][0].update(nickname="昵称"))
+    rewrite_yaml(config_files[1], lambda data: data["players"][0].update(nickname="昵称"))
     with pytest.raises(ConfigurationError, match="不支持字段.*nickname"):
         load_configuration(*config_files)
 
 
 def test_lineup_name_replaces_catalog_name_and_keeps_identity(config_files):
     _, original = load_configuration(*config_files)
-    rewrite(config_files[1], lambda data: data["players"][0].update(name="小红"))
+    rewrite_yaml(config_files[1], lambda data: data["players"][0].update(name="小红"))
     _, renamed = load_configuration(*config_files)
     _, testing = load_configuration(*config_files, test_model=True)
     assert [player.profile.name for player in renamed] == [player.profile.name for player in testing] == ["小红", "乙"]
@@ -158,7 +151,7 @@ def test_same_model_plays_twice_with_separate_names(config_files):
         data["players"][0]["name"] = "甲一"
         data["players"].append({**data["players"][0], "name": "甲二"})
 
-    rewrite(config_files[1], add_twin)
+    rewrite_yaml(config_files[1], add_twin)
     _, players = load_configuration(*config_files)
     assert [(player.profile.name, player.identity.key) for player in players] == [
         ("甲一", "first"), ("乙", "second"), ("甲二", "first")]
@@ -166,11 +159,11 @@ def test_same_model_plays_twice_with_separate_names(config_files):
 
 def test_catalog_entry_without_name_needs_lineup_name(config_files):
     players_path = config_files[1]
-    rewrite(players_path, lambda data: data["players"][1].update(model="substitute"))
+    rewrite_yaml(players_path, lambda data: data["players"][1].update(model="substitute"))
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert f"{players_path}：players[1] 没有名字：在这里写 name，或给 models.substitute 加 name" == str(exc.value)
-    rewrite(players_path, lambda data: data["players"][1].update(name="丙"))
+    rewrite_yaml(players_path, lambda data: data["players"][1].update(name="丙"))
     _, players = load_configuration(*config_files)
     assert (players[1].profile.name, players[1].identity.key) == ("丙", "substitute")
 
@@ -190,7 +183,7 @@ def test_catalog_entry_without_name_needs_lineup_name(config_files):
 ])
 def test_invalid_lineup_names(config_files, name, reason):
     players_path = config_files[1]
-    rewrite(players_path, lambda data: data["players"][0].update(name=name))
+    rewrite_yaml(players_path, lambda data: data["players"][0].update(name=name))
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value).startswith(f"{players_path}：players[0].name {reason}")
@@ -203,11 +196,11 @@ def test_catalog_name_is_checked_only_when_used(config_files):
         data["models"]["second"]["name"] = "乙 二"
         data["models"]["substitute"]["name"] = "<替身>"
 
-    rewrite(models_path, rename)
+    rewrite_yaml(models_path, rename)
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value) == f"{players_path}：players[1] 的名字取自 models.second.name，不能含空白和 <、>、/：'乙 二'"
-    rewrite(players_path, lambda data: data["players"][1].update(name="乙二"))
+    rewrite_yaml(players_path, lambda data: data["players"][1].update(name="乙二"))
     _, players = load_configuration(*config_files)
     assert [player.profile.name for player in players] == ["甲", "乙二"]
 
@@ -218,7 +211,7 @@ def test_catalog_name_is_checked_only_when_used(config_files):
 ], ids=["catalog", "lineup"])
 def test_duplicate_names(config_files, file_index, change):
     players_path = config_files[1]
-    rewrite(config_files[file_index], change)
+    rewrite_yaml(config_files[file_index], change)
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value) == f"{players_path}：players[1] 名字重复：'甲'；同一个模型放多名玩家时，给每人写 name"
@@ -254,7 +247,7 @@ def test_team_test_model_replaces_only_execution(config_files, teams_file):
 ], ids=["one-team", "three-teams", "two-players", "empty-team-name", "duplicate-team-name", "unknown-team-field",
         "prediction", "duplicate-player-name"])
 def test_invalid_teams(config_files, teams_file, change, message):
-    rewrite(teams_file, change)
+    rewrite_yaml(teams_file, change)
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files, team=True, teams_path=teams_file)
     assert str(exc.value).startswith(f"{teams_file}：{message}")
@@ -268,20 +261,20 @@ def test_default_teams_file_has_two_teams_of_three():
 @pytest.mark.parametrize("field", ["reasoning_efort", "key"])
 def test_unknown_catalog_field_rejected(config_files, field):
     models_path = config_files[2]
-    rewrite(models_path, lambda data: data["models"]["first"].update({field: "low"}))
+    rewrite_yaml(models_path, lambda data: data["models"]["first"].update({field: "low"}))
     with pytest.raises(ConfigurationError) as exc:
         load_configuration(*config_files)
     assert str(exc.value) == f"{models_path}：models.first 不支持字段：{field}"
 
 
 def test_invalid_catalog_protocol(config_files):
-    rewrite(config_files[2], lambda data: data["models"]["first"].update(protocol="invalid"))
+    rewrite_yaml(config_files[2], lambda data: data["models"]["first"].update(protocol="invalid"))
     with pytest.raises(ConfigurationError, match="models.first.protocol"):
         load_configuration(*config_files)
 
 
 def test_unknown_channel(config_files):
-    rewrite(config_files[2], lambda data: data["models"]["first"].update(provider="missing"))
+    rewrite_yaml(config_files[2], lambda data: data["models"]["first"].update(provider="missing"))
     with pytest.raises(ConfigurationError, match=r"models.first.provider.*未知渠道"):
         load_configuration(*config_files)
 
@@ -314,11 +307,11 @@ def test_entries_report_configuration_errors(config_files, monkeypatch, capsys, 
 @pytest.mark.parametrize("test_key", ["substitute", "first"])
 def test_test_model_replaces_entire_execution_without_changing_identity(config_files, test_key):
     config_path, _, models_path = config_files
-    rewrite(models_path, lambda data: data["models"]["substitute"].update(reasoning_effort="low"))
+    rewrite_yaml(models_path, lambda data: data["models"]["substitute"].update(reasoning_effort="low"))
     # 先加载带 low 覆盖的替身，再切换目录键，检查旧配置不污染下一次启动。
     assert load_configuration(*config_files, test_model=True)[1][0].execution.model_settings == {
         "openai_reasoning_effort": "low"}
-    rewrite(config_path, lambda data: data.update(test_model=test_key))
+    rewrite_yaml(config_path, lambda data: data.update(test_model=test_key))
     config, regular = load_configuration(*config_files)
     _, testing = load_configuration(*config_files, test_model=True)
     target = config["models"][config["test_model"]]
@@ -332,7 +325,7 @@ def test_test_model_replaces_entire_execution_without_changing_identity(config_f
 
 
 def test_team_entry_reports_teams_errors_before_logs(config_files, teams_file, monkeypatch, capsys):
-    rewrite(teams_file, lambda data: data["teams"].pop())
+    rewrite_yaml(teams_file, lambda data: data["teams"].pop())
     monkeypatch.setattr(runners, "load_configuration",
                         lambda **kwargs: load_configuration(*config_files, teams_path=teams_file, **kwargs))
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: pytest.fail("配置错误时不应创建客户端"))
@@ -389,10 +382,7 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
     for entry in snapshot["models"].values():
         entry["limit"]["output"] = None
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
-    config_path = config_files[0]
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config["llm"].update(max_concurrency=3, timeout_seconds=7)
-    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    rewrite_yaml(config_files[0], lambda config: config["llm"].update(max_concurrency=3, timeout_seconds=7))
     factories = []
     monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: factories.append(kwargs))
