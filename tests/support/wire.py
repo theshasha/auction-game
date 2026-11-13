@@ -142,7 +142,7 @@ class Harness:
         data, options = item
         options = dict(options)
         broken = options.pop("broken", False)
-        chunks = options.pop("chunks", None) or sse(self.protocol, data, **options)
+        chunks = options.pop("chunks") if "chunks" in options else sse(self.protocol, data, **options)
         if broken and self.protocol == "chat":
             # SDK 把 [DONE] 当作正常结束，要在它之前中断。
             chunks = chunks[:-1]

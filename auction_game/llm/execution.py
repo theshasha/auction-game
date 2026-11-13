@@ -6,13 +6,12 @@ import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
 
-import httpx2 as http
 import pydantic_ai
 from pydantic_ai import Agent, capture_run_messages
-from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelResponse
 
-from auction_game.llm.client import POLL_SECONDS, IncompleteStream, ModelFactory
+from auction_game.llm.client import POLL_SECONDS, REQUEST_ERRORS, ModelFactory
 
 # 终端输出由比赛自己安排；pydantic-ai 默认在第一次运行 Agent 时向终端打印一段横幅。
 pydantic_ai.BANNER_ENABLED = False
@@ -91,8 +90,7 @@ class AgentExecutor:
                 except asyncio.CancelledError:
                     raise TaskCancelledError(messages=_audit(captured),
                                              request_errors=model.request_errors) from None
-                except (ModelAPIError, UnexpectedModelBehavior, UsageLimitExceeded, IncompleteStream,
-                        http.TransportError) as exc:
+                except (*REQUEST_ERRORS, UnexpectedModelBehavior, UsageLimitExceeded) as exc:
                     error_type = OutputFailedError if isinstance(exc, (UnexpectedModelBehavior, UsageLimitExceeded)) else CallFailedError
                     raise error_type(f"{type(exc).__name__}: {exc}", messages=_audit(captured),
                                      request_errors=model.request_errors) from exc

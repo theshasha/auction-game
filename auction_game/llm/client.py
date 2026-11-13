@@ -15,7 +15,7 @@ from anthropic.types.beta import BetaRawMessageDeltaEvent
 import anthropic
 from openai import AsyncOpenAI
 import openai
-from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.models import CompletedStreamedResponse
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
@@ -26,10 +26,10 @@ from auction_game.paths import ENV_PATH
 
 
 class IncompleteStream(RuntimeError):
-    """输出截断或缺少成功结束标记。"""
+    """输出截断、流为空或缺少成功结束标记。"""
 
 
-# 请求失败的异常：HTTP 错误、SDK 调用错误、网络错误、截断或未正常结束的流。其余异常是程序错误。
+# 请求失败的异常：HTTP 错误、SDK 调用错误、网络错误、截断、为空或未正常结束的流。其余异常是程序错误。
 REQUEST_ERRORS = (ModelAPIError, IncompleteStream, openai.APIError, anthropic.APIError, http.TransportError)
 POLL_SECONDS = 0.1
 
@@ -100,12 +100,16 @@ class BufferedRequest(WrapperModel):
         request_number = self._request_number
         for attempt in range(1, self.attempts + 1):
             try:
-                async with self.wrapped.request_stream(
-                    messages, model_settings, model_request_parameters, run_context
-                ) as stream:
-                    async for _ in stream:
-                        pass
-                    response = stream.get()
+                try:
+                    async with self.wrapped.request_stream(
+                        messages, model_settings, model_request_parameters, run_context
+                    ) as stream:
+                        async for _ in stream:
+                            pass
+                        response = stream.get()
+                except UnexpectedModelBehavior as exc:
+                    # SDK 收到空流或拼接不上的流事件时抛出。输出校验的同类异常在 Agent 图里抛出，不经过这里。
+                    raise IncompleteStream(str(exc)) from exc
                 if response.finish_reason != "stop":
                     raise IncompleteStream(f"finish_reason={response.finish_reason!r}")
                 break

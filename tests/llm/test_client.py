@@ -1,12 +1,15 @@
 """生产 TaskRunner 的 HTTP 异常分类、流隔离与客户端生命周期。"""
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from copy import deepcopy
 import json
 import threading
 import time
 
+import httpx2 as http
+import openai
 import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter, TextPart
 from pydantic_ai.models.function import FunctionModel
@@ -59,6 +62,38 @@ def test_anthropic_delta_without_usage_is_resent(tmp_path):
     errors = task_entries(player.log.path)[-1]["request_errors"]
     assert [(e["request"], e["attempt"], e["type"]) for e in errors] == [(1, 1, "IncompleteStream")]
     assert h.closes == 1 and all(s.closed for s in h.streams)
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_empty_stream_is_resent(protocol, tmp_path):
+    empty = [b"data: [DONE]\n\n"] if protocol == "chat" else []
+    h = Harness(protocol, [empty, reply()])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
+    assert len(h.requests) == 2 and h.requests[0][1] == h.requests[1][1]
+    errors = task_entries(player.log.path)[-1]["request_errors"]
+    assert [(e["request"], e["attempt"], e["type"]) for e in errors] == [(1, 1, "IncompleteStream")]
+    assert h.closes == 1 and all(s.closed for s in h.streams)
+
+
+def test_sdk_error_after_resends_is_request_failure():
+    """SDK 原生异常没被 pydantic-ai 包装时，重发用完后仍按请求失败处理，带上每次的错误。"""
+    async def stream(messages, info):
+        raise openai.APIError("relay broke", request=http.Request("POST", "https://offline.invalid"), body=None)
+        yield ""
+
+    class Factory:
+        signals = None
+        settings = {}
+
+        @asynccontextmanager
+        async def open(self):
+            yield BufferedRequest(FunctionModel(stream_function=stream), attempts=2, retry_delay=0, signals=None)
+
+    with pytest.raises(CallFailedError) as caught:
+        TaskRunner(Factory())(TASKS["summary"], "ping", [], game=TEST_GAME)
+    assert type(caught.value) is CallFailedError
+    assert [(e["attempt"], e["type"]) for e in caught.value.request_errors] == [(1, "APIError"), (2, "APIError")]
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
