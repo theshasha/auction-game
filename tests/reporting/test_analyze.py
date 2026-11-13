@@ -6,7 +6,8 @@ from dataclasses import replace
 
 import pytest
 
-from auction_game.reporting.analyze import (collect_player_stats, collect_run_stats, collect_team_stats,
+from auction_game.agent.tasks import TASKS
+from auction_game.reporting.analyze import (TASK_LABELS, collect_player_stats, collect_run_stats, collect_team_stats,
                                              find_latest_ai_run, load_match_logs)
 from tests.support.analyze_runs import (ANALYZE_GAME, make_match_1, make_match_2, make_matches, make_team_match,
                                         write_matches)
@@ -163,7 +164,7 @@ def test_super_result_days_do_not_simulate_future():
     ("ai-test", "ai"), ("ai", "ai-test"), ("team", "ai"), ("team-test", "team"), ("ai", "team-test"),
 ])
 def test_default_analysis_selects_latest_real_ai(tmp_path, monkeypatch, latest_type, older_type):
-    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
     write_matches(tmp_path / f"20261016_110000_{older_type}", make_matches(), run_type=older_type)
     latest = tmp_path / f"20261016_120000_{latest_type}"
     write_matches(latest, make_matches(), run_type=latest_type)
@@ -176,18 +177,22 @@ def test_default_analysis_selects_latest_real_ai(tmp_path, monkeypatch, latest_t
 
 @pytest.mark.parametrize("run_type", ["ai", "ai-test"])
 def test_default_analysis_orders_collision_suffix_numerically(tmp_path, monkeypatch, run_type):
-    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
     for suffix in ("", "_2", "_10"):
         write_matches(tmp_path / f"20261016_120000_{run_type}{suffix}", make_matches(), run_type=run_type)
     assert find_latest_ai_run() == tmp_path / f"20261016_120000_{run_type}_10"
 
 
 def test_default_analysis_rejects_only_offline(tmp_path, monkeypatch):
-    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
     write_matches(tmp_path / "20261016_120000_offline", make_matches())
     write_matches(tmp_path / "20261016_120000_team-offline", make_matches(), run_type="team-offline")
-    with pytest.raises(SystemExit, match="没有.*ai、ai-test、team、team-test"):
+    with pytest.raises(ValueError, match="没有.*ai、ai-test、team、team-test"):
         find_latest_ai_run()
+
+
+def test_usage_by_task_has_a_label_for_every_task():
+    assert set(TASK_LABELS) == set(TASKS)
 
 
 def test_team_stats_count_collisions_and_teammate_only_misses():

@@ -17,6 +17,17 @@ class ResumeError(Exception):
     """这场比赛续不上：场次还没开始，或日志和这次重走流程的结果对不上。"""
 
 
+def read_records(path: Path) -> tuple[list[dict], int]:
+    """任务日志里写完整的记录和它们占的字节数。
+
+    末尾没有换行符的半行是强关时没写完的，或者比赛正在写，不算记录。
+    """
+    data = path.read_bytes()
+    complete = data[:data.rfind(b"\n") + 1]
+    # 按 \n 切：JSON 字符串里可以有 U+2028 这类 splitlines 也会切开的字符。
+    return [json.loads(line) for line in complete.decode("utf-8").split("\n") if line.strip()], len(complete)
+
+
 def logged_inputs(entry: dict) -> list[str]:
     """任务记录里发给模型的输入原文；成功记录只有一条，是当次的完整请求文本。"""
     return [part["content"] for message in entry["messages"] for part in message["parts"]
@@ -106,13 +117,10 @@ class AgentLog:
     def open(cls, name: str, path: Path, *, readable_path: Path) -> AgentLog:
         """打开已有日志用于续跑：成功记录排队待取用，任务编号、标题和补跑关联接着原来的算。
 
-        末尾没有换行符的半行是强关时没写完的，不算记录。这里不改文件，restore_files 才截掉半行、重写可读日志。
+        这里不改文件，restore_files 才截掉末尾的半行、重写可读日志。
         """
         log = cls(name, path, readable_path=readable_path)
-        data = path.read_bytes() if path.exists() else b""
-        complete = data[:data.rfind(b"\n") + 1]
-        # 按 \n 切：JSON 字符串里可以有 U+2028 这类 splitlines 也会切开的字符。
-        records = [json.loads(line) for line in complete.decode("utf-8").split("\n") if line.strip()]
+        records, size = read_records(path) if path.exists() else ([], 0)
         if not records:
             raise ResumeError(f"{name} 的任务日志里还没有系统提示：这场还没开始，请重新开一场。")
         log.system_text = records[0]["content"]
@@ -125,7 +133,7 @@ class AgentLog:
                                                   log._titles.get(entry["previous_task"]), result))
             if entry["status"] == "success":
                 log._recorded.append(entry)
-        log._restore = len(complete), "".join(markdown)
+        log._restore = size, "".join(markdown)
         return log
 
     def next_recorded(self) -> dict | None:

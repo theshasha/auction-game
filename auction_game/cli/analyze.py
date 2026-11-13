@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections import Counter
 from pathlib import Path
 import sys
@@ -15,6 +16,7 @@ from auction_game.game.engine import team_standings
 from auction_game.game.models import StandingsEntry
 from auction_game.reporting.analyze import (TASK_LABELS, collect_player_stats, collect_run_stats, collect_team_stats,
                                             collect_usage, find_latest_ai_run, load_match_logs, match_setup)
+from auction_game.reporting.run_output import is_finished
 from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TYPES
 
 
@@ -90,7 +92,7 @@ def print_usage(usage: dict) -> None:
         print(f"  {name}：{_usage_text(totals)}")
     print("  按任务：")
     for task, totals in usage["tasks"].items():
-        line = f"  {TASK_LABELS[task]}：{_usage_text(totals)}"
+        line = f"    {TASK_LABELS[task]}：{_usage_text(totals)}"
         if task in usage["largest_inputs"]:
             tokens, name, context = usage["largest_inputs"][task]
             line += f"；最大单次输入 {tokens:,}，来自 {name} {context}"
@@ -120,7 +122,8 @@ def analyze(run_dir: Path) -> None:
     print(f"玩家：{'、'.join(player_names)}")
     playoff_count = run_stats["playoff_count"]
     total_days, void_days = run_stats["total_days"], run_stats["void_days"]
-    print(f"局数：{len(matches)}（正赛 {len(matches) - playoff_count} + 加赛 {playoff_count}）")
+    unfinished = "" if is_finished(RunPaths(run_dir)) else f"；未完赛，只统计已结束的 {len(matches)} 局"
+    print(f"局数：{len(matches)}（正赛 {len(matches) - playoff_count} + 加赛 {playoff_count}）{unfinished}")
     print(f"总拍卖天数：{total_days}，其中流局 {void_days} 天（{void_days / total_days:.1%}）")
     print()
     print_team_sections(snapshot, matches, player_stats["match_labels"])
@@ -156,7 +159,7 @@ def analyze(run_dir: Path) -> None:
         print(f"  全天总体：平均 {sum(all_bids) / len(all_bids):.2f}（{len(all_bids)} 笔）")
     winning_bids = run_stats["winning_bids"]
     if winning_bids:
-        win_dist = dict(sorted(Counter(winning_bids).items()))
+        win_dist = "、".join(f"{bid} 金币 {days} 天" for bid, days in sorted(Counter(winning_bids).items()))
         print(f"  获胜价平均：{sum(winning_bids) / len(winning_bids):.2f}（{len(winning_bids)} 个获胜日）")
         print(f"  获胜价分布：{win_dist}")
         print(f"  获胜价={game.max_bid}（出价上限）占比 {run_stats['cap_wins'] / len(winning_bids):.1%}")
@@ -175,9 +178,12 @@ def analyze(run_dir: Path) -> None:
 
 
 def main() -> None:
-    run_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else find_latest_ai_run()
+    parser = argparse.ArgumentParser(description="打印一场比赛的统计")
+    parser.add_argument("run_dir", nargs="?", type=Path,
+                        help="场次目录；不传时选最新的、至少完成一局的真实 AI 场次，离线赛要传目录")
+    args = parser.parse_args()
     try:
-        analyze(run_dir)
+        analyze(args.run_dir or find_latest_ai_run())
     except (OSError, ValueError) as exc:
         sys.exit(str(exc))
 

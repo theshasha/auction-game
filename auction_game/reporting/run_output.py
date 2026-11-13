@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 
 from auction_game.game.engine import team_standings
 from auction_game.game.models import MatchLog, StandingsEntry
 from auction_game.game.tables import render_match_log, render_standings
-from auction_game.paths import LOG_DIR
-from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TYPES
+from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, REAL_RUN_TYPES, RUN_TYPES, RunPaths, find_runs
 
 # 节标题是写信的环节，说明送达时机，免得读成收信的时候。
 LETTERS_HEADER = "# 私信\n\n每节是这一环节里写的信，收件人在下一次行动时收到。\n"
@@ -20,26 +17,6 @@ TEAM_LETTERS_HEADER = "# 队内信件区\n\n每节是这一环节里写到队内
 MATCHES_HEADER = "# 逐局结果\n\n[本场规则](RULES.md)\n"
 # 一场比赛最后一轮的标题；speeches.md 里有这一节，这场就打完了。
 SUMMARY_TITLE = "观众总结（仅观众可见）"
-# make_run_dir 给真实 AI 场次起的目录名：时间戳、赛制，同名时的序号。
-REAL_RUN_DIR = re.compile(r"^(\d{8}_\d{6})_(?:ai|team)(?:-test)?(?:_(\d+))?$")
-
-
-def make_run_dir(mode: str) -> Path:
-    """为本场运行创建独立日志目录 logs/<时间戳>_<模式>/，同名时加后缀。"""
-    base_name = f"{datetime.now():%Y%m%d_%H%M%S}_{mode}"
-    run_dir = LOG_DIR / base_name
-    suffix = 2
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    while True:
-        try:
-            run_dir.mkdir()
-            break
-        except FileExistsError:
-            run_dir = LOG_DIR / f"{base_name}_{suffix}"
-            suffix += 1
-
-    print(f"本场日志目录：{run_dir}")
-    return run_dir
 
 
 def publish_match(paths: RunPaths, log: MatchLog, standings: list[StandingsEntry], *, quiet: bool = False) -> None:
@@ -61,7 +38,7 @@ def publish_match(paths: RunPaths, log: MatchLog, standings: list[StandingsEntry
         f"截至本局的累计排名：\n\n{render_standings(standings)}\n"
     )
     _append(paths.matches_report, text)
-    write_readme(paths, standings)
+    write_readme(paths)
     if not quiet:
         print(f"第 {log.match_index} 局结束（{kind}），日志已写入 {paths.matches_report}")
 
@@ -73,7 +50,10 @@ def _speeches_heading(title: str) -> str:
 def publish_speeches(paths: RunPaths, title: str, speeches: dict[str, str], *, quiet: bool = False) -> None:
     """公开发言按配置中的玩家顺序追加到 speeches.md，并打印到终端；quiet 时只写文件：续跑补写已有的发言。"""
     text = "\n".join([_speeches_heading(title), *(f"【{name}】{speech}" for name, speech in speeches.items())])
+    created = not paths.speeches.exists()
     _append(paths.speeches, text + "\n")
+    if created:
+        write_readme(paths)
     if not quiet:
         print(text)
 
@@ -82,24 +62,28 @@ def is_finished(paths: RunPaths) -> bool:
     """这场是否打完：观众总结是最后写的内容。
 
     不看任务日志：最后一轮全员成功、还没发布就被关掉的场次，任务日志是全的，续跑要补上这一节和最终结果。
+    按字节找标题：断电时文件可能截在汉字中间。
     """
-    return paths.speeches.exists() and _speeches_heading(SUMMARY_TITLE) in paths.speeches.read_text(encoding="utf-8")
+    return (paths.speeches.exists()
+            and _speeches_heading(SUMMARY_TITLE).encode("utf-8") in paths.speeches.read_bytes())
 
 
 def find_unfinished_run() -> Path | None:
     """logs/ 下最新一场没打完的真实 AI 场次，没有时为 None；离线赛、归档目录和还没写快照的空场次不算。"""
-    runs = []
-    for path in LOG_DIR.iterdir() if LOG_DIR.exists() else ():
-        match = REAL_RUN_DIR.match(path.name)
-        if match and RunPaths(path).config.exists() and not is_finished(RunPaths(path)):
-            runs.append(((match[1], int(match[2] or 1)), path))
-    return max(runs)[1] if runs else None
+    runs = [path for path in find_runs(REAL_RUN_TYPES)
+            if RunPaths(path).config.exists() and not is_finished(RunPaths(path))]
+    return runs[-1] if runs else None
 
 
 def reset_reports(paths: RunPaths) -> None:
-    """续跑补写之前把公开发言、信和逐局结果清回开场时的样子；局日志 JSON 和 README 补写时整份覆盖。"""
+    """续跑补写之前把公开发言、信、逐局结果和局日志 JSON 清回开场时的样子；README 补写时整份覆盖。
+
+    局日志 JSON 也清掉：强关可能留下写了一半的，补写 README 时会读最新一局的排名。
+    """
     paths.speeches.unlink(missing_ok=True)
     paths.letters.unlink(missing_ok=True)
+    for path in (paths.data / "matches").glob("*.json"):
+        path.unlink()
     paths.matches_report.write_text(MATCHES_HEADER, encoding="utf-8")
 
 
@@ -112,7 +96,11 @@ def record_letters(paths: RunPaths, title: str, letters: list[tuple[str, str, st
         return
     text = f"\n## {title}\n\n" + "\n\n".join(f"【{sender} → {to}】{body}" for sender, to, body in letters) + "\n"
     header = TEAM_LETTERS_HEADER if team else LETTERS_HEADER
-    _append(paths.letters, text if paths.letters.exists() else header + text)
+    if paths.letters.exists():
+        _append(paths.letters, text)
+    else:
+        _append(paths.letters, header + text)
+        write_readme(paths)
 
 
 def _append(path: Path, text: str) -> None:
@@ -134,9 +122,13 @@ def initialize_run(run_dir, snapshot, rules):
     return paths
 
 
-def write_readme(paths, standings=None):
-    """团队赛看快照里玩家的 team：标题写团队赛，私人对话按阵营分组。"""
+def write_readme(paths):
+    """按场次里现有的文件重写 README，只链接已经写出的文件；排名取自最新一局的日志。
+
+    团队赛看快照里玩家的 team：标题写团队赛，私人对话按阵营分组。
+    """
     config = paths.read_config()
+    match_files = sorted((paths.data / "matches").glob("*.json"))
     team = any(pc["team"] for pc in config["players"])
     if config["run_type"] in OFFLINE_RUN_TYPES:
         model_note = "全员使用假模型，无真实调用。"
@@ -153,7 +145,9 @@ def write_readme(paths, standings=None):
     if paths.letters.exists():
         lines.append("[队内信件区](letters.md)" if team else "[私信](letters.md)")
     lines.append("[逐局结果](matches.md)")
-    if standings is not None:
+    if match_files:
+        latest = json.loads(match_files[-1].read_text(encoding="utf-8"))
+        standings = [StandingsEntry(**entry) for entry in latest["standings_after_match"]]
         lines.extend(["## 截至当前的结果", render_standings(standings)])
     private = [pc for pc in config["players"] if paths.player(pc["number"], readable=True).exists()]
     if private:
@@ -194,12 +188,14 @@ def print_day_result(log: MatchLog, standings: list[StandingsEntry]) -> None:
 
 
 def print_final_result(result) -> None:
-    """团队赛宣布获胜阵营；结束时两个阵营仍同分，只会是加赛到了上限，算平局。"""
+    """团队赛宣布获胜阵营；结束时两个阵营仍同分，算平局。"""
     regular_count = sum(not log.is_playoff for log in result.match_logs)
     print(f"\n共进行 {len(result.match_logs)} 局（正赛 {regular_count} 局 + 加赛 {result.playoff_count} 局）")
     teams = team_standings(result.final_standings)
     if result.playoff_cap_hit:
-        print("加赛已达上限，保留并列冠军。" if teams is None else "加赛已达上限，算平局。")
+        # 一局没加就并列结束，只会是 max_playoffs 为 0。
+        reason = "加赛已达上限" if result.playoff_count else "不设加赛"
+        print(f"{reason}，保留并列冠军。" if teams is None else f"{reason}，算平局。")
     print("\n===== 最终排名 =====")
     print(render_standings(result.final_standings))
     if teams is not None:

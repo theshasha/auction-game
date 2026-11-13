@@ -43,5 +43,5 @@ class TournamentResult:
 
     @property
     def playoff_cap_hit(self) -> bool:
-        """比赛结束时第一名仍并列，只会是加赛到了上限：个人赛保留并列冠军，团队赛算平局。"""
+        """比赛结束时第一名仍并列，是加赛到了上限或 max_playoffs 为 0：个人赛保留并列冠军，团队赛算平局。"""
         return first_place_tied(ranking(self.final_standings))

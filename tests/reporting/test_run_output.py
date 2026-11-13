@@ -13,6 +13,7 @@ from auction_game.game.engine import compute_standings
 from auction_game.game.models import MatchLog
 from auction_game.game.rules import render_rules
 from auction_game.reporting import run_output
+from auction_game.reporting import run_paths
 from auction_game.reporting.run_output import (SUMMARY_TITLE, find_unfinished_run, initialize_run, is_finished,
                                                print_day_result, print_final_result, publish_match, publish_speeches,
                                                record_letters, reset_reports, write_readme)
@@ -81,6 +82,16 @@ def test_final_result_counts_actual_regular_matches_and_reports_scores(capsys, t
         assert "加赛已达上限" not in output
 
 
+@pytest.mark.parametrize("team_of,expected", [(None, "不设加赛，保留并列冠军。"), (TEAM_OF, "不设加赛，算平局。")])
+def test_final_result_tied_without_any_playoff_says_there_are_none(capsys, team_of, expected):
+    standings = make_standings({name: [0] for name in NAMES}, team_of=team_of)
+    result = SimpleNamespace(match_logs=[SimpleNamespace(is_playoff=False)], playoff_count=0,
+                             playoff_cap_hit=True, final_standings=standings)
+    print_final_result(result)
+    output = capsys.readouterr().out
+    assert expected in output and "加赛已达上限" not in output
+
+
 def test_daily_report_lists_team_totals_before_players(capsys):
     # 甲以 5 获胜：红队 4 分，蓝队 0 分。
     log = make_log(days=[make_day(1, [5, 4, 3, 2, 1, 0], pool=4, team_of=TEAM_OF)])
@@ -94,8 +105,8 @@ def test_final_result_announces_winning_team_or_draw(capsys, cap_hit):
     # 红队甲 3、乙 1；蓝队丁 2，己 1 或 2。
     standings = make_standings({name: [0] for name in NAMES}, team_of=TEAM_OF,
                                scores_history=dict(zip(NAMES, [[3], [1], [0], [2], [0], [2 if cap_hit else 1]])))
-    result = SimpleNamespace(match_logs=[SimpleNamespace(is_playoff=False)], playoff_count=0,
-                             playoff_cap_hit=cap_hit, final_standings=standings)
+    result = SimpleNamespace(match_logs=[SimpleNamespace(is_playoff=value) for value in (False, True)],
+                             playoff_count=1, playoff_cap_hit=cap_hit, final_standings=standings)
     print_final_result(result)
     output = capsys.readouterr().out
     assert tables.render_standings(standings) in output
@@ -145,7 +156,7 @@ def test_team_readme_title_and_private_links_grouped_by_team(tmp_path):
     assert "\n[队内信件区](letters.md)\n" in (paths.root / "README.md").read_text(encoding="utf-8")
 
 
-def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):
+def test_readme_links_speeches_and_letters_once_they_are_written(tmp_path):
     paths = initialize_run(
         tmp_path / "run",
         {"run_type": "offline", "mode": "regular", "game": TEST_GAME.to_dict(),
@@ -155,10 +166,16 @@ def test_readme_links_speeches_and_letters_once_they_exist(tmp_path):
     readme = paths.root / "README.md"
     assert "speeches.md" not in readme.read_text(encoding="utf-8")
     assert "letters.md" not in readme.read_text(encoding="utf-8")
-    paths.speeches.write_text("发言", encoding="utf-8")
-    paths.letters.write_text("私信", encoding="utf-8")
-    write_readme(paths)
-    assert "[公开发言](speeches.md)\n\n[私信](letters.md)\n\n[逐局结果](matches.md)" in readme.read_text(encoding="utf-8")
+    publish_speeches(paths, "开局发言", {"甲": "发言"}, quiet=True)
+    assert "[公开发言](speeches.md)\n\n[逐局结果](matches.md)" in readme.read_text(encoding="utf-8")
+    # 第一封信在第 1 局结束后才写，README 里的排名留着。
+    log = run_one_match({name: lambda obs: 0 for name in NAMES})
+    standings = compute_standings(NAMES, [log])
+    publish_match(paths, log, standings, quiet=True)
+    record_letters(paths, "第 1 局局末发言", [("甲", "乙", "信")])
+    text = readme.read_text(encoding="utf-8")
+    assert "[公开发言](speeches.md)\n\n[私信](letters.md)\n\n[逐局结果](matches.md)" in text
+    assert text.endswith(f"## 截至当前的结果\n\n{tables.render_standings(standings)}\n")
 
 
 def test_each_match_appends_its_section_to_one_report_in_order(tmp_path):
@@ -267,6 +284,16 @@ def test_run_is_finished_once_the_audience_summary_is_published(tmp_path, capsys
     assert "===== 最终感言 =====" in output and f"===== {SUMMARY_TITLE} =====" not in output
 
 
+def test_speeches_cut_inside_a_character_are_still_read(tmp_path):
+    paths = started_run(tmp_path / "run")
+    publish_speeches(paths, "最终感言", {"甲": "感言"}, quiet=True)
+    with paths.speeches.open("ab") as file:
+        file.write(f"\n===== {SUMMARY_TITLE} =====\n【甲】总结".encode("utf-8")[:-1])
+    assert is_finished(paths)
+    paths.speeches.write_bytes("\n===== 最终感言 =====\n【甲】感言".encode("utf-8")[:-1])
+    assert not is_finished(paths)
+
+
 def test_reset_reports_returns_public_files_to_the_start_of_the_run(tmp_path):
     paths = started_run(tmp_path / "run")
     empty_report = paths.matches_report.read_bytes()
@@ -275,13 +302,16 @@ def test_reset_reports_returns_public_files_to_the_start_of_the_run(tmp_path):
     log = run_one_match({name: lambda obs: 0 for name in NAMES})
     publish_match(paths, log, compute_standings(NAMES, [log]), quiet=True)
     assert paths.matches_report.read_bytes() != empty_report
+    # 强关停在写局日志 JSON 的时候。
+    paths.match(1).write_bytes(paths.match(1).read_bytes()[:10])
     reset_reports(paths)
-    assert not paths.speeches.exists() and not paths.letters.exists()
+    assert not paths.speeches.exists() and not paths.letters.exists() and not paths.match(1).exists()
     assert paths.matches_report.read_bytes() == empty_report
+    publish_speeches(paths, "开局发言", {"甲": "发言"}, quiet=True)
 
 
 def test_latest_unfinished_real_run_is_found_among_finished_offline_and_archived_ones(tmp_path, monkeypatch):
-    monkeypatch.setattr(run_output, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(run_paths, "LOG_DIR", tmp_path)
     assert find_unfinished_run() is None
 
     def run(name, done):

@@ -12,9 +12,9 @@ from auction_game.agent import prompts
 from auction_game.llm.execution import OutputFailedError
 from auction_game.agent.tasks import TASKS, TaskRunner
 from auction_game.flow.director import AIDirector
-from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, make_ai_obs,
-                                     make_log, make_logs, make_player, make_standings, request_text, speech_reply,
-                                     task_entries)
+from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, init_run_dir,
+                                     make_ai_obs, make_log, make_logs, make_player, make_standings, request_text,
+                                     speech_reply, task_entries)
 from tests.support.wire import Harness, PROTOCOLS, reply
 
 
@@ -181,10 +181,11 @@ def test_failed_memory_keeps_context_and_memories(tmp_path):
 def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path, match_index, playoff):
     game = replace(TEST_GAME, initial_coins=13, daily_pool=(2, 1, 3), max_bid=9,
                    super_hit_score=2, regular_matches=2)
+    run_dir = init_run_dir(tmp_path, ["Alpha", "Bravo"])
     players = []
     for name in ("Alpha", "Bravo"):
         def memory(messages, name=name):
-            public_log = (tmp_path / "speeches.md").read_text(encoding="utf-8")
+            public_log = (run_dir / "speeches.md").read_text(encoding="utf-8")
             assert "public-Alpha" in public_log and "public-Bravo" in public_log
             text = encoded(messages)
             assert "public-Alpha" in text and "public-Bravo" in text
@@ -197,7 +198,7 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
             return {"memory": "private-" + name}
         players.append(make_player(fake_task_runner([speech_reply("public-" + name), memory, bid_reply(1, 6)]),
                                    tmp_path / name, game=game, name=name))
-    director = AIDirector(players, continuous_controller(), tmp_path, game=players[0].game)
+    director = AIDirector(players, continuous_controller(), run_dir, game=players[0].game)
     # Bravo 拍卖分较少但命中后总分较高；规划必须读取累计总分。下一局是加赛时两人总分并列。
     next_is_playoff = match_index >= game.regular_matches
     standings = make_standings({"Alpha": [2] * match_index, "Bravo": [1] * match_index},
@@ -222,4 +223,4 @@ def test_director_publishes_all_speeches_before_private_memory_and_plan(tmp_path
                      "如果每天都命中，每人最多还能获得 6 命中分"):
             assert fact in plan_input
         assert day1_bids[p.name] == (1, 6)
-    assert "private-" not in (tmp_path / "speeches.md").read_text(encoding="utf-8")
+    assert "private-" not in (run_dir / "speeches.md").read_text(encoding="utf-8")

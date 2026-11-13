@@ -56,7 +56,8 @@ def test_director_runs_rounds_in_order_and_passes_game_to_plans(monkeypatch, tmp
         regular_matches=2, max_playoffs=0,
     )
     players = [RecordingPlayer(name) for name in ("甲", "乙")]
-    director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=game)
+    run_dir = init_run_dir(tmp_path, [player.name for player in players])
+    director = director_module.AIDirector(players, continuous_controller(), run_dir, game=game)
 
     def opening_plan_request(others, actual_game, *, received, team):
         assert actual_game is game
@@ -99,7 +100,8 @@ def test_director_orders_speeches_and_letters_by_seat_not_completion(monkeypatch
             return SpeechOutput(output.strategy, output.speech, letters[self.name])
 
     players = [OrderedPlayer(name) for name in ("乙", "甲", "丙")]
-    director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=TEST_GAME)
+    run_dir = init_run_dir(tmp_path, [player.name for player in players])
+    director = director_module.AIDirector(players, continuous_controller(), run_dir, game=TEST_GAME)
     monkeypatch.setattr(director_module.prompts, "opening_plan_request",
                         lambda others, game, *, received, team: f"规划 {list(others)} 收信 {list(received)}")
     director.opening()
@@ -198,7 +200,8 @@ def test_director_opening_plan_preserves_public_boundary_and_keeps_day_one_bids(
     a = make_player(fake_task_runner([speech_reply("public-A"), bid_reply(2, 6)]), tmp_path / "a", game=game)
     b = make_player(fake_task_runner([speech_reply("public-B"), bid_reply(3, 6)]), tmp_path / "b",
                     game=game, name="Bravo")
-    director = director_module.AIDirector([a, b], continuous_controller(), tmp_path, game=a.game)
+    run_dir = init_run_dir(tmp_path, [a.name, b.name])
+    director = director_module.AIDirector([a, b], continuous_controller(), run_dir, game=a.game)
     assert director.opening() == {"Alpha": (2, 6), "Bravo": (3, 6)}
     request = request_text(a.task_runner, -1)
     assert "public-B" in request and "烟雾弹" not in request
@@ -217,7 +220,8 @@ def test_director_final_speech_format_has_no_letters(monkeypatch, tmp_path):
     from auction_game.agent.text_output import SPEECH, output_requirement
 
     player = make_player(fake_task_runner([speech_reply("感言"), "总结"]), tmp_path)
-    director = director_module.AIDirector([player], continuous_controller(), tmp_path, game=TEST_GAME)
+    run_dir = init_run_dir(tmp_path, [player.name])
+    director = director_module.AIDirector([player], continuous_controller(), run_dir, game=TEST_GAME)
     monkeypatch.setattr(director_module.prompts, "final_speech_request",
                         lambda standings, log, *, received, team: "请发表最终感言")
     director.final([], None)
@@ -242,7 +246,8 @@ def test_letters_arrive_in_recipients_next_request_only(capsys, tmp_path):
         bid_reply(1),
     ]), tmp_path, game=game, name=name) for name in ("Bravo", "Charlie"))
     players = [alpha, bravo, charlie]
-    director = director_module.AIDirector(players, continuous_controller(), tmp_path, game=game)
+    run_dir = init_run_dir(tmp_path, [player.name for player in players])
+    director = director_module.AIDirector(players, continuous_controller(), run_dir, game=game)
     director.opening()
     for day in (2, 3):
         director.bid_round({p.name: make_ai_obs(day=day, game=game, name=p.name) for p in players})
@@ -285,7 +290,8 @@ def test_last_letter_of_a_match_arrives_at_the_next_speech(days, final, tmp_path
                         tmp_path, game=game, name="Alpha")
     bravo = make_player(fake_task_runner([speech_reply("B"), *[bid_reply(1)] * days, speech_reply("B"), *ending]),
                         tmp_path, game=game, name="Bravo")
-    director = director_module.AIDirector([alpha, bravo], continuous_controller(), tmp_path, game=game)
+    run_dir = init_run_dir(tmp_path, [alpha.name, bravo.name])
+    director = director_module.AIDirector([alpha, bravo], continuous_controller(), run_dir, game=game)
     director.opening()
     for day in range(2, days + 1):
         director.bid_round({p.name: make_ai_obs(day=day, game=game, name=p.name) for p in (alpha, bravo)})
@@ -377,7 +383,8 @@ def team_players(tmp_path, game=TEST_GAME):
 
 
 def team_director(players, tmp_path, controller=None, game=TEST_GAME):
-    return director_module.AIDirector(players, controller or continuous_controller(), tmp_path, game=game,
+    run_dir = init_run_dir(tmp_path, [player.name for player in players])
+    return director_module.AIDirector(players, controller or continuous_controller(), run_dir, game=game,
                                       team_of=TEAM_OF)
 
 

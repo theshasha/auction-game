@@ -19,7 +19,7 @@ from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.game.models import MatchLog, Observation, StandingsEntry
 from auction_game.game.tournament import TournamentResult, has_next_match
 from auction_game.reporting.run_output import (SUMMARY_TITLE, print_day_result, publish_match, publish_speeches,
-                                               record_letters, reset_reports)
+                                               record_letters, reset_reports, write_readme)
 from auction_game.reporting.run_paths import RunPaths
 
 Bid = tuple[int, int | None]  # (正常出价, 超级出价或 None)
@@ -50,6 +50,8 @@ class AIDirector:
         """
         names = [player.name for player in self.players]
         logs: list[MatchLog] = []
+        # 玩家建好时写下了私人对话，README 从开场就链到它们。
+        self._report(lambda quiet: write_readme(self.paths))
         day1_bids = self.opening()
         while True:
             match = MatchState(names, len(logs) + 1, len(logs) >= self.game.regular_matches, logs, self.game,

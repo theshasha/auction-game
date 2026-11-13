@@ -195,7 +195,7 @@ def report(run_dirs: list[Path]) -> None:
 
     print("团队赛对比：格子是 前队:后队，阵营按场次快照里玩家的顺序；比率写成 分子/分母，合计列分子分母各自相加")
     if len(runs) > 1 and not with_total:
-        print("各场阵营名不同，不给合计")
+        print("各场阵营名或顺序不同，不给合计")
     overview = [
         ["阵营", *(":".join(run.teams) for run in runs), *([":".join(runs[0].teams)] if with_total else [])],
         ["已结束的局数", *(f"{item['match_count']}（加赛 {item['playoff_count']}）" for item in metrics),
@@ -222,9 +222,8 @@ def main() -> None:
     parser.add_argument("run_dirs", nargs="*", type=Path,
                         help="团队赛场次目录，可以传多个；不传时选最新的真实团队赛场次")
     args = parser.parse_args()
-    run_dirs = args.run_dirs or [find_latest_ai_run(("team",))]
     try:
-        report(run_dirs)
+        report(args.run_dirs or [find_latest_ai_run(("team", "team-test"))])
     except (OSError, ValueError) as exc:
         sys.exit(str(exc))
 

@@ -66,8 +66,19 @@ def test_runs_with_different_teams_have_no_total(tmp_path, capsys):
     report([team_run(tmp_path / "a", [make_team_report_match()]),
             team_run(tmp_path / "b", [make_team_report_match()], other_teams)])
     output = capsys.readouterr().out
-    assert "各场阵营名不同，不给合计\n" in output
+    assert "各场阵营名或顺序不同，不给合计\n" in output
     assert section(output, "概况")[:3] == ["| 指标 | a | b |", "| --- | --- | --- |", "| 阵营 | 红队:蓝队 | 甲队:乙队 |"]
+
+
+def test_runs_with_teams_in_other_order_have_no_total(tmp_path, capsys):
+    blue_first = [{"name": name} for name in sorted(TEAM_OF, key=lambda name: TEAM_OF[name] != "蓝队")]
+    first = team_run(tmp_path / "a", [make_team_report_match()])
+    write_matches(tmp_path / "b", [{"match": make_team_report_match()}], run_type="team-offline",
+                  players=blue_first, team_of=TEAM_OF)
+    report([first, tmp_path / "b"])
+    output = capsys.readouterr().out
+    assert "各场阵营名或顺序不同，不给合计\n" in output
+    assert section(output, "概况")[2] == "| 阵营 | 红队:蓝队 | 蓝队:红队 |"
 
 
 def test_cli_rejects_individual_run(tmp_path, monkeypatch):
@@ -78,7 +89,7 @@ def test_cli_rejects_individual_run(tmp_path, monkeypatch):
 
 
 def test_cli_without_run_reports_latest_real_team_run(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
     matches = [{"match": make_team_report_match()}]
     write_matches(tmp_path / "20261016_110000_team", matches, run_type="team", team_of=TEAM_OF)
     write_matches(tmp_path / "20261016_120000_team-test", matches, run_type="team-test", team_of=TEAM_OF)
@@ -90,7 +101,7 @@ def test_cli_without_run_reports_latest_real_team_run(tmp_path, monkeypatch, cap
 
 
 def test_cli_without_run_rejects_only_individual_runs(tmp_path, monkeypatch):
-    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
     write_matches(tmp_path / "20261016_130000_ai", make_matches(), run_type="ai")
     monkeypatch.setattr("sys.argv", ["team_report"])
     with pytest.raises(SystemExit, match="没有.*（team、team-test）"):

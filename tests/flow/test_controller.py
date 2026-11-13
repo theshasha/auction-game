@@ -174,7 +174,8 @@ def test_rerun_sees_round_start_letters_and_new_letters_wait_for_next_round(tmp_
     bravo = make_player(fake_task_runner([{**speech_reply("B"), "letters": [OPENING_LETTER]},
                                           {**bid_reply(1), "letters": [PLAN_LETTER]}, bid_reply(2)]),
                         tmp_path, name="Bravo")
-    director = AIDirector([alpha, bravo], controller, tmp_path, game=TEST_GAME)
+    run_dir = init_run_dir(tmp_path, [alpha.name, bravo.name])
+    director = AIDirector([alpha, bravo], controller, run_dir, game=TEST_GAME)
 
     def play():
         director.opening()
@@ -204,7 +205,8 @@ def test_rerun_discussion_round_does_not_see_letters_written_in_that_round(tmp_p
     yi = make_team_player(fake_task_runner([
         speech_reply("乙"), discussion_reply("乙第1轮信"), discussion_reply("乙第2轮信"),
         discussion_reply("乙第3轮信"), bid_reply(1)]), tmp_path, name="乙")
-    director = AIDirector([jia, yi], controller, tmp_path, game=TEST_GAME, team_of={"甲": "红队", "乙": "红队"})
+    run_dir = init_run_dir(tmp_path, [jia.name, yi.name])
+    director = AIDirector([jia, yi], controller, run_dir, game=TEST_GAME, team_of={"甲": "红队", "乙": "红队"})
     with running(controller, director.opening) as (thread, outcome):
         assert gate.wait(timeout=5)  # 甲的第 2 轮失败，乙的第 2 轮已成功
         controller.offer_command("c")
@@ -233,7 +235,8 @@ def test_quit_leaves_mailbox_as_at_round_start(paused, tmp_path):
     ), tmp_path, name="Alpha")
     bravo = make_player(fake_task_runner([{**speech_reply("B"), "letters": [OPENING_LETTER]},
                                           {**bid_reply(1), "letters": [PLAN_LETTER]}]), tmp_path, name="Bravo")
-    director = AIDirector([alpha, bravo], controller, tmp_path, game=TEST_GAME)
+    run_dir = init_run_dir(tmp_path, [alpha.name, bravo.name])
+    director = AIDirector([alpha, bravo], controller, run_dir, game=TEST_GAME)
     with running(controller, director.opening) as (thread, outcome):
         assert gate.wait(timeout=5)  # 规划轮已收集完，等用户确认
         assert len(bravo.task_runner.calls) == 2

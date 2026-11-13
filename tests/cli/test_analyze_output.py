@@ -10,7 +10,7 @@ from pydantic_ai.usage import RequestUsage
 from auction_game.agent.tasks import BidOutput, DiscussionOutput, SpeechOutput, SummaryOutput
 from auction_game.cli.analyze import analyze, main
 from auction_game.llm.execution import CallFailedError, ExecutionResult
-from auction_game.reporting.run_output import initialize_run
+from auction_game.reporting.run_output import SUMMARY_TITLE, initialize_run, publish_speeches
 from auction_game.reporting.run_paths import RunPaths
 from tests.support.analyze_runs import (ANALYZE_GAME, make_match_1, make_match_2, make_matches, make_team_match,
                                         player_log, write_matches)
@@ -49,6 +49,7 @@ def test_analyze_prints_player_section(tmp_path, capsys):
     assert "改变当日结果：1 天" in output
     assert "含正常出价及超级出价的价位" in output
     assert "获胜价平均" in output
+    assert "获胜价分布：4 金币 2 天、5 金币 1 天、6 金币 1 天\n" in output
     assert "模型用量" not in output  # 离线赛的用量是假模型估算的，不输出
     assert "阵营" not in output
 
@@ -98,10 +99,10 @@ def test_usage_sums_every_reply_by_player_and_task(tmp_path, capsys):
         "  戊：请求 0 次，输入 0，输出 0",
         "  己：请求 0 次，输入 0，输出 0",
         "  按任务：",
-        "  发言：请求 1 次，输入 100（缓存命中 40，40%），输出 10；最大单次输入 100，来自 甲 开局发言",
-        "  出价：请求 3 次，输入 750（缓存命中 150，20%），输出 75；另有 3 次请求失败；"
+        "    发言：请求 1 次，输入 100（缓存命中 40，40%），输出 10；最大单次输入 100，来自 甲 开局发言",
+        "    出价：请求 3 次，输入 750（缓存命中 150，20%），输出 75；另有 3 次请求失败；"
         "最大单次输入 300，来自 甲 第 1 局第 2 天",
-        "  观众总结：请求 1 次，输入 1,000（缓存命中 0，0%），输出 5；最大单次输入 1,000，来自 乙 观众总结（仅观众可见）",
+        "    观众总结：请求 1 次，输入 1,000（缓存命中 0，0%），输出 5；最大单次输入 1,000，来自 乙 观众总结（仅观众可见）",
     ]
 
 
@@ -116,8 +117,8 @@ def test_usage_lists_discussion_after_speech(tmp_path, capsys):
     analyze(run_dir)
     usage = capsys.readouterr().out.split("  按任务：\n", 1)[1]
     assert usage.splitlines()[:2] == [
-        "  发言：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局发言",
-        "  讨论：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局讨论第 1 轮",
+        "    发言：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局发言",
+        "    讨论：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局讨论第 1 轮",
     ]
 
 
@@ -130,11 +131,27 @@ def test_usage_lists_failed_only_task_without_largest_input(tmp_path, capsys):
         CallFailedError("请求失败", messages=[ModelRequest(parts=[UserPromptPart("请总结")])],
                         request_errors=[request_error(1)]))
     analyze(run_dir)
-    assert "  观众总结：请求 0 次，输入 0，输出 0；另有 1 次请求失败\n" in capsys.readouterr().out
+    assert "    观众总结：请求 0 次，输入 0，输出 0；另有 1 次请求失败\n" in capsys.readouterr().out
+
+
+def test_usage_ignores_unfinished_last_line_and_keeps_line_separators(tmp_path, capsys):
+    run_dir = tmp_path / "20260909_120000_ai"
+    write_matches(run_dir, make_matches(), run_type="ai")
+    jia = RunPaths(run_dir).read_config()["players"][0]
+    reply = ModelResponse(parts=[TextPart("回复\u2028第二行")],
+                          usage=RequestUsage(input_tokens=100, output_tokens=10))
+    player_log(run_dir, jia).success({"title": "开局发言", "task": "speech", "context": "开局发言"},
+                                     ExecutionResult(SpeechOutput("策略", "发言\u2028第二行", []),
+                                                     [ModelRequest(parts=[UserPromptPart("请发言")]), reply], []))
+    # 比赛正在写的下一条，截在汉字中间。
+    with RunPaths(run_dir).player(jia["number"]).open("ab") as file:
+        file.write('{"task": "bid", "context": "第 1 局'.encode("utf-8")[:-1])
+    analyze(run_dir)
+    assert "  甲：请求 1 次，输入 100（缓存命中 0，0%），输出 10\n" in capsys.readouterr().out
 
 
 def test_default_cli_keeps_test_run_type_and_actual_models(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr("auction_game.reporting.analyze.LOG_DIR", tmp_path)
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
     monkeypatch.setattr("sys.argv", ["analyze"])
     players = [{"name": name, "identity_model": {"model": f"identity-{index}"},
                 "execution_model": {"protocol": "responses", "model": "actual-test-model"}}
@@ -172,6 +189,21 @@ def test_cli_reports_run_without_matches(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["analyze", str(tmp_path)])
     with pytest.raises(SystemExit, match="没有 data/matches"):
         main()
+
+
+def test_cli_without_run_reports_that_none_has_a_finished_match(tmp_path, monkeypatch):
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
+    write_matches(tmp_path / "20261016_120000_offline", make_matches())
+    monkeypatch.setattr("sys.argv", ["analyze"])
+    with pytest.raises(SystemExit, match="没有已完成至少一局的真实 AI 场次"):
+        main()
+
+
+def test_cli_takes_at_most_one_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["analyze", str(tmp_path / "a"), str(tmp_path / "b")])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2 and str(tmp_path / "b") in capsys.readouterr().err
 
 
 def test_offline_run_reports_fake_execution_and_configured_model(tmp_path, capsys):
@@ -252,12 +284,14 @@ def test_nondefault_snapshot_drives_economy_cap_and_playoff_label(tmp_path, caps
     assert "全天总体：平均 4.70（30 笔）" in output  # 聚合均价包含超级出价数值
 
 
-def test_unfinished_run_reports_completed_matches(tmp_path, capsys):
-    match = make_match_1()
-    match["game"]["regular_matches"] = 5
-    write_matches(tmp_path, [{"match": match}])
+@pytest.mark.parametrize("finished", [False, True])
+def test_unfinished_run_is_marked_after_match_count(tmp_path, capsys, finished):
+    write_matches(tmp_path, [{"match": make_match_1()}])
+    if finished:
+        publish_speeches(RunPaths(tmp_path), SUMMARY_TITLE, {"甲": "总结"}, quiet=True)
     analyze(tmp_path)
-    assert "局数：1（正赛 1 + 加赛 0）" in capsys.readouterr().out
+    note = "" if finished else "；未完赛，只统计已结束的 1 局"
+    assert f"局数：1（正赛 1 + 加赛 0）{note}\n" in capsys.readouterr().out
 
 
 def test_void_day_prints_no_mean_bid(tmp_path, capsys):

@@ -3,31 +3,26 @@
 from __future__ import annotations
 
 import json
-import re
-import sys
 from collections import Counter
 from pathlib import Path
 
+from auction_game.agent.log import read_records
 from auction_game.game.engine import resolve_bids
 from auction_game.game.settings import GameSettings
-from auction_game.paths import LOG_DIR
-from auction_game.reporting.run_paths import RunPaths
+from auction_game.reporting.run_paths import REAL_RUN_TYPES, RunPaths, find_runs
 
+# 按任务列用量时的顺序和标签，键和 agent.tasks.TASKS 相同。
 TASK_LABELS = {"speech": "发言", "discussion": "讨论", "plan": "规划", "bid": "出价", "memory": "记忆",
                "summary": "观众总结"}
 
 
-def find_latest_ai_run(kinds: tuple[str, ...] = ("ai", "team")) -> Path:
-    """logs/ 下最新的、至少完成一局的真实 AI 场次；kinds 是目录名里的赛制，每种都含 -test。"""
-    # 真实 AI 场次的时间戳目录，排除离线赛和 archive 等归档目录；目录名的类型取自场次的 run_type。
-    pattern = re.compile(rf"^\d{{8}}_\d{{6}}_(?:{'|'.join(kinds)})(?:-test)?(_\d+)?$")
-    candidates = [path for path in (LOG_DIR.iterdir() if LOG_DIR.exists() else ())
-                  if pattern.match(path.name) and any((path / "data" / "matches").glob("*.json"))]
-    if not candidates:
-        names = "、".join(f"{kind}、{kind}-test" for kind in kinds)
-        sys.exit(f"logs/ 下没有已完成至少一局的真实 AI 场次（{names}）；离线模拟赛请显式指定目录")
-    return max(candidates, key=lambda path: (path.name[:15], int(path.name.rsplit('_', 1)[1])
-                                           if path.name.rsplit('_', 1)[1].isdigit() else 1))
+def find_latest_ai_run(run_types: tuple[str, ...] = REAL_RUN_TYPES) -> Path:
+    """logs/ 下这几种类型里最新的、至少完成一局的场次；没有时报 ValueError。"""
+    runs = [path for path in find_runs(run_types) if any((RunPaths(path).data / "matches").glob("*.json"))]
+    if not runs:
+        raise ValueError(f"logs/ 下没有已完成至少一局的真实 AI 场次（{'、'.join(run_types)}）；"
+                         "离线模拟赛请显式指定目录")
+    return runs[-1]
 
 
 def load_match_logs(run_dir: Path) -> list[dict]:
@@ -230,8 +225,7 @@ def collect_usage(run_dir: Path, players: list[dict]) -> dict:
     for pc in players:
         name = pc["name"]
         player_totals = by_player[name] = Counter()
-        for line in paths.player(pc["number"]).read_text(encoding="utf-8").splitlines():
-            entry = json.loads(line)
+        for entry in read_records(paths.player(pc["number"]))[0]:
             if entry["task"] == "system":
                 continue
             task_totals = by_task.setdefault(entry["task"], Counter())

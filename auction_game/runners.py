@@ -20,9 +20,9 @@ from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.rules import render_rules
 from auction_game.game.settings import GameSettings
 from auction_game.paths import CONFIG_PATH, ROOT_DIR
-from auction_game.reporting.run_output import (find_unfinished_run, initialize_run, is_finished, make_run_dir,
-                                               print_final_result)
-from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RUN_TYPES, RunPaths
+from auction_game.reporting.run_output import find_unfinished_run, initialize_run, is_finished, print_final_result
+from auction_game.reporting.run_paths import (OFFLINE_RUN_TYPES, RUN_TYPES, RunPaths, make_run_dir,
+                                              run_type as run_type_of)
 
 # 场次快照里实际调用的模型只记这些字段，来源和推理档位已在 capabilities 里。
 EXECUTION_SNAPSHOT_FIELDS = ("key", "model", "provider", "protocol", "max_tokens", "model_settings", "capabilities")
@@ -65,7 +65,7 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
     except (ConfigurationError, MissingApiKeyError) as exc:
         print(f"[配置错误] {exc}")
         return 1
-    run_type = ("team" if team else "ai") + ("-test" if test_model else "")
+    run_type = run_type_of(team=team, test_model=test_model)
     run_dir = make_run_dir(run_type)
     if test_model:
         test_key = config["test_model"]

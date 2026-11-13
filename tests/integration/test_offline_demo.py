@@ -157,8 +157,8 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, demo_configuratio
     stats = analyze.collect_player_stats(matches)
     assert stats["auction_score_matrix"][names[0]] == [payload["match"]["auction_scores"][names[0]]
                                                      for payload in matches]
-    monkeypatch.setattr(analyze, "LOG_DIR", tmp_path)
-    with pytest.raises(SystemExit, match="没有"):
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
+    with pytest.raises(ValueError, match="没有"):
         analyze.find_latest_ai_run()
     # 统计只读场次快照，当前配置入口损坏也能完整统计。
     monkeypatch.setattr("auction_game.configuration.load_game_settings", lambda: (_ for _ in ()).throw(AssertionError("应读快照")))
@@ -327,3 +327,8 @@ def test_offline_failure_is_saved_and_exits_without_confirmation(fault, tmp_path
         replies = [part["content"] for message in entries[0]["messages"] if message["kind"] == "response"
                    for part in message["parts"]]
         assert replies == [INVALID_SPEECH] * 2
+    # 死在第一轮的场次，README 也链到每名玩家的私人对话。
+    readme = (run_dir / "README.md").read_text(encoding="utf-8")
+    links = re.findall(r"\]\((players/[^)]+)\)", readme)
+    assert len(links) == len(RunPaths(run_dir).read_config()["players"])
+    assert all((run_dir / link).exists() for link in links)
