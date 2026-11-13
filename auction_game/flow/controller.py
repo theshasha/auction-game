@@ -1,12 +1,14 @@
 """轮级运行控制：限制同时运行的任务数，暂停时等已启动任务结束，成功结果只提交一次。
 
 暂停后任务不再重发失败的请求，进行中的请求和输出纠错照常完成。
-服务或输出失败时恢复该任务的检查点，程序错误直接抛出。q 通过取消信号马上中断已启动的任务，
-把整轮恢复到开始时的状态并中止比赛；已成功的任务留在日志里，续跑时沿用。
+服务或输出失败时恢复该任务的检查点。程序错误后不再派发，等已启动的任务结束再抛出。
+q 通过取消信号马上中断已启动的任务，把整轮恢复到开始时的状态并中止比赛；已成功的任务留在日志里，续跑时沿用。
 """
 
 from __future__ import annotations
 
+import queue
+import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,6 +17,9 @@ from typing import Any, Callable
 
 from auction_game.llm.execution import CallFailedError, TaskCancelledError
 from auction_game.llm.client import RunSignals
+
+# 主线程的等待都带超时：Windows 上不带超时的等待不回到解释器，Ctrl+C 的处理函数一直得不到运行。
+POLL_SECONDS = 0.2
 
 
 class TournamentAborted(Exception):
@@ -88,11 +93,28 @@ class Controller:
         if message:
             self._announce(message)
 
-    def start_stdin_reader(self) -> None:
+    def start_terminal_input(self) -> None:
+        """读终端命令；Ctrl+C、Ctrl+Break 和标准输入结束都按 q 处理。要在主线程调用。"""
         def read_loop() -> None:
             for line in sys.stdin:
                 self.offer_command(line.strip())
+            # Windows 上按 Ctrl+C 时，读终端也会读到结束，这句常和 Ctrl+C 的退出提示一起出现。
+            if not self._quit_requested:
+                self._announce("[控制] 终端输入已结束，按 q 处理。")
+            self.offer_command("q")
 
+        # 处理函数在主线程里运行，主线程这时可能持有 threading 内部的锁或正在打印，
+        # 所以只往 SimpleQueue 里放一个值（它的 put 可以在同一线程里重入），由另一个线程发 q。
+        interrupts: queue.SimpleQueue[None] = queue.SimpleQueue()
+
+        def quit_on_interrupt() -> None:
+            interrupts.get()
+            self.offer_command("q")
+
+        for name in ("SIGINT", "SIGBREAK"):  # SIGBREAK 只在 Windows 上有
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), lambda _signum, _frame: interrupts.put(None))
+        threading.Thread(target=quit_on_interrupt, daemon=True).start()
         threading.Thread(target=read_loop, daemon=True).start()
 
     def wait_for_turn(self, label: str, *, notices: tuple[str, ...] = (),
@@ -121,7 +143,8 @@ class Controller:
             return
         self._announce(f"[单步] 下一步：{label}（回车执行 / c=连续 / p=暂停 / q=退出）")
         while True:
-            self._gate.wait()
+            if not self._gate.wait(POLL_SECONDS):
+                continue
             with self._lock:
                 self._gate.clear()
                 if self._quit_requested:
@@ -164,13 +187,14 @@ class Controller:
                     self.wait_for_turn(f"{label}（全部成功，确认后继续）")
                     continue
                 failed: dict[str, str] = {}
+                error: Exception | None = None  # 第一个程序错误，等已启动的任务结束后抛出
                 unstarted = list(pending)
                 active = {}
                 with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(pending))) as pool:
                     while unstarted or active:
                         with self._changed:
                             # 派发和暂停命令在同一把锁下，暂停后不会再派发。
-                            while (unstarted and len(active) < self.max_concurrency
+                            while (unstarted and len(active) < self.max_concurrency and error is None
                                    and not self._pause_requested and not self._quit_requested):
                                 task = unstarted.pop(0)
                                 future = pool.submit(task.fn)
@@ -180,7 +204,7 @@ class Controller:
                             if not done:
                                 if not active:
                                     break
-                                self._changed.wait()
+                                self._changed.wait(POLL_SECONDS)
                                 continue
                         # 收集所有已完成的结果，包括暂停前已完成但还没收集的。
                         # done 里都已完成；用 as_completed 是为了让竞态测试在收集时机插入等待。
@@ -193,6 +217,15 @@ class Controller:
                                 rollback(task)
                             except TaskCancelledError:
                                 rollback(task)  # 只在 q 之后发生，下面随即中止比赛
+                            except Exception as exc:
+                                if error is None:
+                                    error = exc
+                                    if any(not running.done() for running in active):
+                                        self._announce(
+                                            f"[程序错误] {task.key}：{exc!r}。不再启动新任务，等进行中的请求结束后退出，"
+                                            "成功的结果续跑时沿用；q：马上取消并退出。")
+                if error is not None:
+                    raise error
 
                 pending = [task for task in pending if task.key not in results]
                 with self._lock:

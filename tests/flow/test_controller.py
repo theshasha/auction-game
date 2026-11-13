@@ -1,6 +1,10 @@
 """控制器命令、闸门，以及轮级并发执行的暂停、补跑和回滚。"""
 
+import _thread
 import json
+import queue
+import signal
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -239,6 +243,71 @@ def test_quit_leaves_mailbox_as_at_round_start(paused, tmp_path):
     assert director.mailbox == {"Alpha": {"Bravo": "开局信"}}
     letters = director.paths.letters.read_text(encoding="utf-8")
     assert "开局信" in letters and "规划信" not in letters
+
+
+@pytest.fixture
+def terminal(monkeypatch):
+    """标准输入换成测试放进队列的行，放 None 表示输入结束；测试后恢复 Ctrl+C 和 Ctrl+Break 的处理函数。"""
+    names = [name for name in ("SIGINT", "SIGBREAK") if hasattr(signal, name)]
+    saved = {name: signal.getsignal(getattr(signal, name)) for name in names}
+    lines = queue.Queue()
+
+    def stdin():
+        while (line := lines.get()) is not None:
+            yield line
+
+    monkeypatch.setattr(sys, "stdin", stdin())
+    yield lines
+    lines.put(None)
+    for name, handler in saved.items():
+        signal.signal(getattr(signal, name), handler)
+
+
+def test_closed_stdin_quits_like_q(terminal):
+    announcements = []
+    controller = Controller(mode="step", announce=announcements.append)
+    controller.start_terminal_input()
+    terminal.put("c\n")
+    terminal.put(None)
+    assert controller.signals.cancelled.wait(timeout=5)
+    with pytest.raises(TournamentAborted):
+        controller.wait_for_turn("下一轮")
+    assert announcements[:2] == ["[控制] 切换到连续模式", "[控制] 终端输入已结束，按 q 处理。"]
+    assert announcements[2].startswith("[退出]") and len(announcements) == 3
+
+
+@pytest.mark.parametrize("in_round", [False, True], ids=["at-prompt", "request-inflight"])
+def test_ctrl_c_reaches_main_thread_wait_and_quits_like_q(terminal, in_round):
+    """信号处理函数只在主线程运行，所以控制器跑在测试的主线程里。"""
+    waiting = threading.Event()
+    controller = Controller(mode="continuous" if in_round else "step",
+                            announce=lambda message: waiting.set() if message.startswith("[单步]") else None)
+    controller.start_terminal_input()
+    cancelled = []
+
+    def request():
+        waiting.set()
+        if controller.signals.cancelled.wait(timeout=5):
+            cancelled.append(True)
+            raise TaskCancelledError()
+        return "没收到取消"
+
+    def press_ctrl_c():
+        if waiting.wait(timeout=5):
+            time.sleep(0.3)  # 让主线程进入等待
+            _thread.interrupt_main(signal.SIGINT)
+
+    rescue = threading.Timer(5, controller.offer_command, ("q",))  # 主线程收不到信号时，测试也不卡住
+    threading.Thread(target=press_ctrl_c, daemon=True).start()
+    rescue.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(TournamentAborted):
+            controller.run_round([RoundTask("Alpha", request)], "出价")
+    finally:
+        rescue.cancel()
+    assert time.monotonic() - started < 3
+    assert cancelled == ([True] if in_round else [])
 
 
 class TestController:
@@ -637,6 +706,48 @@ class TestParallelRound:
 
         with pytest.raises(ValueError, match="真实程序错误"):
             controller.run_round([RoundTask("broken", broken)], "程序错误")
+
+    @pytest.mark.parametrize("command", [None, "q"], ids=["inflight-finishes", "quit"])
+    def test_program_error_stops_dispatch_and_raises_after_inflight_requests(self, command):
+        notice = threading.Event()
+        announcements = []
+
+        def announce(message):
+            announcements.append(message)
+            if message.startswith("[程序错误]"):
+                notice.set()
+
+        controller = Controller(mode="continuous", max_concurrency=2, announce=announce)
+        slow_started, release = threading.Event(), threading.Event()
+        outcomes = []
+
+        def slow():
+            slow_started.set()
+            while not release.wait(timeout=0.01):
+                if controller.signals.cancelled.is_set():
+                    outcomes.append("cancelled")
+                    raise TaskCancelledError()
+            outcomes.append("finished")
+            return "slow"
+
+        def broken():
+            assert slow_started.wait(timeout=5)
+            raise ValueError("真实程序错误")
+
+        tasks = [RoundTask("slow", slow), RoundTask("broken", broken),
+                 RoundTask("unstarted", lambda: outcomes.append("dispatched"))]
+        with running(controller, lambda: controller.run_round(tasks, "程序错误"), release) as (thread, outcome):
+            assert notice.wait(timeout=5)
+            assert "broken" in announcements[-1] and "真实程序错误" in announcements[-1]
+            thread.join(timeout=0.3)
+            assert thread.is_alive() and outcomes == []  # 等进行中的请求
+            if command:
+                controller.offer_command(command)
+            else:
+                release.set()
+            thread.join(timeout=5)
+            assert isinstance(outcome.pop("error"), ValueError)
+        assert outcomes == ["cancelled" if command else "finished"]
 
     @pytest.mark.parametrize("command", ["", "q"], ids=["resume", "quit"])
     def test_failed_participant_rolls_back_and_successful_result_is_kept(self, command):

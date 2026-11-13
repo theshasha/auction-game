@@ -19,7 +19,7 @@ def started_run(config_files, teams_file, monkeypatch, tmp_path):
                         lambda **kwargs: load_configuration(*config_files, teams_path=teams_file, **kwargs))
     monkeypatch.setattr(runners, "load_llm_settings", lambda: load_llm_settings(config_files[0]))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / f"20261101_100000_{mode}")
-    monkeypatch.setattr(runners.Controller, "start_stdin_reader", lambda self: None)
+    monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
     with monkeypatch.context() as patch:
         patch.setattr(runners, "make_model_factory", lambda **kwargs: None)
         patch.setattr(runners.AIDirector, "run", lambda self: (_ for _ in ()).throw(runners.TournamentAborted))
@@ -76,6 +76,17 @@ def test_resume_builds_lineup_and_models_from_snapshot_and_channels_from_current
         assert player.messages[0].parts[0].content == logged
         # 系统提示没有再写一遍。
         assert paths.player(number).read_text(encoding="utf-8").count('"task": "system"') == 1
+
+
+def test_program_error_prints_traceback_then_resume_command(started_run, monkeypatch, capsys):
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
+    monkeypatch.setattr(runners.AIDirector, "run", lambda self: (_ for _ in ()).throw(ValueError("真实程序错误")))
+    capsys.readouterr()
+    assert runners.resume_ai(started_run) == 1
+    captured = capsys.readouterr()
+    assert "ValueError: 真实程序错误" in captured.err
+    assert captured.out.rstrip().endswith(
+        f'[程序错误] 已退出比赛，成功的结果续跑时沿用。续跑：python main.py --resume "{started_run}"')
 
 
 def test_resume_without_directory_takes_the_latest_unfinished_run(started_run, monkeypatch):

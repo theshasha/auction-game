@@ -310,7 +310,7 @@ def test_team_startup_records_teams_and_hands_them_to_director(
                         lambda **kwargs: load_configuration(*config_files, teams_path=teams_file, **kwargs))
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / mode)
-    monkeypatch.setattr(runners.Controller, "start_stdin_reader", lambda self: None)
+    monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
     directors = []
 
     def stop(director):
@@ -359,7 +359,7 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
     monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: factories.append(kwargs))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / mode)
-    monkeypatch.setattr(runners.Controller, "start_stdin_reader", lambda self: None)
+    monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
     monkeypatch.setattr(runners.AIDirector, "run",
                         lambda self: (_ for _ in ()).throw(runners.TournamentAborted))
     assert runners.run_ai(test_model=test_model) == 0

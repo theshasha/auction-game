@@ -314,7 +314,7 @@ def test_offline_failure_is_saved_and_exits_without_confirmation(fault, tmp_path
             yield INVALID_SPEECH
 
     monkeypatch.setattr(offline_demo.DemoFactory, "stream", faulty)
-    monkeypatch.setattr(offline_demo.Controller, "start_stdin_reader", lambda *_: pytest.fail("启动键盘读取"))
+    monkeypatch.setattr(offline_demo.Controller, "start_terminal_input", lambda *_: pytest.fail("启动键盘读取"))
     run_dir = tmp_path / "failure"
     with pytest.raises(RuntimeError, match="离线任务失败：开局发言"):
         generate_demo(run_dir, test_model=True)

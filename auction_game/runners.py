@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from dataclasses import asdict, fields
 from pathlib import Path
 
@@ -83,11 +84,11 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
         print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
               "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
     return play_ai(config, player_configs, game, task_runners, controller,
-                   run_dir=run_dir, run_type=run_type, test_model=test_model, rules=rules, start_reader=True)
+                   run_dir=run_dir, run_type=run_type, test_model=test_model, rules=rules, interactive=True)
 
 
 def play_ai(config, player_configs, game, task_runners, controller, *,
-            run_dir, run_type, test_model, rules, start_reader=False) -> int:
+            run_dir, run_type, test_model, rules, interactive=False) -> int:
     """写场次快照并跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。
 
     rules 是按本场参数生成的规则；入口在创建场次目录前生成它，参数有误时在那里报配置错误。
@@ -130,7 +131,7 @@ def play_ai(config, player_configs, game, task_runners, controller, *,
     print(f"提示设置：赛前预测{predictions}，"
           f"人设{'开启' if prompt_options['enable_personas'] else '关闭'}，"
           f"写作要求{'开启' if prompt_options['enable_writing_style'] else '关闭'}")
-    return _play(players, controller, run_dir, game, lineup, resuming=False, start_reader=start_reader)
+    return _play(players, controller, run_dir, game, lineup, resuming=False, interactive=interactive)
 
 
 def resume_ai(run_dir: Path | None = None) -> int:
@@ -169,10 +170,10 @@ def resume_ai(run_dir: Path | None = None) -> int:
         print(f"[无法续跑] {exc}")
         return 1
     print(f"续跑：{run_dir}（{RUN_TYPES[snapshot['run_type']]}，调用真实服务，可能收费）")
-    return continue_run(run_dir, task_runners, controller, start_reader=True)
+    return continue_run(run_dir, task_runners, controller, interactive=True)
 
 
-def continue_run(run_dir: Path, task_runners: dict, controller, *, start_reader: bool = False) -> int:
+def continue_run(run_dir: Path, task_runners: dict, controller, *, interactive: bool = False) -> int:
     """按场次快照和任务日志组装玩家，接着跑完这一场；task_runners 是玩家到任务入口。"""
     paths = RunPaths(run_dir)
     snapshot = paths.read_config()
@@ -190,7 +191,7 @@ def continue_run(run_dir: Path, task_runners: dict, controller, *, start_reader:
     players = [_make_player(profile, lineup, game, task_runners[profile.name], log, log.system_text)
                for profile, log in zip(lineup.profiles, logs)]
     print(f"并发上限：{controller.max_concurrency}")
-    return _play(players, controller, run_dir, game, lineup, resuming=True, start_reader=start_reader)
+    return _play(players, controller, run_dir, game, lineup, resuming=True, interactive=interactive)
 
 
 def _make_player(profile: PlayerProfile, lineup: Lineup, game: GameSettings, task_runner, log: AgentLog,
@@ -206,18 +207,26 @@ def _make_player(profile: PlayerProfile, lineup: Lineup, game: GameSettings, tas
 
 
 def _play(players: list[AIPlayer], controller, run_dir: Path, game: GameSettings, lineup: Lineup, *,
-          resuming: bool, start_reader: bool) -> int:
-    if start_reader:
-        controller.start_stdin_reader()
-        print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q=退出比赛")
+          resuming: bool, interactive: bool) -> int:
+    """interactive 是真实比赛：读终端命令，程序错误时打印报错和续跑命令；离线赛和测试把程序错误抛出去。"""
+    if interactive:
+        controller.start_terminal_input()
+        print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q 或 Ctrl+C=退出比赛")
 
+    resume_command = f'python main.py --resume "{run_dir}"'
     try:
         result = AIDirector(players, controller, run_dir, game=game, team_of=lineup.team_of, resuming=resuming).run()
     except TournamentAborted:
-        print(f'\n已退出比赛。续跑：python main.py --resume "{run_dir}"')
+        print(f"\n已退出比赛。续跑：{resume_command}")
         return 0
     except ResumeError as exc:
         print(f"\n[无法续跑] {exc}")
+        return 1
+    except Exception:
+        if not interactive:
+            raise
+        traceback.print_exc()
+        print(f"\n[程序错误] 已退出比赛，成功的结果续跑时沿用。续跑：{resume_command}")
         return 1
     print_final_result(result)
     return 0
