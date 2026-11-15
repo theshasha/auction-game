@@ -33,22 +33,22 @@ models:
     models_dev:
       provider: deepseek
       model: deepseek-flash
-  gemini_flash:
+  gemini_hydrogen:
     name: 双子妹妹
-    model: gemini-3.8-flash
-    provider: hub
-    protocol: chat
+    model: gemini-4-hydrogen
+    provider: vertex
+    protocol: vertex
     models_dev:
-      provider: google
-      model: gemini-3.8-flash
-  gemini_argon:
+      provider: google-vertex
+      model: gemini-4-hydrogen
+  gemini_carbon:
     name: 双子姐姐
-    model: gemini-4-argon
-    provider: hub
-    protocol: chat
+    model: gemini-4-carbon
+    provider: vertex
+    protocol: vertex
     models_dev:
-      provider: google
-      model: gemini-4-argon
+      provider: google-vertex
+      model: gemini-4-carbon
   glm_pro:
     name: GLM姐姐
     model: glm-5.3

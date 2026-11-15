@@ -1,9 +1,9 @@
-"""三协议模型工厂：完整流检查，请求失败后等待并重发。"""
+"""各协议的模型工厂：完整流检查，请求失败后等待并重发。"""
 
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 import os
 import threading
@@ -15,12 +15,16 @@ from anthropic.types.beta import BetaRawMessageDeltaEvent
 import anthropic
 from openai import AsyncOpenAI
 import openai
+from google import genai
+from google.genai.types import HttpOptions, ResourceScope
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.models import CompletedStreamedResponse
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.google_cloud import GoogleCloudProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from auction_game.paths import ENV_PATH
 
@@ -147,29 +151,39 @@ class ModelFactory:
 
     @asynccontextmanager
     async def open(self):
+        # SDK 使用注入的 HTTP 客户端，由外层 async with 统一关闭，构造失败时也会关闭。
         async with http.AsyncClient(transport=self.transport) as client:
-            if self.protocol == "anthropic":
-                sdk = AsyncAnthropic(base_url=self.base_url, api_key=self.api_key,
-                                     http_client=client, max_retries=0)
-                model = CheckedAnthropicModel(self.model, provider=AnthropicProvider(anthropic_client=sdk))
-            else:
-                sdk = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key,
-                                  http_client=client, max_retries=0)
-                provider = OpenAIProvider(openai_client=sdk)
-                if self.protocol == "chat":
-                    # SDK 默认把缺结束原因的截断流当成正常结束；部分中转渠道不认 max_completion_tokens。
-                    model = OpenAIChatModel(self.model, provider=provider, profile={
-                        "openai_chat_streaming_requires_finish_reason": True,
-                        "openai_chat_supports_max_completion_tokens": False,
-                    })
-                else:
-                    model = OpenAIResponsesModel(self.model, provider=provider)
-            # SDK 使用注入的 HTTP 客户端，由外层 async with 统一关闭，构造失败时也会关闭。
-            yield BufferedRequest(model, attempts=self.request_attempts, retry_delay=self.retry_delay,
-                                  signals=self.signals)
+            with ExitStack() as stack:
+                yield BufferedRequest(self._model(client, stack), attempts=self.request_attempts,
+                                      retry_delay=self.retry_delay, signals=self.signals)
+
+    def _model(self, client: http.AsyncClient, stack: ExitStack):
+        if self.protocol == "anthropic":
+            sdk = AsyncAnthropic(base_url=self.base_url, api_key=self.api_key,
+                                 http_client=client, max_retries=0)
+            return CheckedAnthropicModel(self.model, provider=AnthropicProvider(anthropic_client=sdk))
+        if self.protocol == "vertex":
+            # 快速模式密钥。COLLECTION 让 SDK 把渠道地址原样当作 publishers/... 的前缀，版本、项目和区域都由渠道地址决定。
+            # 不给 retry_options 时 SDK 不重发被拒的请求；不注入 httpx2 客户端时 SDK 在装了 aiohttp 的环境里改用 aiohttp，
+            # 传输错误就不再是 httpx2 的。SDK 的自动续接保留，影响见 docs/usage.md 的"接入模型"。
+            sdk = genai.Client(vertexai=True, api_key=self.api_key, http_options=HttpOptions(
+                base_url=self.base_url, base_url_resource_scope=ResourceScope.COLLECTION,
+                httpx_async_client=client))
+            # SDK 总会另建一个同步客户端，外层 async with 关不到它，不关就要等垃圾回收。
+            stack.callback(sdk.close)
+            return GoogleModel(self.model, provider=GoogleCloudProvider(client=sdk))
+        sdk = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, http_client=client, max_retries=0)
+        provider = OpenAIProvider(openai_client=sdk)
+        if self.protocol == "chat":
+            # SDK 默认把缺结束原因的截断流当成正常结束；部分中转渠道不认 max_completion_tokens。
+            return OpenAIChatModel(self.model, provider=provider, profile={
+                "openai_chat_streaming_requires_finish_reason": True,
+                "openai_chat_supports_max_completion_tokens": False,
+            })
+        return OpenAIResponsesModel(self.model, provider=provider)
 
 
-class MissingApiKeyError(RuntimeError):
+class MissingEnvError(RuntimeError):
     pass
 
 
@@ -177,8 +191,8 @@ def _require_env(name: str, provider: str) -> str:
     load_dotenv(ENV_PATH)
     value = os.environ.get(name, "").strip()
     if not value:
-        raise MissingApiKeyError(
-            f"渠道 {provider} 缺少密钥 {name}。请在项目根 .env 中填写该变量后重试。"
+        raise MissingEnvError(
+            f"渠道 {provider} 缺少环境变量 {name}。请在项目根 .env 中填写该变量后重试。"
         )
     return value
 
@@ -186,7 +200,8 @@ def _require_env(name: str, provider: str) -> str:
 def make_model_factory(*, provider: str, channel: dict, model: str, protocol: str,
                        timeout: float, max_tokens: int, model_settings: dict,
                        request_attempts: int = 4, signals: RunSignals | None = None) -> ModelFactory:
-    """启动时读取密钥，缺密钥在创建日志前报错。"""
-    return ModelFactory(protocol, model, channel["base_url"],
+    """启动时读取密钥和写在 .env 里的渠道地址，缺了在创建日志前报错。"""
+    base_url = channel["base_url"] if "base_url" in channel else _require_env(channel["base_url_env"], provider)
+    return ModelFactory(protocol, model, base_url,
                         _require_env(channel["api_key_env"], provider), timeout, max_tokens,
                         request_attempts=request_attempts, model_settings=model_settings, signals=signals)

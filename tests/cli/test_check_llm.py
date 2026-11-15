@@ -86,7 +86,8 @@ def test_code_changes_between_runs_and_only_the_system_prompt_has_it(config_file
     assert code not in first_prompt
 
 
-@pytest.mark.parametrize(("protocol", "input_tokens"), [("chat", 0), ("responses", 2), ("anthropic", 2)])
+@pytest.mark.parametrize(("protocol", "input_tokens"), [("chat", 0), ("responses", 2), ("anthropic", 2),
+                                                          ("vertex", 2)])
 def test_probe_sends_the_code_and_passes_when_it_comes_back(
         protocol, input_tokens, config_files, monkeypatch, capsys, fixed_code):
     harness = probe_with(protocol, [reply(text=f"核对码：{CODE}"), reply(text="好"), reply(text="好")],

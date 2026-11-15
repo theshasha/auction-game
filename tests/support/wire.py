@@ -1,4 +1,4 @@
-"""三种协议的 SSE 夹具和 MockTransport：用生产模型工厂构造真实 SDK，只替换 HTTP 层。"""
+"""各协议的 SSE 夹具和 MockTransport：用生产模型工厂构造真实 SDK，只替换 HTTP 层。"""
 
 import asyncio
 from copy import deepcopy
@@ -13,9 +13,11 @@ from auction_game.llm.client import ModelFactory
 from auction_game.agent.tasks import AuctionDeps, TASKS, make_agent as production_agent
 
 
-PROTOCOLS = ("chat", "responses", "anthropic")
+PROTOCOLS = ("chat", "responses", "anthropic", "vertex")
 MODEL = "relay-custom-gemini-alias"
 SYSTEM = "private system, only once"
+# base64 编码的 signed_old_reasoning，Vertex 回复里的签名就是这种形式。
+VERTEX_SIGNATURE = "c2lnbmVkX29sZF9yZWFzb25pbmc="
 GOOD = {"strategy": "keep private reasoning", "bid": 2, "super_bid": None}
 
 
@@ -38,6 +40,21 @@ def sse(protocol, data=GOOD, *, ending="ok", text=None, thinking=None):
         if ending != "missing":
             events.append(chunk({}, "length" if ending == "limit" else "stop"))
         return [("data: " + json.dumps(e) + "\n\n").encode() for e in events] + [b"data: [DONE]\n\n"]
+    if protocol == "vertex":
+        def chunk(parts, finish=None):
+            candidate = {"content": {"role": "model", "parts": parts}, "index": 0}
+            if finish:
+                candidate["finishReason"] = finish
+            return {"candidates": [candidate], "responseId": "resp_1", "modelVersion": MODEL,
+                    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 3, "totalTokenCount": 5}}
+        if thinking:
+            events.append(chunk([{"text": thinking, "thought": True}]))
+        events.append(chunk([{"text": text}]))
+        if ending != "missing":
+            # 没有函数调用时，Gemini 把思考签名放在回复的最后一段正文上。
+            last = {"text": "", "thoughtSignature": VERTEX_SIGNATURE} if thinking else {"text": ""}
+            events.append(chunk([last], "MAX_TOKENS" if ending == "limit" else "STOP"))
+        return [("data: " + json.dumps(e) + "\r\n\r\n").encode() for e in events]
     if protocol == "responses":
         response = {"id": "resp_1", "object": "response", "created_at": 1, "model": MODEL,
                     "status": "in_progress", "output": [], "error": None, "incomplete_details": None,
@@ -121,9 +138,9 @@ class Harness:
                 harness.closes += 1
                 await super().aclose()
 
-        self.factory = ModelFactory(self.protocol, MODEL,
-                                    "https://offline.invalid/anthropic" if self.protocol == "anthropic"
-                                    else "https://offline.invalid/v1", "fake-key", 3.0, 123,
+        base_url = {"anthropic": "https://offline.invalid/anthropic",
+                    "vertex": "https://offline.invalid/v1/projects/p/locations/global"}.get(protocol, "https://offline.invalid/v1")
+        self.factory = ModelFactory(self.protocol, MODEL, base_url, "fake-key", 3.0, 123,
                                     Transport(self.handle), retry_delay=0)
 
     async def handle(self, request):
@@ -159,7 +176,11 @@ class Harness:
 
     async def __aexit__(self, *exc):
         await self.context.__aexit__(*exc)
-        assert self.sdk.is_closed()
+        if self.protocol == "vertex":
+            # 注入的异步客户端由 Transport.aclose 计数；这里查 SDK 另建的同步客户端。
+            assert self.sdk._api_client._httpx_client.is_closed
+        else:
+            assert self.sdk.is_closed()
         assert all(stream.closed for stream in self.streams)
 
 

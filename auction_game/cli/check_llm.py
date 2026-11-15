@@ -9,7 +9,7 @@ import hashlib
 import secrets
 
 from auction_game.configuration import ConfigurationError, load_configuration
-from auction_game.llm.client import MissingApiKeyError, make_model_factory
+from auction_game.llm.client import MissingEnvError, make_model_factory
 from auction_game.llm.execution import AgentExecutor
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
@@ -77,7 +77,7 @@ def main(argv=None) -> int:
                 model_settings=model.model_settings,
                 request_attempts=1,
             ))
-        except MissingApiKeyError as exc:
+        except MissingEnvError as exc:
             print(f"[配置错误] {label}: {exc}")
             failures += 1
             continue

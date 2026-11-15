@@ -70,8 +70,10 @@ def test_default_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
     (lambda data: data["llm"].update(timeout_seconds="60"), "llm.timeout_seconds"),
     (lambda data: data["llm"].update(max_concurrency=0), "llm.max_concurrency"),
     (lambda data: data["llm"]["channels"]["hub"].update(base_url="ftp://host"), "base_url"),
+    (lambda data: data["llm"]["channels"]["hub"].update(base_url_env="HUB_URL"), "base_url_env"),
+    (lambda data: data["llm"]["channels"]["hub"].pop("base_url"), "base_url_env"),
     (lambda data: data.update(test_model="missing"), "test_model"),
-], ids=["prompt-switch", "timeout", "concurrency", "base-url", "test-model"])
+], ids=["prompt-switch", "timeout", "concurrency", "base-url", "both-urls", "no-url", "test-model"])
 def test_invalid_config_values(config_files, change, field):
     rewrite_yaml(config_files[0], change)
     with pytest.raises(ConfigurationError, match=field) as exc:

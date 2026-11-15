@@ -13,7 +13,7 @@
 
 ## 配置和规则
 
-- 生产默认值只在 `configs/game.yaml` 中维护，密钥只放在根目录的 `.env` 中。
+- 生产默认值只在 `configs/game.yaml` 中维护。仓库在 GitHub 公开，密钥和账号标识（如 Vertex 项目号）只放在根目录的 `.env` 中。
 - 玩家名单和分组只在 `configs/players.yaml`、`configs/teams.yaml` 中维护。
 - 字段含义见 `docs/usage.md`。
 

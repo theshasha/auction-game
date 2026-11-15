@@ -1,4 +1,4 @@
-"""三种协议下生产 Agent 和真实 SDK 的线上请求形状、纠错次数上限。"""
+"""各协议下生产 Agent 和真实 SDK 的线上请求形状、纠错次数上限。"""
 
 import asyncio
 import json
@@ -22,18 +22,26 @@ def test_real_sdk_stream_contract(protocol):
             assert len(h.requests) == 1
             request, body = h.requests[0]
             assert request.url.path == {"chat": "/v1/chat/completions", "responses": "/v1/responses",
-                                        "anthropic": "/anthropic/v1/messages"}[protocol]
-            assert body["model"] == MODEL and body["stream"] is True
-            field = "max_output_tokens" if protocol == "responses" else "max_tokens"
-            assert body[field] == 123 and "max_completion_tokens" not in body
+                                        "anthropic": "/anthropic/v1/messages",
+                                        "vertex": f"/v1/projects/p/locations/global/publishers/google/models/{MODEL}:streamGenerateContent",
+                                        }[protocol]
+            if protocol == "vertex":
+                assert body["generationConfig"]["maxOutputTokens"] == 123
+            else:
+                assert body["model"] == MODEL and body["stream"] is True
+                field = "max_output_tokens" if protocol == "responses" else "max_tokens"
+                assert body[field] == 123 and "max_completion_tokens" not in body
             assert request.extensions["timeout"]["read"] == 3.0
-            assert request.headers["x-api-key" if protocol == "anthropic" else "authorization"] == (
-                "fake-key" if protocol == "anthropic" else "Bearer fake-key")
+            header, key = {"anthropic": ("x-api-key", "fake-key"), "vertex": ("x-goog-api-key", "fake-key")}.get(
+                protocol, ("authorization", "Bearer fake-key"))
+            assert request.headers[header] == key
             assert json.dumps(body).count(SYSTEM) == 1
             assert json.dumps(body).count('"today"') == 1
             assert not body.get("tools") and "tool_choice" not in body
             assert "response_format" not in body and "text" not in body
             assert "output_config" not in body
+            assert "toolConfig" not in body and not {"responseMimeType", "responseSchema", "responseJsonSchema"} & set(
+                body.get("generationConfig", {}))
             parts = [p for m in result.all_messages() for p in m.parts]
             assert [p.content for p in parts if isinstance(p, TextPart)] == [text_reply(data)]
     asyncio.run(scenario())

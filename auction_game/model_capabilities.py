@@ -45,7 +45,11 @@ def effective_capabilities(model: ModelEntry, snapshot: dict) -> dict:
         status, detail = "high", "来源列出 high"
     else:
         status, detail = "default", "沿用渠道默认"
-    if status != "default" and model.protocol == "anthropic":
+    if model.protocol == "vertex":
+        # 不写 include_thoughts 时 Vertex 不返回思考摘要，任务日志里就没有 thinking。
+        settings["google_thinking_config"] = ({"include_thoughts": True} if status == "default"
+                                              else {"include_thoughts": True, "thinking_level": status})
+    elif status != "default" and model.protocol == "anthropic":
         # hub 的 claude-opus-5-5 收到 effort 时要求同时显式声明 adaptive thinking。
         settings.update(anthropic_thinking={"type": "adaptive"}, anthropic_effort=status)
     elif status != "default":

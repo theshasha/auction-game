@@ -10,11 +10,13 @@
 - `configs/teams.yaml`：团队赛阵容，正好 2 个阵营、每个 3 人。每个阵营写 `name`（阵营名，不能为空或重复）和 `players`；玩家的字段和名字要求同 `players.yaml`，但没有预测胜率。
 - `configs/config.yaml`：渠道、超时、并发上限、测试模型和提示开关。
 
-密钥写在根目录的 `.env` 里，变量名是渠道的 `api_key_env`，可以照 `.env.example` 写。
+密钥写在根目录的 `.env` 里，变量名是渠道的 `api_key_env`，可以照 `.env.example` 写。渠道地址含账号标识时（如 Vertex 的项目号），渠道里用 `base_url_env` 代替 `base_url`，地址也写在 `.env` 里。
 
 ### 接入模型
 
-在 `config.yaml` 的 `llm.channels` 里加渠道，再在 `models.yaml` 里用 `provider` 引用它。`protocol` 取 `chat`、`responses` 或 `anthropic`。OpenAI 协议的渠道地址保留 `/v1`；Anthropic 渠道的地址不带 `/v1`，SDK 会自己追加 `/v1/messages`。
+在 `config.yaml` 的 `llm.channels` 里加渠道，再在 `models.yaml` 里用 `provider` 引用它。`protocol` 取 `chat`、`responses`、`anthropic` 或 `vertex`。OpenAI 协议的渠道地址保留 `/v1`；Anthropic 渠道的地址不带 `/v1`，SDK 会自己追加 `/v1/messages`。
+
+`vertex` 协议只支持 Vertex 快速模式的 API 密钥（`AQ.` 开头），渠道地址写到区域为止，例如 `https://aiplatform.googleapis.com/v1/projects/项目号/locations/global`，程序在后面接 `/publishers/google/models/…`。不写项目和区域时，密钥被路由到 `asia-southeast1`，在那里请求 Gemini 4 返回 404。模型写到 Vertex 单次请求的输出上限还没写完，或流中途断开时，SDK 会带续接令牌自己接着请求：这些请求不记入任务日志的请求错误，暂停时也会跑完，每次续接都单独计费，用量里的输入也包括续接重发的部分。
 
 每次请求允许的最大输出取自能力快照 `data/model_capabilities.json` 里该模型的最大输出；快照里没有时用 64000。推理档位按以下顺序确定：
 
@@ -22,7 +24,7 @@
 2. 否则模型的来源列出了 `high`，就用 `high`。
 3. 其余情况用渠道默认档位。
 
-`anthropic` 协议的请求都申请 1 小时提示缓存，实际时长由渠道决定：`hub_anthropic` 实测按 5 分钟写入。其他协议由渠道自行缓存。
+`anthropic` 协议的请求都申请 1 小时提示缓存，实际时长由渠道决定：`hub_anthropic` 实测按 5 分钟写入。其他协议由渠道自行缓存，`vertex` 是 Vertex 的隐式缓存。
 
 新增模型、改了 `models_dev` 来源或要更新能力数据时，从 models.dev 同步快照：
 

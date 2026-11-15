@@ -121,16 +121,17 @@ def test_missing_or_changed_source_uses_defaults(config_files):
     assert "来源已变更" in effective["capabilities"]["output_fallback_reason"]
 
 
-@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
+@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic", "vertex"])
 def test_high_uses_protocol_setting_without_manual_binding(config_files, protocol):
     catalog = load_model_entries(config_files[2])
     catalog["substitute"] = replace(catalog["substitute"], protocol=protocol)
     snapshot = build_snapshot(catalog, public_data(), "synthetic")
     effective = effective_capabilities(catalog["substitute"], snapshot)
-    assert effective["model_settings"] == ({"anthropic_cache_messages": "1h", "anthropic_thinking": {"type": "adaptive"},
-                                            "anthropic_effort": "high"}
-                                           if protocol == "anthropic"
-                                           else {"openai_reasoning_effort": "high"})
+    assert effective["model_settings"] == {
+        "anthropic": {"anthropic_cache_messages": "1h", "anthropic_thinking": {"type": "adaptive"},
+                      "anthropic_effort": "high"},
+        "vertex": {"google_thinking_config": {"include_thoughts": True, "thinking_level": "high"}},
+    }.get(protocol, {"openai_reasoning_effort": "high"})
     assert effective["capabilities"]["reasoning_status"] == "high"
 
 
@@ -144,6 +145,16 @@ def test_options_without_high_keep_channel_default(config_files, options):
     assert effective["model_settings"] == {}
     assert effective["capabilities"]["reasoning_status"] == "default"
     assert effective["capabilities"]["reasoning_options"] == options
+
+
+def test_vertex_default_effort_still_asks_for_thoughts(config_files):
+    catalog = load_model_entries(config_files[2])
+    data = public_data()
+    data["official"]["models"]["source-c"]["reasoning_options"] = []
+    vertex = replace(catalog["substitute"], protocol="vertex")
+    effective = effective_capabilities(vertex, build_snapshot(catalog, data, "synthetic"))
+    assert effective["model_settings"] == {"google_thinking_config": {"include_thoughts": True}}
+    assert effective["capabilities"]["reasoning_status"] == "default"
 
 
 def test_output_budget_is_not_reduced_by_input_or_context(config_files):

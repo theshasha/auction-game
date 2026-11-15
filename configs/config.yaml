@@ -22,3 +22,7 @@ llm:
     oaipro:
       base_url: https://api.oaipro.com
       api_key_env: OAIPRO_API_KEY
+    # Vertex 快速模式，地址含项目号，写在 .env。
+    vertex:
+      base_url_env: VERTEX_BASE_URL
+      api_key_env: VERTEX_API_KEY

@@ -14,7 +14,7 @@ from auction_game.agent.text_output import LetterNames, TeamBoard
 from auction_game.configuration import (ConfigurationError, PlayerConfig, load_configuration, load_game_settings,
                                         load_llm_settings, load_players, load_teams)
 from auction_game.flow.controller import Controller, TournamentAborted
-from auction_game.llm.client import MissingApiKeyError, make_model_factory
+from auction_game.llm.client import MissingEnvError, make_model_factory
 from auction_game.agent.tasks import TaskRunner
 from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.rules import rules_document
@@ -93,7 +93,7 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
         controller = Controller(mode="step", max_concurrency=config["llm"]["max_concurrency"])
         task_runners = make_task_runners(config["llm"], execution_calls(player_configs), make_model_factory,
                                          signals=controller.signals)
-    except (ConfigurationError, MissingApiKeyError) as exc:
+    except (ConfigurationError, MissingEnvError) as exc:
         print(f"[配置错误] {exc}")
         return 1
     run_type = run_type_of(team=team, test_model=test_model)
@@ -191,7 +191,7 @@ def resume_ai(run_dir: Path | None = None) -> int:
                                          f"{call['provider']!r}")
         controller = Controller(mode="step", max_concurrency=llm["max_concurrency"])
         task_runners = make_task_runners(llm, calls, make_model_factory, signals=controller.signals)
-    except (ConfigurationError, MissingApiKeyError) as exc:
+    except (ConfigurationError, MissingEnvError) as exc:
         print(f"[配置错误] {exc}")
         return 1
     except ResumeError as exc:

@@ -297,6 +297,9 @@ def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_pat
             assert ("<speech>" if index == 2 else "<decision>") in encoded_body
         if protocol == "responses":
             messages = [p for p in request_body["input"] if "role" in p]
+        elif protocol == "vertex":
+            messages = [{"role": "assistant" if c["role"] == "model" else c["role"], "content": c["parts"]}
+                        for c in request_body["contents"]]
         else:
             messages = request_body["messages"]
         assistant = [m for m in messages if m["role"] == "assistant"]
@@ -330,14 +333,26 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     factory = llm_client.make_model_factory(provider="channel-name-is-not-protocol", channel=channel,
                                            model="custom-model-alias", protocol=protocol,
                                            timeout=17, max_tokens=321,
-                                           model_settings={"anthropic_cache_messages": "1h",
-                                                           "anthropic_thinking": {"type": "adaptive"},
-                                                           "anthropic_effort": "high"} if protocol == "anthropic"
-                                           else {"openai_reasoning_effort": "high"})
+                                           model_settings={
+                                               "anthropic": {"anthropic_cache_messages": "1h",
+                                                             "anthropic_thinking": {"type": "adaptive"},
+                                                             "anthropic_effort": "high"},
+                                               "vertex": {"google_thinking_config": {"include_thoughts": True,
+                                                                                     "thinking_level": "high"}},
+                                           }.get(protocol, {"openai_reasoning_effort": "high"}))
     assert factory.base_url == channel["base_url"]
     factory = replace(factory, base_url=h.factory.base_url, transport=h.factory.transport)
     assert TaskRunner(factory)(TASKS["summary"], "ping", [], game=TEST_GAME).output.text == "configured reply"
     request, body = h.requests[0]
+    assert request.extensions["timeout"]["read"] == 17 and h.closes == 1
+    if protocol == "vertex":
+        assert request.url.path == ("/v1/projects/p/locations/global/publishers/google/models/"
+                                    "custom-model-alias:streamGenerateContent")
+        config = body["generationConfig"]
+        assert config["maxOutputTokens"] == 321
+        thinking = json.dumps(config["thinkingConfig"])
+        assert '"HIGH"' in thinking and "true" in thinking
+        return
     assert body["model"] == "custom-model-alias"
     assert body["max_output_tokens" if protocol == "responses" else "max_tokens"] == 321
     if protocol == "responses":
@@ -347,7 +362,19 @@ def test_factory_configuration_drives_wire_request(protocol, monkeypatch):
     else:
         assert body["thinking"] == {"type": "adaptive"} and body["output_config"]["effort"] == "high"
         assert body["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    assert request.extensions["timeout"]["read"] == 17 and h.closes == 1
+
+
+def test_channel_address_can_come_from_env(monkeypatch):
+    from auction_game.llm import client as llm_client
+    monkeypatch.setattr(llm_client, "load_dotenv", lambda path: None)
+    monkeypatch.setenv("TEST_WIRE_KEY", "fake-key")
+    channel = {"base_url_env": "TEST_WIRE_URL", "api_key_env": "TEST_WIRE_KEY"}
+    options = dict(provider="vertex", channel=channel, model="m", protocol="vertex", timeout=1, max_tokens=1,
+                   model_settings={})
+    with pytest.raises(llm_client.MissingEnvError, match="TEST_WIRE_URL"):
+        llm_client.make_model_factory(**options)
+    monkeypatch.setenv("TEST_WIRE_URL", "https://env.invalid/v1/projects/p/locations/global")
+    assert llm_client.make_model_factory(**options).base_url == "https://env.invalid/v1/projects/p/locations/global"
 
 
 @pytest.mark.parametrize("response,status", [(reply(text="c0de"), 0),

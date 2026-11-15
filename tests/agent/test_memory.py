@@ -15,7 +15,7 @@ from auction_game.flow.director import AIDirector
 from tests.support.factories import (TEST_GAME, bid_reply, continuous_controller, fake_task_runner, init_run_dir,
                                      make_ai_obs, make_log, make_logs, make_player, make_standings, request_text,
                                      speech_reply, task_entries)
-from tests.support.wire import Harness, PROTOCOLS, reply
+from tests.support.wire import Harness, PROTOCOLS, VERTEX_SIGNATURE, reply
 
 
 def encoded(messages):
@@ -80,6 +80,8 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         assert "encrypted_old_reasoning" in audit and "resp_1" in audit
     if protocol == "anthropic":
         assert "signed_old_reasoning" in audit and "redacted_old_reasoning" in audit
+    if protocol == "vertex":
+        assert VERTEX_SIGNATURE in audit and VERTEX_SIGNATURE in correction
     player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
     before = player.checkpoint()
     assert player.final_summary({}, "观众总结（仅观众可见）").text == "audience"
@@ -88,7 +90,7 @@ def test_real_sdk_keeps_thinking_in_audit_only_across_tasks(protocol, auto, tmp_
         wire = json.dumps(body, ensure_ascii=False)
         assert "OLD_PRIVATE_THINKING" not in wire
         for marker in ("encrypted_old_reasoning", "signed_old_reasoning", "redacted_old_reasoning",
-                       "rs_old", "resp_1", "previous_response_id"):
+                       VERTEX_SIGNATURE, "rs_old", "resp_1", "previous_response_id"):
             assert marker not in wire
         assert "original task" in wire
         from pydantic_ai.messages import TextPart

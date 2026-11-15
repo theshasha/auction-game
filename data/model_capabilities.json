@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-11-06T11:18:17.149373+00:00",
+  "fetched_at": "2026-11-15T02:34:54.546446+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -109,13 +109,13 @@
         }
       ]
     },
-    "gemini_flash": {
+    "gemini_hydrogen": {
       "source": {
-        "provider": "google",
-        "model": "gemini-3.8-flash"
+        "provider": "google-vertex",
+        "model": "gemini-4-hydrogen"
       },
       "status": "matched",
-      "matched_id": "gemini-3.8-flash",
+      "matched_id": "gemini-4-hydrogen",
       "limit": {
         "context": 1048576,
         "input": null,
@@ -128,22 +128,23 @@
           "values": [
             "low",
             "medium",
-            "high"
+            "high",
+            "xhigh"
           ]
         }
       ]
     },
-    "gemini_argon": {
+    "gemini_carbon": {
       "source": {
-        "provider": "google",
-        "model": "gemini-4-argon"
+        "provider": "google-vertex",
+        "model": "gemini-4-carbon"
       },
       "status": "matched",
-      "matched_id": "gemini-4-argon",
+      "matched_id": "gemini-4-carbon",
       "limit": {
         "context": 1048576,
         "input": null,
-        "output": 32768
+        "output": 65536
       },
       "reasoning": true,
       "reasoning_options": [

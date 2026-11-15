@@ -13,12 +13,12 @@ from auction_game.game.settings import GameSettings
 from auction_game.model_capabilities import effective_capabilities, read_snapshot
 from auction_game.paths import (ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, TEAMS_PATH, MODELS_PATH, GAME_PATH,
                                 CAPABILITIES_PATH, WRITING_STYLE_PATH)
-PROTOCOLS = ("chat", "responses", "anthropic")
+PROTOCOLS = ("chat", "responses", "anthropic", "vertex")
 MODEL_FIELDS = ("name", "model", "provider", "protocol", "reasoning_effort", "models_dev")
 CONFIG_FIELDS = ("test_model", "prompts", "llm")
 PROMPT_FLAGS = ("enable_predictions", "enable_personas", "enable_writing_style")
 LLM_FIELDS = ("max_concurrency", "timeout_seconds", "channels")
-CHANNEL_FIELDS = ("base_url", "api_key_env")
+CHANNEL_FIELDS = ("base_url", "base_url_env", "api_key_env")
 # 阵容里每名玩家的字段；players.yaml 另有 predicted_win_rate，团队赛没有。
 PLAYER_FIELDS = ("name", "model", "persona_title", "persona_text")
 # 团队赛固定 2 个阵营、每队 3 人，原因见 docs/team-mode.md 的"赛制"。
@@ -166,8 +166,12 @@ def _llm_settings(config: dict, config_path: Path) -> dict:
         if not isinstance(channel, dict):
             raise ConfigurationError(f"{config_path}：{field} 必须是键值配置")
         _reject_unknown(config_path, field, channel, CHANNEL_FIELDS)
-        url = channel.get("base_url")
-        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        if ("base_url" in channel) == ("base_url_env" in channel):
+            raise ConfigurationError(f"{config_path}：{field} 要写 base_url 或 base_url_env 之一")
+        if "base_url_env" in channel:
+            if not isinstance(channel["base_url_env"], str):
+                raise ConfigurationError(f"{config_path}：{field}.base_url_env 必须是环境变量名")
+        elif not isinstance(channel["base_url"], str) or not channel["base_url"].startswith(("http://", "https://")):
             raise ConfigurationError(f"{config_path}：{field}.base_url 必须是 HTTP(S) 地址")
         if not isinstance(channel.get("api_key_env"), str):
             raise ConfigurationError(f"{config_path}：{field}.api_key_env 必须是环境变量名")
@@ -217,7 +221,7 @@ def load_model_entries(path: str | Path = MODELS_PATH) -> dict[str, ModelEntry]:
             if not isinstance(model.get(prop), str) or not model[prop].strip():
                 raise ConfigurationError(f"{path}：{field}.{prop} 必须是非空字符串")
         if model.get("protocol") not in PROTOCOLS:
-            raise ConfigurationError(f"{path}：{field}.protocol 必须是 chat / responses / anthropic")
+            raise ConfigurationError(f"{path}：{field}.protocol 必须是 {' / '.join(PROTOCOLS)}")
         if "reasoning_effort" in model and model["reasoning_effort"] not in ("low", "medium", "high"):
             raise ConfigurationError(f"{path}：{field}.reasoning_effort 仅支持 low / medium / high")
         source = model.get("models_dev")
