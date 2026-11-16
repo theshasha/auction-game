@@ -115,7 +115,10 @@ class BufferedRequest(WrapperModel):
                     # SDK 收到空流或拼接不上的流事件时抛出。输出校验的同类异常在 Agent 图里抛出，不经过这里。
                     raise IncompleteStream(str(exc)) from exc
                 if response.finish_reason != "stop":
-                    raise IncompleteStream(f"finish_reason={response.finish_reason!r}")
+                    # SDK 把多种渠道结束原因映射成同一个值，Vertex 的 OTHER 等都成了 None，要记下原始值才能区分。
+                    raw = (response.provider_details or {}).get("finish_reason")
+                    detail = f"渠道原始值 {raw!r}" if raw is not None else "渠道没有给出结束原因"
+                    raise IncompleteStream(f"finish_reason={response.finish_reason!r}（{detail}）")
                 break
             except REQUEST_ERRORS as exc:
                 self.request_errors.append({"request": request_number, "attempt": attempt,

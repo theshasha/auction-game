@@ -77,6 +77,18 @@ def test_empty_stream_is_resent(protocol, tmp_path):
     assert h.closes == 1 and all(s.closed for s in h.streams)
 
 
+@pytest.mark.parametrize("ending, detail", [("OTHER", "渠道原始值 'OTHER'"), (None, "渠道没有给出结束原因")])
+def test_vertex_unfinished_stream_logs_raw_finish_reason(ending, detail, tmp_path):
+    chunks = sse("vertex")
+    chunks[-1] = (chunks[-1].replace(b'"STOP"', f'"{ending}"'.encode()) if ending
+                  else chunks[-1].replace(b', "finishReason": "STOP"', b""))
+    h = Harness("vertex", [chunks, reply()])
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
+    errors = task_entries(player.log.path)[-1]["request_errors"]
+    assert [(e["type"], e["message"]) for e in errors] == [("IncompleteStream", f"finish_reason=None（{detail}）")]
+
+
 def test_sdk_error_after_resends_is_request_failure():
     """SDK 原生异常没被 pydantic-ai 包装时，重发用完后仍按请求失败处理，带上每次的错误。"""
     async def stream(messages, info):
