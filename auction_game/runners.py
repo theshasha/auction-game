@@ -20,7 +20,8 @@ from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.rules import rules_document
 from auction_game.game.settings import GameSettings
 from auction_game.paths import CONFIG_PATH, ROOT_DIR, RULES_PATH, TEAM_RULES_PATH
-from auction_game.reporting.run_output import find_unfinished_run, initialize_run, is_finished, print_final_result
+from auction_game.reporting.run_output import (find_unfinished_run, initialize_run, is_finished, model_label,
+                                               print_final_result)
 from auction_game.reporting.run_paths import (OFFLINE_RUN_TYPES, RUN_TYPES, RunPaths, make_run_dir,
                                               run_type as run_type_of)
 
@@ -34,10 +35,9 @@ def execution_calls(player_configs) -> dict[str, dict]:
             for pc in player_configs}
 
 
-def model_label(call) -> str:
-    """型号加推理档位，沿用渠道默认档位时只写型号。"""
-    effort = call.capabilities["reasoning_status"]
-    return call.model if effort == "default" else f"{call.model} · {effort}"
+def call_label(call) -> str:
+    """开赛打印阵容用：实际调用的型号和推理档位。"""
+    return model_label(call.model, call.capabilities["reasoning_status"])
 
 
 def make_task_runners(llm: dict, calls: dict[str, dict], model_factory, runner=TaskRunner, signals=None) -> dict:
@@ -106,12 +106,12 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
     run_dir = make_run_dir(run_type)
     if test_model:
         test_key = config["test_model"]
-        print(f"测试模型：{test_key} / {model_label(player_configs[0].execution)}（全员使用，调用真实服务，可能收费）")
+        print(f"测试模型：{test_key} / {call_label(player_configs[0].execution)}（全员使用，调用真实服务，可能收费）")
         print("角色身份与独立历史保持不变。")
     else:
         print("常规阵容（调用真实服务，可能收费）：")
         for pc in player_configs:
-            print(f"  {pc.profile.name}：{model_label(pc.execution)}")
+            print(f"  {pc.profile.name}：{call_label(pc.execution)}")
     warned = {pc.execution.key: pc.execution for pc in player_configs
               if pc.execution.capabilities["output_fallback_reason"]}
     for model in warned.values():

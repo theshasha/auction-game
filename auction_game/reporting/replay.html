@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>对局回放 __TITLE__</title>
+<script>
+// 主题在页面画出来之前定下：后面内嵌的数据有约 1 MB，放到那之后会先按系统配色闪一下。
+// 存的是 light 或 dark；auto 跟随系统，不存。file:// 页面在有的浏览器里不能用 localStorage，读不到就按 auto。
+try {
+  const saved = localStorage.getItem('replay-theme');
+  if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+} catch (e) {}
+</script>
+<style>
+/* Radix 色阶：浅色是 slate、blue、red，深色是对应的 dark 色阶，同一个变量取同一档。
+   深色变量写了两份，手动选深色和自动跟随系统各用一份，改时两份一起改。 */
+:root{
+  color-scheme:light;
+  --bg:#f9f9fb;--card:#fff;--line:#e8e8ec;--line2:#d9d9e0;--fill:#f0f0f3;--mask:#e0e1e6;--raised:#fff;
+  --text:#1c2024;--muted:#60646c;--faint:#8b8d98;
+  --a:#0090ff;--a-text:#0d74ce;--a-tint:#e6f4fe;
+  --b:#e5484d;--b-text:#ce2c31;--b-tint:#feebec;
+}
+:root[data-theme=dark]{color-scheme:dark;
+  --bg:#111113;--card:#18191b;--line:#272a2d;--line2:#363a3f;--fill:#212225;--mask:#2e3135;--raised:#2e3135;
+  --text:#edeef0;--muted:#b0b4ba;--faint:#777b84;
+  --a-text:#70b8ff;--a-tint:#0d2847;
+  --b-text:#ff9592;--b-tint:#3b1219;}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;
+  --bg:#111113;--card:#18191b;--line:#272a2d;--line2:#363a3f;--fill:#212225;--mask:#2e3135;--raised:#2e3135;
+  --text:#edeef0;--muted:#b0b4ba;--faint:#777b84;
+  --a-text:#70b8ff;--a-tint:#0d2847;
+  --b-text:#ff9592;--b-tint:#3b1219;}}
+*{box-sizing:border-box}
+html{font-size:15px;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:1rem/1.6 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:inherit;text-decoration:none}
+#app{max-width:1280px;margin:0 auto;padding:18px 24px 56px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+h2{font-size:1.13rem;line-height:1.4;margin:0 0 12px;font-weight:650}
+h2:last-child{margin:0}
+h3{font-size:.8rem;line-height:1.4;font-weight:500;color:var(--muted);margin:0 0 8px}
+
+.top{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;justify-content:space-between}
+.tabs{display:flex;gap:2px;background:var(--fill);padding:3px;border-radius:9px;overflow-x:auto;max-width:100%}
+.tabs a{padding:5px 13px;border-radius:7px;white-space:nowrap;color:var(--muted);font-size:.93rem}
+.tabs a:hover{color:var(--text)}
+.tabs a.on{background:var(--raised);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.tools{display:flex;gap:14px;align-items:center;font-size:.93rem}
+.btn{font:inherit;font-size:.93rem;line-height:1.5;padding:6px 16px;border-radius:8px;border:1px solid var(--line2);background:var(--card);color:var(--text);cursor:pointer;display:inline-block}
+.btn:hover{background:var(--fill)}
+.btn.on{background:var(--fill);border-color:var(--text);font-weight:600}
+.btn.icon{padding:6px 8px;line-height:0}
+.btn.icon svg{width:20px;height:20px}
+.btn.primary{background:var(--text);border-color:var(--text);color:var(--card)}
+.btn.primary:hover{background:var(--text);opacity:.85}
+
+.row1{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:14px;align-items:start}
+.left{display:flex;flex-direction:column;gap:14px;min-width:0}
+.left{width:var(--lw,auto)}
+.left .card{overflow-x:auto}
+
+.mx{border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
+.mx th{font-weight:500;font-size:.8rem;color:var(--faint);padding:3px 2px;text-align:center;white-space:nowrap}
+.mx th.grp{color:var(--muted);box-shadow:inset 0 -1px 0 var(--line)}
+.mx th.on{color:var(--text);font-weight:700}
+.mx td{padding:2px}
+.mx td.on,.mx th.on{background:var(--fill)}
+.mx thead tr:last-child th.on{border-radius:6px 6px 0 0}
+.mx th.nm{text-align:left;color:var(--text);font-size:.93rem;padding:0 14px 0 9px;border-left:3px solid transparent}
+.mx tr.team th{text-align:left;font-size:.8rem;font-weight:600;padding:10px 0 3px}
+.mx tr.team.a th{color:var(--a-text)}
+.mx tr.team.b th{color:var(--b-text)}
+.mx tr.a .nm{border-left-color:var(--a)}
+.mx tr.b .nm{border-left-color:var(--b)}
+.mx tr.sel td,.mx tr.sel .nm{background:var(--a-tint)}
+.mx tr.b.sel td,.mx tr.b.sel .nm{background:var(--b-tint)}
+.mx tr.sel .nm{font-weight:700}
+.mx tr.sel td:last-child{border-radius:0 6px 6px 0}
+.c{display:block;width:30px;height:28px;line-height:28px;border-radius:6px;text-align:center;font-size:.93rem}
+.c:hover{box-shadow:0 0 0 2px var(--line2)}
+.c.blank{border:1px solid var(--line2);background:var(--card)}
+.c.mask{background:var(--mask)}
+.c.col{text-decoration:line-through;color:var(--faint)}
+/* 队伍色填的格子用白字，深色模式里也一样；中性色填的格子文字取卡片底色。 */
+.c.win{background:var(--text);color:var(--card);font-weight:650}
+tr.a .c.win{background:var(--a);color:#fff}
+tr.b .c.win{background:var(--b);color:#fff}
+.c.here,.c.here:hover{box-shadow:0 0 0 2px var(--a);font-weight:700}
+tr.b .c.here,tr.b .c.here:hover{box-shadow:0 0 0 2px var(--b)}
+.mx tr.me .nm{font-weight:700}
+.solo .mx tr.sel .c.win,.solo .mx tr.me .c.win{background:var(--a);color:#fff}
+.mx.mini .c{width:26px;height:24px;line-height:24px;font-size:.87rem}
+.mx.mini th.nm{font-size:.87rem;padding-right:10px}
+.minis{display:flex;flex-wrap:wrap;gap:16px 28px}
+.minis h3 a:hover{color:var(--text)}
+
+.pool{display:flex;flex-wrap:wrap;gap:4px 22px;align-items:baseline;margin-bottom:8px;font-size:.93rem}
+.pool b{font-size:1.13rem;font-variant-numeric:tabular-nums}
+.pool .sa{color:var(--a-text)}
+.pool .sb{color:var(--b-text)}
+.tb{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.93rem}
+/* 测量左栏宽度时排名表按内容算宽：width:100% 和 width:1% 在 max-content 容器里会把表撑到几千像素。 */
+.tb.fit,.measure .tb,.measure .tb td.rk{width:auto}
+.tb.fit th,.tb.fit td{padding-left:20px}
+.tb.fit td.l{padding-right:12px}
+.tb.fit tr>:first-child{padding-left:0;width:auto}
+.tb th{font-weight:500;font-size:.8rem;color:var(--faint);text-align:right;padding:3px 8px;white-space:nowrap}
+.tb td{text-align:right;padding:4px 8px;white-space:nowrap}
+.tb .l{text-align:left}
+.tb.lineup{width:auto}
+.tb.lineup td{padding-right:24px}
+.tb.lineup td:first-child{padding-left:0}
+.tb td.rk{color:var(--faint);width:1%;padding-right:0}
+.tb tr.sel td{font-weight:700}
+.tb .mask{display:inline-block;width:22px;height:14px;border-radius:4px;background:var(--mask);vertical-align:middle}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--a)}
+.dot.b{background:var(--b)}
+
+.note{margin:0 0 10px;font-size:.93rem}
+.ax{display:grid;grid-template-columns:1fr 34px 1fr;max-width:480px}
+.ax>div{min-height:28px;display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:2px 0}
+.ax .l{justify-content:flex-end;padding-right:8px}
+.ax .r{padding-left:8px}
+.ax .p{justify-content:center;font-size:.8rem;color:var(--faint);border-left:1px solid var(--line);border-right:1px solid var(--line);font-variant-numeric:tabular-nums}
+.ax .p.has{color:var(--text);font-weight:700;font-size:.93rem}
+.ax .hd{font-size:.8rem;color:var(--muted);min-height:24px;border:0}
+.tk{--k:var(--faint);--ki:#fff;font-size:.87rem;line-height:22px;padding:0 7px;border-radius:5px;border:1.5px solid var(--k);background:var(--card);white-space:nowrap}
+.tk.a{--k:var(--a)}
+.tk.b{--k:var(--b)}
+.tk.me{font-weight:700;box-shadow:0 0 0 3px var(--a-tint)}
+.tk.b.me{box-shadow:0 0 0 3px var(--b-tint)}
+.solo .tk.me{--k:var(--a)}
+.tk.win,.tk.got{background:var(--k);color:var(--ki);font-weight:600}
+.solo .tk.win,.solo .tk.got{--k:var(--text);--ki:var(--card)}
+.solo .tk.me.win,.solo .tk.me.got{--k:var(--a);--ki:#fff}
+.tk.col{text-decoration:line-through;color:var(--faint)}
+.tk.sup{border-radius:999px;padding:0 10px;position:relative;margin-left:7px;border-style:dashed;color:var(--muted)}
+.tk.sup:before{content:"";position:absolute;left:-9px;top:50%;margin-top:-5px;border:5px solid transparent;border-left:0;border-right:6px solid var(--k)}
+.tk.sup.got{border-style:solid;color:var(--ki)}
+
+.head{display:flex;flex-wrap:wrap;gap:4px 16px;align-items:baseline}
+.name{font-size:1.2rem;font-weight:700}
+.persona{color:var(--muted);font-size:.93rem}
+.link{color:var(--a-text);font-size:.93rem}
+.link:hover{text-decoration:underline}
+.bids{margin-left:auto;display:flex;gap:22px;color:var(--muted);font-size:.93rem}
+.bids b{color:var(--text);font-size:1.2rem;margin-left:7px;font-variant-numeric:tabular-nums}
+.head+h3{margin-top:12px}
+.said{max-width:48em}
+.txt{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}
+.letter+.letter{margin-top:16px}
+.from{font-weight:600;margin-bottom:2px}
+.none{color:var(--faint);margin:0}
+.cols{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
+.cols>.card{flex:1 1 280px}
+.cols>.card.wide{flex:2 1 574px}
+.cols>.stack{flex:1 1 280px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.sp2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px}
+.sp2>div>.letter+.letter{margin-top:16px}
+.bar{display:flex;justify-content:flex-end;gap:10px}
+
+@media(max-width:860px){
+  #app{padding:12px 12px 40px}
+  .row1{grid-template-columns:minmax(0,1fr)}
+  .left{display:contents}
+  .o1{order:1}.o2{order:2}.o3{order:3}
+  .tabs{flex-wrap:wrap}
+  .tabs a{padding:5px 10px}
+  .card{padding:12px 10px}
+  .mx td{padding:1px}
+  .mx th.nm{padding:0 8px 0 6px}
+  .c,.mx.mini .c{width:24px;height:26px;line-height:26px;font-size:.87rem}
+  .sp2{grid-template-columns:minmax(0,1fr);gap:16px}
+  .bids{margin-left:0;width:100%}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const P = D.players, TEAM = !!D.teams, LAST = D.matches.length - 1;
+const st = {m: 0, r: D.matches[0].cols[0], p: 0};
+let rev = false, all = false, rk = false, toTop = false;
+const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">${d}</svg>`;
+const THEMES = {
+  auto: ['自动', svg('<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>'), 'light'],
+  light: ['浅色', svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'), 'dark'],
+  dark: ['深色', svg('<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>'), 'auto'],
+};
+let theme = document.documentElement.dataset.theme || 'auto';
+function setTheme(t) {
+  theme = t;
+  try {
+    if (t === 'auto') localStorage.removeItem('replay-theme'); else localStorage.setItem('replay-theme', t);
+  } catch (e) {}
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.dataset.theme = t;
+}
+if (!TEAM) document.body.className = 'solo';
+
+const tc = i => TEAM ? (P[i].t ? 'b' : 'a') : '';
+const dot = i => TEAM ? `<i class="dot${P[i].t ? ' b' : ''}"></i>` : '';
+const href = (m, r, p) => `#m${m + 1}-${r}-p${p + 1}`;
+const dayOf = r => r[0] === 'd' ? +r.slice(1) : 0;
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// 模型的文字里常有 Markdown 的粗体和标题，其余原样显示。
+const fmt = s => `<div class="txt">${esc(s.trim()).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/^#{1,6} +(.+)$/gm, '<strong>$1</strong>')}</div>`;
+
+function colLabel(m, r) {
+  if (r === 'open') return '开局';
+  if (r[0] === 't' || r[0] === 'd') return r.slice(1);
+  if (r === 'sp') return m === LAST ? '感言' : '发言';
+  return m === LAST ? '总结' : '记忆';
+}
+function roundTitle(m, r) {
+  const n = `第 ${m + 1} 局`;
+  if (r === 'open') return '开局发言';
+  if (r[0] === 't') return `${n}讨论第 ${r.slice(1)} 轮`;
+  if (r[0] === 'd') return `${n}第 ${r.slice(1)} 天`;
+  if (r === 'sp') return m === LAST ? '最终感言' : `${n}局末发言`;
+  return m === LAST ? '观众总结' : `${n}记忆`;
+}
+// 选中的人在这一轮已经知道本局前几天的结果。
+function knownDays(M, r) {
+  if (r[0] === 'd') return dayOf(r) - 1;
+  return r === 'sp' || r === 'mem' ? M.days.length : 0;
+}
+function bidCell(x, shown) {
+  if (!shown) return ['mask', ''];
+  return [x[1] === 'w' ? 'win' : x[1] === 'c' ? 'col' : 'num', x[0]];
+}
+
+function matrix() {
+  const M = D.matches[st.m], known = knownDays(M, st.r), today = dayOf(st.r);
+  const groups = [];
+  M.cols.forEach(c => {
+    const g = c[0] === 't' ? '讨论' : c[0] === 'd' ? '出价日' : '';
+    const prev = groups[groups.length - 1];
+    if (g && prev && prev.g === g) prev.n++; else groups.push({g, n: 1});
+  });
+  let h = '<table class="mx"><thead><tr><th></th>'
+    + groups.map(g => `<th colspan="${g.n}"${g.g ? ' class="grp"' : ''}>${g.g}</th>`).join('') + '</tr><tr><th></th>'
+    + M.cols.map(c => `<th${c === st.r ? ' class="on"' : ''}>${colLabel(st.m, c)}</th>`).join('') + '</tr></thead><tbody>';
+  P.forEach((pl, i) => {
+    if (TEAM && (i === 0 || P[i - 1].t !== pl.t)) h += `<tr class="team ${tc(i)}"><th colspan="${M.cols.length + 1}">${D.teams[pl.t]}</th></tr>`;
+    h += `<tr class="${tc(i)}${i === st.p ? ' sel' : ''}"><th class="nm">${pl.n}</th>`;
+    M.cols.forEach(c => {
+      const on = c === st.r, here = on && i === st.p;
+      let cls = 'blank', text = '';
+      if (c[0] === 'd') {
+        const d = dayOf(c), x = M.days[d - 1].p[i];
+        if (all || d <= known || (d === today && rev)) [cls, text] = bidCell(x, true);
+        else if (here) [cls, text] = ['num', x[0]];
+        else cls = 'mask';
+      }
+      h += `<td${on ? ' class="on"' : ''}><a class="c ${cls}${here ? ' here' : ''}" href="${href(st.m, c, i)}">${text}</a></td>`;
+    });
+    h += '</tr>';
+  });
+  return h + '</tbody></table>';
+}
+
+function mini(m) {
+  const M = D.matches[m];
+  let h = `<div><h3><a href="${href(m, M.cols[0], st.p)}">第 ${m + 1} 局</a></h3><table class="mx mini"><thead><tr><th></th>`
+    + M.days.map((_, d) => `<th>${d + 1}</th>`).join('') + '</tr></thead><tbody>';
+  P.forEach((pl, i) => {
+    h += `<tr class="${tc(i)}${i === st.p ? ' me' : ''}"><th class="nm">${pl.n}</th>` + M.days.map((day, d) => {
+      const [cls, text] = bidCell(day.p[i], true);
+      return `<td><a class="c ${cls}" href="${href(m, 'd' + (d + 1), i)}">${text}</a></td>`;
+    }).join('') + '</tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+
+function teamLine(values) {
+  if (!TEAM) return '';
+  const sum = t => values.reduce((s, v, i) => s + (P[i].t === t ? v : 0), 0);
+  return `<span>${D.teams[0]} <b class="sa">${sum(0)}</b> : <b class="sb">${sum(1)}</b> ${D.teams[1]}</span>`;
+}
+function today(day) {
+  return `<h3>今日</h3><div class="pool"><span>奖池 <b>${day.pool} 分</b></span>${teamLine(day.score)}</div>`
+    + '<table class="tb"><tr><th></th><th>金币</th><th>累计得分</th></tr>'
+    + P.map((pl, i) => `<tr${i === st.p ? ' class="sel"' : ''}><td class="l">${dot(i)}${pl.n}</td><td>${day.coins[i]}</td><td>${day.score[i]}</td></tr>`).join('')
+    + '</table>';
+}
+// full：打完了几局；part：下一局已经结算了几天，计入得分。total：表里列出几局，没打到的是灰块。
+function ranking(full, part, total, fit) {
+  const zero = P.map(() => 0);
+  const before = full ? D.matches[full - 1].total : zero;
+  const sum = part ? D.matches[full].days[part].score : before;
+  let rank = full && !part ? D.matches[full - 1].rank : null;
+  if (part) rank = sum.map(s => 1 + sum.filter(t => t > s).length);
+  const order = P.map((_, i) => i);
+  if (rank) order.sort((x, y) => rank[x] - rank[y] || x - y);
+  const line = teamLine(sum);
+  let h = (line ? `<div class="pool">${line}</div>` : '') + `<table class="tb${fit ? ' fit' : ''}"><tr><th></th><th></th>`;
+  for (let k = 1; k <= total; k++) h += `<th>第 ${k} 局</th>`;
+  h += '<th>总分</th></tr>';
+  order.forEach(i => {
+    h += `<tr${i === st.p ? ' class="sel"' : ''}><td class="rk">${rank ? rank[i] : ''}</td><td class="l">${dot(i)}${P[i].n}</td>`;
+    for (let k = 0; k < total; k++) {
+      const v = k < full ? D.scores[i][k] : k === full && part ? sum[i] - before[i] : null;
+      h += `<td>${v === null ? '<i class="mask"></i>' : v}</td>`;
+    }
+    h += `<td><b>${sum[i]}</b></td></tr>`;
+  });
+  return h + '</table>';
+}
+// 总排名按选中的人此刻知道的算：本局已结算的天数也计入，和"今日"的累计得分一致。
+function overall() {
+  if (all) return ranking(LAST + 1, 0, LAST + 1, true);
+  const M = D.matches[st.m], k = knownDays(M, st.r);
+  return k === M.days.length ? ranking(st.m + 1, 0, LAST + 1, true) : ranking(st.m, k, LAST + 1, true);
+}
+function lineup() {
+  return '<h3>阵容</h3><table class="tb lineup">'
+    + P.map((pl, i) => `<tr${i === st.p ? ' class="sel"' : ''}><td class="l">${dot(i)}${pl.n}</td><td class="l">${pl.persona}</td><td class="l">${pl.model}</td></tr>`).join('')
+    + '</table>';
+}
+
+function axis(day) {
+  let h = '<div class="ax"><div class="l hd">正常出价</div><div class="p hd"></div><div class="r hd">超级出价</div>';
+  for (let price = D.maxBid; price >= 0; price--) {
+    let bids = '', supers = '';
+    day.p.forEach((x, i) => {
+      const who = `${tc(i)}${i === st.p ? ' me' : ''}`;
+      if (x[0] === price) bids += `<span class="tk ${who}${x[1] === 'w' ? ' win' : x[1] === 'c' ? ' col' : ''}">${P[i].n}${x[1] === 'w' ? ' +' + day.pool : ''}</span>`;
+      if (x[2] === price) supers += `<span class="tk sup ${who}${x[3] ? ' got' : ''}">${P[i].n}${x[3] ? ' +' + D.superHit : ''}</span>`;
+    });
+    h += `<div class="l">${bids}</div><div class="p${bids ? ' has' : ''}">${price}</div><div class="r">${supers}</div>`;
+  }
+  return h + '</div>';
+}
+const axisBlock = (label, day) => `<h3>${label}</h3>${day.void ? `<p class="note">流局，奖池 ${day.pool} 分作废</p>` : ''}${axis(day)}`;
+const letter = (heading, text) => `<div class="letter">${heading ? `<div class="from">${heading}</div>` : ''}${fmt(text)}</div>`;
+function speeches(entries, label) {
+  const half = Math.ceil(P.length / 2);
+  const part = (from, to) => entries.slice(from, to).map((e, k) => letter(dot(from + k) + P[from + k].n, e.speech)).join('');
+  return `<h3>${label}</h3><div class="sp2"><div>${part(0, half)}</div><div>${part(half, P.length)}</div></div>`;
+}
+
+function publicArea() {
+  const m = st.m, M = D.matches[m], r = st.r;
+  if (r === 'open') return lineup();
+  if (r === 'mem') return speeches(M.rounds.sp, m === LAST ? '最终感言' : '局末发言');
+  if (r === 'sp') return axisBlock(`第 ${M.days.length} 天`, M.days[M.days.length - 1]);
+  if (dayOf(r) > 1) return axisBlock('昨日', M.days[dayOf(r) - 2]);
+  if (m === 0) return speeches(M.rounds.open, '开局发言');
+  return (M.note ? `<p class="note">${M.note}</p>` : '') + '<div class="minis">' + D.matches.slice(0, m).map((_, k) => mini(k)).join('') + '</div>';
+}
+function underMatrix() {
+  const m = st.m, M = D.matches[m], r = st.r;
+  if (dayOf(r)) return `<div class="card o3">${today(M.days[dayOf(r) - 1])}</div>`;
+  const upto = r === 'sp' || r === 'mem' ? m + 1 : m;
+  return r !== 'open' && upto ? `<div class="card o3"><h3>排名</h3>${ranking(upto, 0, upto)}</div>` : '';
+}
+
+function column(label, body, wide) {
+  return `<section class="card${wide ? ' wide' : ''}"><h3>${label}</h3>${body || '<p class="none">无</p>'}</section>`;
+}
+function person() {
+  const m = st.m, M = D.matches[m], r = st.r, e = M.rounds[r][st.p], pl = P[st.p], d = dayOf(r);
+  const first = m > 0 && r === M.cols[0];
+  let h = `<section class="card"><div class="head"><span class="name">${dot(st.p)}${pl.n}</span><span class="persona">${pl.persona}</span><span class="persona">${pl.model}</span>`;
+  if (m > 0 && !first) h += `<a class="link" href="${href(m - 1, 'mem', st.p)}">第 ${m} 局的记忆</a>`;
+  if (d) {
+    const x = M.days[d - 1].p[st.p];
+    h += `<span class="bids"><span>正常出价<b>${x[0]}</b></span><span>超级出价<b>${x[2] === null ? '—' : x[2]}</b></span></span>`;
+  }
+  h += '</div>';
+  if (e.speech != null) h += `<h3>发言</h3><div class="said">${fmt(e.speech)}</div>`;
+  if (e.sum != null) h += `<h3>总结</h3><div class="said">${fmt(e.sum)}</div>`;
+  h += '</section>';
+  // 上一局的记忆比策略和信长得多，占两栏，策略和写的信叠在第三栏。
+  if (first) return h + '<div class="cols">' + column(`第 ${m} 局的记忆`, fmt(D.matches[m - 1].rounds.mem[st.p].memory), true)
+    + `<div class="stack">${column('策略', fmt(e.strategy))}${column('写的信', outLetters(e))}</div></div>`;
+  let cols = '';
+  if (e.in) cols += column('收到的信', e.in.map(x => letter(dot(x[0]) + P[x[0]].n, x[1])).join(''));
+  if (e.strategy != null) cols += column('策略', fmt(e.strategy));
+  if (e.memory != null) cols += column('记忆', fmt(e.memory), true);
+  if (e.out) cols += column('写的信', outLetters(e));
+  return h + (cols ? `<div class="cols">${cols}</div>` : '');
+}
+const outLetters = e => (e.out || []).map(x => letter(TEAM ? '' : x[0], x[1])).join('');
+
+// 左栏放矩阵和排名表，各局、各轮宽度不同（第 1 局多"开局"，排名表随局数变宽），
+// 按所有局、所有选中者里最宽的定左栏宽度，切换时不跳。测量容器用 max-content，表才按内容排开，不被页面宽度折行。
+function measure() {
+  const keep = {...st}, box = document.createElement('div');
+  box.className = 'measure';
+  box.style.cssText = 'position:absolute;visibility:hidden;left:0;top:0;width:max-content';
+  document.body.appendChild(box);
+  let w = 0;
+  const fit = html => { box.innerHTML = `<div class="card">${html}</div>`; w = Math.max(w, box.firstChild.offsetWidth); };
+  D.matches.forEach((M, k) => P.forEach((_, i) => {
+    Object.assign(st, {m: k, r: M.cols[0], p: i});
+    fit(matrix());
+    fit(ranking(k + 1, 0, k + 1));
+  }));
+  Object.assign(st, keep);
+  box.remove();
+  document.documentElement.style.setProperty('--lw', w + 'px');
+}
+
+function nextRound() {
+  const M = D.matches[st.m], at = M.cols.indexOf(st.r);
+  if (at < M.cols.length - 1) return href(st.m, M.cols[at + 1], st.p);
+  return st.m < LAST ? href(st.m + 1, D.matches[st.m + 1].cols[0], st.p) : '';
+}
+function draw() {
+  const m = st.m, M = D.matches[m], r = st.r, d = dayOf(r);
+  let h = '<div class="top"><nav class="tabs">'
+    + D.matches.map((x, k) => `<a${k === m ? ' class="on"' : ''} href="${href(k, x.cols[0], st.p)}">第 ${k + 1} 局${x.playoff ? ' 加赛' : ''}</a>`).join('')
+    + `</nav><div class="tools"><button class="btn${all ? ' on' : ''}" id="all" aria-pressed="${all}">显示全部结果</button>`
+    + `<button class="btn${rk ? ' on' : ''}" id="rk" aria-pressed="${rk}">总排名</button>`
+    + `<button class="btn icon" id="theme" title="${THEMES[theme][0]}" aria-label="${THEMES[theme][0]}">${THEMES[theme][1]}</button></div></div>`;
+  if (rk) h += `<div class="card">${overall()}</div>`;
+  h += `<div class="row1"><div class="left"><div class="card o1">${matrix()}</div>${underMatrix()}</div>`
+    + `<section class="card o2"><h2>${roundTitle(m, r)}</h2>${publicArea()}</section></div>` + person();
+  if (d && (rev || all)) h += `<section class="card" id="res">${axisBlock('结果', M.days[d - 1])}</section>`;
+  const next = nextRound();
+  h += '<div class="bar">' + (d && !all ? `<button class="btn primary" id="rev">${rev ? '遮住' : '揭晓'}</button>` : '')
+    + (next ? `<a class="btn" id="next" href="${next}">下一轮</a>` : '') + '</div>';
+  document.getElementById('app').innerHTML = h;
+  document.title = `${roundTitle(m, r)} ${P[st.p].n} · ${D.run}`;
+}
+function fromHash() {
+  const x = /^#m(\d+)-(\w+)-p(\d+)$/.exec(decodeURIComponent(location.hash));
+  if (!x) return;
+  const m = x[1] - 1, p = x[3] - 1;
+  if (!D.matches[m] || !P[p] || !D.matches[m].cols.includes(x[2])) return;
+  if (m !== st.m || x[2] !== st.r) rev = false;
+  st.m = m; st.r = x[2]; st.p = p;
+}
+window.addEventListener('hashchange', () => {
+  fromHash(); draw();
+  if (toTop) { window.scrollTo(0, 0); toTop = false; }
+});
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t.id === 'rev') {
+    rev = !rev; draw();
+    // 结果插在按钮上面，滚到能同时看见结果和按钮；放不下时以结果顶端为准。
+    if (rev) {
+      document.querySelector('.bar').scrollIntoView({block: 'nearest'});
+      const res = document.getElementById('res');
+      if (res.getBoundingClientRect().top < 0) res.scrollIntoView({block: 'start'});
+    }
+  }
+  else if (t.closest('#rk')) { rk = !rk; draw(); }
+  else if (t.closest('#all')) { all = !all; draw(); }
+  else if (t.closest('#theme')) { setTheme(THEMES[theme][2]); draw(); }
+  else if (t.id === 'next') toTop = true;
+});
+// 窄屏的格子更小，跨过断点要重新测。
+matchMedia('(max-width:860px)').addEventListener('change', measure);
+measure(); fromHash(); draw();
+</script>
+</body>
+</html>

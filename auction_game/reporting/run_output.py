@@ -75,6 +75,17 @@ def find_unfinished_run() -> Path | None:
     return runs[-1] if runs else None
 
 
+def find_finished_run() -> Path | None:
+    """logs/ 下最新一场打完的真实 AI 场次，没有时为 None；离线赛和归档目录不算。"""
+    runs = [path for path in find_runs(REAL_RUN_TYPES) if is_finished(RunPaths(path))]
+    return runs[-1] if runs else None
+
+
+def model_label(model: str, effort: str) -> str:
+    """型号加推理档位，沿用渠道默认档位时只写型号。开赛打印阵容和对局回放共用。"""
+    return model if effort == "default" else f"{model} · {effort}"
+
+
 def reset_reports(paths: RunPaths) -> None:
     """续跑补写之前把公开发言、信、逐局结果和局日志 JSON 清回开场时的样子；README 补写时整份覆盖。
 

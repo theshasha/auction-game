@@ -103,6 +103,15 @@ python main.py --resume logs/<场次>  # 指定场次
 - `data/matches/`：完整结算数据。
 - `data/players/<编号>.jsonl`：任务记录，含模型原始回复、thinking 和完整错误。
 
+### 对局回放
+
+```bash
+python -m auction_game.cli.replay                    # 最新的打完了的真实场次
+python -m auction_game.cli.replay "logs/场次目录"   # 指定场次，离线赛要这样指定
+```
+
+生成 `replay.html` 放在场次目录里，已有时覆盖；单个文件，双击用浏览器打开。可以按人、按轮次切换，看每人的策略、收到和写的信、发言、记忆和每天的出价结果。只支持打完的场次。页面里不含 thinking、提示词原文和渠道名，可以发给别人看。
+
 ## 分析
 
 ```bash
