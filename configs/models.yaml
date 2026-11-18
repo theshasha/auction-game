@@ -3,20 +3,20 @@
 models:
   gpt_astra:
     name: GPT姐姐
-    model: gpt-6-astra
+    model: gpt-6.2-astra
     provider: hub
     protocol: responses
     models_dev:
       provider: openai
-      model: gpt-6-astra
+      model: gpt-6.2-astra
   gpt_sol:
     name: GPT妹妹
-    model: gpt-6.1-sol
+    model: gpt-6.2-sol
     provider: hub
     protocol: responses
     models_dev:
       provider: openai
-      model: gpt-6.1-sol
+      model: gpt-6.2-sol
   gpt_luna:
     name: GPT小妹妹
     model: gpt-6-luna

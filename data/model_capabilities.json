@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-11-15T02:34:54.546446+00:00",
+  "fetched_at": "2026-11-18T03:52:41.930943+00:00",
   "models": {
     "gpt_astra": {
       "source": {
         "provider": "openai",
-        "model": "gpt-6-astra"
+        "model": "gpt-6.2-astra"
       },
       "status": "matched",
-      "matched_id": "gpt-6-astra",
+      "matched_id": "gpt-6.2-astra",
       "limit": {
         "context": 1050000,
         "input": 922000,
@@ -32,10 +32,10 @@
     "gpt_sol": {
       "source": {
         "provider": "openai",
-        "model": "gpt-6.1-sol"
+        "model": "gpt-6.2-sol"
       },
       "status": "matched",
-      "matched_id": "gpt-6.1-sol",
+      "matched_id": "gpt-6.2-sol",
       "limit": {
         "context": 1050000,
         "input": 922000,
