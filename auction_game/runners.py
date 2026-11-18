@@ -34,6 +34,12 @@ def execution_calls(player_configs) -> dict[str, dict]:
             for pc in player_configs}
 
 
+def model_label(call) -> str:
+    """型号加推理档位，沿用渠道默认档位时只写型号。"""
+    effort = call.capabilities["reasoning_status"]
+    return call.model if effort == "default" else f"{call.model} · {effort}"
+
+
 def make_task_runners(llm: dict, calls: dict[str, dict], model_factory, runner=TaskRunner, signals=None) -> dict:
     """为每名玩家创建任务入口；缺密钥在这里报错，这时新开的还没创建场次目录，续跑的还没改场次文件。
 
@@ -100,12 +106,12 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
     run_dir = make_run_dir(run_type)
     if test_model:
         test_key = config["test_model"]
-        print(f"测试模型：{test_key} / {config['models'][test_key].model}（全员使用，调用真实服务，可能收费）")
+        print(f"测试模型：{test_key} / {model_label(player_configs[0].execution)}（全员使用，调用真实服务，可能收费）")
         print("角色身份与独立历史保持不变。")
     else:
         print("常规阵容（调用真实服务，可能收费）：")
         for pc in player_configs:
-            print(f"  {pc.profile.name}：{pc.execution.model}")
+            print(f"  {pc.profile.name}：{model_label(pc.execution)}")
     warned = {pc.execution.key: pc.execution for pc in player_configs
               if pc.execution.capabilities["output_fallback_reason"]}
     for model in warned.values():

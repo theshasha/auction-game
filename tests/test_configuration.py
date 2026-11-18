@@ -385,6 +385,7 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
         entry["limit"]["output"] = None
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
     rewrite_yaml(config_files[0], lambda config: config["llm"].update(max_concurrency=3, timeout_seconds=7))
+    rewrite_yaml(config_files[2], lambda data: data["models"]["first"].update(reasoning_effort="low"))
     factories = []
     monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: factories.append(kwargs))
@@ -395,10 +396,11 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
     assert runners.run_ai(test_model=test_model) == 0
     output = capsys.readouterr().out
     if test_model:
-        assert "测试模型：substitute / test-model-c（全员使用，调用真实服务，可能收费）" in output
+        assert "测试模型：substitute / test-model-c · high（全员使用，调用真实服务，可能收费）" in output
         assert output.count("[预算提醒] 测试模型：") == 1
     else:
-        assert "常规阵容（调用真实服务，可能收费）：" in output and "甲：test-model-a" in output and "乙：test-model-b" in output
+        assert "常规阵容（调用真实服务，可能收费）：" in output
+        assert "  甲：test-model-a · low\n" in output and "  乙：test-model-b\n" in output
         assert output.count("[预算提醒]") == 2
     assert f"暂用 {DEFAULT_MAX_TOKENS} tokens" in output
     assert "python -m auction_game.cli.sync_models --write" in output
