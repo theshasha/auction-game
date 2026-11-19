@@ -8,7 +8,7 @@ from pydantic_ai.usage import RequestUsage
 
 from auction_game.cli import check_llm
 from auction_game.configuration import load_configuration
-from tests.support.factories import fake_task_runner
+from tests.support.factories import fake_task_runner, rewrite_yaml
 from tests.support.wire import Harness, PROTOCOLS, reply
 
 CODE = "c0de1234"
@@ -19,9 +19,16 @@ def fixed_code(monkeypatch):
     monkeypatch.setattr(check_llm.secrets, "token_hex", lambda nbytes: CODE)
 
 
-def probe_with(protocol, script, config_files, monkeypatch):
+@pytest.fixture(autouse=True)
+def serial(config_files):
+    """并发上限默认设为 1，不发并发检查请求；查并发的测试自己改。"""
+    rewrite_yaml(config_files[0], lambda config: config["llm"].update(max_concurrency=1))
+
+
+def probe_with(protocol, script, config_files, monkeypatch, concurrency=1):
     """让 check_llm 用 Harness 的传输层跑一个目标，返回 harness。"""
     config, players = load_configuration(*config_files)
+    config["llm"]["max_concurrency"] = concurrency
     config["models"]["substitute"] = replace(config["models"]["substitute"], protocol=protocol)
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: (config, players))
     harness = Harness(protocol, script)
@@ -138,3 +145,30 @@ def test_cache_request_failure_counts_as_failure(config_files, monkeypatch, caps
     assert "[通过]" in output and "[缓存检查失败]" in output
     assert "失败 1 个" in output
     assert len(harness.requests) == 2
+
+
+def test_concurrency_check_sends_the_limit_at_once_after_the_probe(config_files, monkeypatch, capsys, fixed_code):
+    harness = probe_with("chat", [reply(text=CODE)] * 4 + [reply(text="好")] * 2, config_files, monkeypatch,
+                         concurrency=3)
+    assert check_llm.main(["--model", "substitute"]) == 0
+    output = capsys.readouterr().out
+    assert "同时发 3 个核对请求" in output
+    assert "同时 3 个，总耗时" in output
+    assert [body for _, body in harness.requests[1:4]] == [harness.requests[0][1]] * 3
+    assert len(harness.requests) == harness.closes == 6
+    assert "[无缓存]" in output
+
+
+def test_concurrency_failure_still_runs_the_cache_check(config_files, monkeypatch, capsys, fixed_code):
+    harness = probe_with("chat", [reply(text=CODE), reply(text=CODE), 429, reply(text="无"),
+                                  reply(text="好"), reply(text="好")], config_files, monkeypatch, concurrency=3)
+    assert check_llm.main(["--model", "substitute"]) == 1
+    output = capsys.readouterr().out
+    assert "[并发失败]" in output and "失败 2 个" in output
+    assert "[无缓存]" in output and "失败 1 个。" in output
+    assert len(harness.requests) == 6
+
+
+def test_concurrency_report_marks_queueing_past_halfway_to_serial():
+    assert check_llm.concurrency_report("m", 4.0, 5.0, [4.0, 4.5, 5.0]).startswith("[并发通过] m  同时 3 个")
+    assert check_llm.concurrency_report("m", 4.0, 11.0, [4.0, 8.0, 11.0]).startswith("[排队] m")

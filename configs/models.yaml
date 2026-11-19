@@ -41,14 +41,14 @@ models:
     models_dev:
       provider: google-vertex
       model: gemini-4-hydrogen
-  gemini_carbon:
+  gemini_neon:
     name: 双子姐姐
-    model: gemini-4-carbon
+    model: gemini-4-neon
     provider: vertex
     protocol: vertex
     models_dev:
       provider: google-vertex
-      model: gemini-4-carbon
+      model: gemini-4-neon
   glm_pro:
     name: GLM姐姐
     model: glm-5.3

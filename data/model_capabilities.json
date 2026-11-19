@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-11-18T03:52:41.930943+00:00",
+  "fetched_at": "2026-11-19T11:51:29.866256+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -134,13 +134,13 @@
         }
       ]
     },
-    "gemini_carbon": {
+    "gemini_neon": {
       "source": {
         "provider": "google-vertex",
-        "model": "gemini-4-carbon"
+        "model": "gemini-4-neon"
       },
       "status": "matched",
-      "matched_id": "gemini-4-carbon",
+      "matched_id": "gemini-4-neon",
       "limit": {
         "context": 1048576,
         "input": null,
@@ -153,7 +153,8 @@
           "values": [
             "low",
             "medium",
-            "high"
+            "high",
+            "xhigh"
           ]
         }
       ]

@@ -403,7 +403,7 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
                           capabilities={"reasoning_status": "high", "reasoning_detail": "synthetic"})
     pc = PlayerConfig(PlayerProfile("甲", "人设", "正文", 0), model, model)
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: (
-         {"llm": {"timeout_seconds": 3, "channels": {"fake": CHANNELS["hub"]}}},
+         {"llm": {"timeout_seconds": 3, "max_concurrency": 1, "channels": {"fake": CHANNELS["hub"]}}},
         [pc, pc],
     ))
     def factory(**kwargs):
