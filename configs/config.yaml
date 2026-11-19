@@ -7,7 +7,7 @@ prompts:
   enable_writing_style: true
 llm:
   # 同时请求的任务数上限，1 为串行。
-  max_concurrency: 3
+  max_concurrency: 10
   timeout_seconds: 900
   # 渠道写法见 docs/usage.md 的"接入模型"。
   channels:

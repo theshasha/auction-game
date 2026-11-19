@@ -403,7 +403,7 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
                           capabilities={"reasoning_status": "high", "reasoning_detail": "synthetic"})
     pc = PlayerConfig(PlayerProfile("甲", "人设", "正文", 0), model, model)
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: (
-         {"llm": {"timeout_seconds": 3, "max_concurrency": 1, "channels": {"fake": CHANNELS["hub"]}}},
+         {"llm": {"timeout_seconds": 3, "channels": {"fake": CHANNELS["hub"]}}},
         [pc, pc],
     ))
     def factory(**kwargs):
@@ -411,7 +411,7 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
         return replace(h.factory, request_attempts=kwargs["request_attempts"], max_tokens=kwargs["max_tokens"],
                        model_settings=kwargs["model_settings"])
     monkeypatch.setattr(check_llm, "make_model_factory", factory)
-    assert check_llm.main([]) == status
+    assert check_llm.main(["--concurrency", "1"]) == status
     # 通过后还有两次缓存检查请求。
     assert len(h.requests) == h.closes == (3 if status == 0 else 1)
     body = h.requests[0][1]

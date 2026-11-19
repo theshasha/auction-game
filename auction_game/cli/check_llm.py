@@ -1,4 +1,4 @@
-"""检查真实模型连通、系统提示是否送达、渠道能否承受比赛的并发上限和有没有缓存，可能收费；都不重试。"""
+"""检查真实模型连通、系统提示是否送达、同一模型能否同时处理多个请求和有没有缓存，可能收费；都不重试。"""
 
 from __future__ import annotations
 
@@ -51,9 +51,14 @@ def main(argv=None) -> int:
     selection.add_argument("--model", action="append", metavar="KEY", help="只检查 models.yaml 中指定的模型配置名；可重复")
     selection.add_argument("--test-model", action="store_true", help="只检查 config.test_model 指定的测试模型")
     parser.add_argument("--max-tokens", type=int, default=2048, help="检查输出预算，默认 2048，不改变比赛预算")
+    # 比赛里同时打到一个模型的请求数是用它的席位数，团队赛一队三人同模型时是 3。
+    parser.add_argument("--concurrency", type=int, default=3,
+                        help="每个模型同时发几个核对请求，默认 3，为 1 时不查并发")
     args = parser.parse_args(argv)
     if args.max_tokens <= 0:
         parser.error("--max-tokens 必须是正整数")
+    if args.concurrency <= 0:
+        parser.error("--concurrency 必须是正整数")
     try:
         config, players = load_configuration(test_model=args.test_model)
         for key in args.model or []:
@@ -63,13 +68,13 @@ def main(argv=None) -> int:
         print(f"[配置错误] {exc}")
         return 1
     timeout = config["llm"]["timeout_seconds"]
-    concurrency = config["llm"]["max_concurrency"]
+    concurrency = args.concurrency
 
     targets = ({key: config["models"][key] for key in args.model} if args.model
                else {pc.execution.key: pc.execution for pc in players})
     failures = 0
     code = secrets.token_hex(4)
-    concurrency_step = (f"同时发 {concurrency} 个核对请求看能否承受并发上限，"
+    concurrency_step = (f"同时发 {concurrency} 个核对请求看能否同时处理，"
                         if concurrency > 1 else "")
     print(f"连通检查：{len(targets)} 个检查目标，会请求真实服务，可能收费。"
           f"每个目标先请求一次核对系统提示，通过后{concurrency_step}再发两次同样的长请求看缓存，都不重试。")

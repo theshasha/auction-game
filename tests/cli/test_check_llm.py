@@ -8,10 +8,12 @@ from pydantic_ai.usage import RequestUsage
 
 from auction_game.cli import check_llm
 from auction_game.configuration import load_configuration
-from tests.support.factories import fake_task_runner, rewrite_yaml
+from tests.support.factories import fake_task_runner
 from tests.support.wire import Harness, PROTOCOLS, reply
 
 CODE = "c0de1234"
+# 不查并发的测试都带上，只发核对和缓存请求。
+SERIAL = ["--concurrency", "1"]
 
 
 @pytest.fixture
@@ -19,16 +21,9 @@ def fixed_code(monkeypatch):
     monkeypatch.setattr(check_llm.secrets, "token_hex", lambda nbytes: CODE)
 
 
-@pytest.fixture(autouse=True)
-def serial(config_files):
-    """并发上限默认设为 1，不发并发检查请求；查并发的测试自己改。"""
-    rewrite_yaml(config_files[0], lambda config: config["llm"].update(max_concurrency=1))
-
-
-def probe_with(protocol, script, config_files, monkeypatch, concurrency=1):
+def probe_with(protocol, script, config_files, monkeypatch):
     """让 check_llm 用 Harness 的传输层跑一个目标，返回 harness。"""
     config, players = load_configuration(*config_files)
-    config["llm"]["max_concurrency"] = concurrency
     config["models"]["substitute"] = replace(config["models"]["substitute"], protocol=protocol)
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: (config, players))
     harness = Harness(protocol, script)
@@ -57,7 +52,7 @@ def test_check_reports_targets_cost_and_budget(config_files, monkeypatch, capsys
         return runner.executor.factory
 
     monkeypatch.setattr(check_llm, "make_model_factory", factory)
-    assert check_llm.main(["--model", "substitute", "--model", "substitute", "--max-tokens", "100"]) == 0
+    assert check_llm.main(["--model", "substitute", "--model", "substitute", "--max-tokens", "100", *SERIAL]) == 0
     output = capsys.readouterr().out
     assert "1 个检查目标，会请求真实服务，可能收费" in output
     assert "都不重试" in output
@@ -75,7 +70,7 @@ def test_test_model_checks_one_target_with_its_settings(config_files, monkeypatc
     calls = []
     monkeypatch.setattr(check_llm, "make_model_factory",
                         lambda **kwargs: calls.append(kwargs) or runner.executor.factory)
-    assert check_llm.main(["--test-model"]) == 0
+    assert check_llm.main(["--test-model", *SERIAL]) == 0
     assert [(call["model"], call["protocol"], call["model_settings"]) for call in calls] == [
         ("test-model-c", "responses", {"openai_reasoning_effort": "high"})]
 
@@ -84,8 +79,8 @@ def test_code_changes_between_runs_and_only_the_system_prompt_has_it(config_file
     monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     runner = fake_task_runner(["无", "无"])
     monkeypatch.setattr(check_llm, "make_model_factory", lambda **kwargs: runner.executor.factory)
-    check_llm.main(["--model", "substitute"])
-    check_llm.main(["--model", "substitute"])
+    check_llm.main(["--model", "substitute", *SERIAL])
+    check_llm.main(["--model", "substitute", *SERIAL])
     (first_system, first_prompt), (second_system, _) = [
         [part.content for message in call for part in message.parts] for call in runner.calls]
     assert first_system != second_system
@@ -99,7 +94,7 @@ def test_probe_sends_the_code_and_passes_when_it_comes_back(
         protocol, input_tokens, config_files, monkeypatch, capsys, fixed_code):
     harness = probe_with(protocol, [reply(text=f"核对码：{CODE}"), reply(text="好"), reply(text="好")],
                          config_files, monkeypatch)
-    assert check_llm.main(["--model", "substitute"]) == 0
+    assert check_llm.main(["--model", "substitute", *SERIAL]) == 0
     output = capsys.readouterr().out
     assert "[通过]" in output
     assert f"输入 {input_tokens} token" in output
@@ -115,7 +110,7 @@ def test_probe_sends_the_code_and_passes_when_it_comes_back(
 @pytest.mark.parametrize("text", ["OK", "无"])
 def test_reply_without_the_code_means_the_system_prompt_was_lost(text, config_files, monkeypatch, capsys, fixed_code):
     harness = probe_with("chat", [reply(text=text)], config_files, monkeypatch)
-    assert check_llm.main(["--model", "substitute"]) == 1
+    assert check_llm.main(["--model", "substitute", *SERIAL]) == 1
     output = capsys.readouterr().out
     assert "[系统提示未生效]" in output
     assert f"回复: {text}" in output
@@ -126,7 +121,7 @@ def test_reply_without_the_code_means_the_system_prompt_was_lost(text, config_fi
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_probe_transport_failure_has_no_retry(protocol, config_files, monkeypatch, capsys):
     harness = probe_with(protocol, ["connect"], config_files, monkeypatch)
-    assert check_llm.main(["--model", "substitute"]) == 1
+    assert check_llm.main(["--model", "substitute", *SERIAL]) == 1
     assert "[调用失败]" in capsys.readouterr().out
     assert len(harness.requests) == harness.closes == 1
 
@@ -140,16 +135,15 @@ def test_cache_report_looks_at_the_second_request():
 
 def test_cache_request_failure_counts_as_failure(config_files, monkeypatch, capsys, fixed_code):
     harness = probe_with("chat", [reply(text=CODE), 503], config_files, monkeypatch)
-    assert check_llm.main(["--model", "substitute"]) == 1
+    assert check_llm.main(["--model", "substitute", *SERIAL]) == 1
     output = capsys.readouterr().out
     assert "[通过]" in output and "[缓存检查失败]" in output
     assert "失败 1 个" in output
     assert len(harness.requests) == 2
 
 
-def test_concurrency_check_sends_the_limit_at_once_after_the_probe(config_files, monkeypatch, capsys, fixed_code):
-    harness = probe_with("chat", [reply(text=CODE)] * 4 + [reply(text="好")] * 2, config_files, monkeypatch,
-                         concurrency=3)
+def test_concurrency_check_sends_three_at_once_by_default(config_files, monkeypatch, capsys, fixed_code):
+    harness = probe_with("chat", [reply(text=CODE)] * 4 + [reply(text="好")] * 2, config_files, monkeypatch)
     assert check_llm.main(["--model", "substitute"]) == 0
     output = capsys.readouterr().out
     assert "同时发 3 个核对请求" in output
@@ -160,13 +154,14 @@ def test_concurrency_check_sends_the_limit_at_once_after_the_probe(config_files,
 
 
 def test_concurrency_failure_still_runs_the_cache_check(config_files, monkeypatch, capsys, fixed_code):
-    harness = probe_with("chat", [reply(text=CODE), reply(text=CODE), 429, reply(text="无"),
-                                  reply(text="好"), reply(text="好")], config_files, monkeypatch, concurrency=3)
-    assert check_llm.main(["--model", "substitute"]) == 1
+    harness = probe_with("chat", [reply(text=CODE), reply(text=CODE), 429, reply(text="无"), reply(text=CODE),
+                                  reply(text="好"), reply(text="好")], config_files, monkeypatch)
+    assert check_llm.main(["--model", "substitute", "--concurrency", "4"]) == 1
     output = capsys.readouterr().out
     assert "[并发失败]" in output and "失败 2 个" in output
+    assert "同时 4 个，失败 2 个" in output
     assert "[无缓存]" in output and "失败 1 个。" in output
-    assert len(harness.requests) == 6
+    assert len(harness.requests) == 7
 
 
 def test_concurrency_report_marks_queueing_past_halfway_to_serial():
