@@ -33,6 +33,22 @@ def load_match_logs(run_dir: Path) -> list[dict]:
     return [json.loads(path.read_text(encoding="utf-8")) for path in match_files]
 
 
+def balances_before_bids(initial_coins: int, daily_salary: int, deltas: list[list[int]]) -> list[list[int]]:
+    """一局每天出价前各人的余额，日志里没有，按引擎的顺序重算。
+
+    deltas 是每天各人的 coins_delta，人的顺序每天相同。每局 initial_coins 起，第 2 天起每天开始先发 daily_salary，
+    当天结束加 coins_delta。
+    """
+    balances = []
+    coins = [initial_coins] * len(deltas[0])
+    for number, day in enumerate(deltas, 1):
+        if number > 1:
+            coins = [value + daily_salary for value in coins]
+        balances.append(coins)
+        coins = [value + delta for value, delta in zip(coins, day)]
+    return balances
+
+
 def match_setup(matches: list[dict]) -> tuple[GameSettings, list[str]]:
     """各局共用的比赛参数和参赛名单，取自第一局日志。"""
     first = matches[0]["match"]

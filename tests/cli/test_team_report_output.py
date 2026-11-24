@@ -1,8 +1,11 @@
 """team_report 命令的输出；合成对局见 tests/support/analyze_runs.py，计算口径见 tests/reporting/test_team_metrics.py。"""
 
+import json
+
 import pytest
 
 from auction_game.cli.team_report import main, report
+from auction_game.reporting.run_paths import RunPaths
 from tests.support.analyze_runs import make_matches, make_team_report_match, make_team_void_match, write_matches
 from tests.support.factories import TEAM_OF
 
@@ -59,6 +62,27 @@ def test_runs_with_same_teams_add_up(tmp_path, capsys):
         assert line + "\n" in output
     assert section(output, "流局日的正常出价")[2] == "| 第 2 局第 1 天 | — | 1、1、5:0、0、3 | — |"
     assert "总分差（前队减后队）和按天重抽样的 95% 区间" in output
+
+
+def test_runs_with_different_settings_still_add_up_and_name_the_differences(tmp_path, capsys):
+    first = team_run(tmp_path / "a", [make_team_report_match()])
+    second = team_run(tmp_path / "b", [make_team_report_match()])
+    paths = RunPaths(second)
+    config = paths.read_config()
+    game = config["game"]
+    config["game"] = game | {"daily_salary": game["daily_salary"] + 2, "daily_pool": [1, 2, 3],
+                             "max_playoffs": game["max_playoffs"] + 1}
+    paths.config.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+    report([first, second])
+    output = capsys.readouterr().out
+    assert (f"各场比赛参数不同：daily_pool a {game['daily_pool']}、b [1, 2, 3]；"
+            f"daily_salary a {game['daily_salary']}、b {game['daily_salary'] + 2}\n") in output
+    assert section(output, "概况")[0] == "| 指标 | a | b | 合计 |"
+
+
+def test_runs_with_same_settings_print_no_difference(tmp_path, capsys):
+    report([team_run(tmp_path / "a", [make_team_report_match()]), team_run(tmp_path / "b", [make_team_report_match()])])
+    assert "比赛参数不同" not in capsys.readouterr().out
 
 
 def test_runs_with_different_teams_have_no_total(tmp_path, capsys):

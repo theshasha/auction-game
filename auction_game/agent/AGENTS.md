@@ -8,7 +8,7 @@
 - 请求失败（HTTP 错误、网络错误、输出截断、流为空或没有正常结束）后等 10 秒重发，最多重发 3 次；暂停后不再重发。`vertex` 协议的例外见 `docs/usage.md` 的"接入模型"。程序错误原样抛出，不重发。
 - 客户端在任务自己的事件循环中创建和关闭。
 - 每个任务先写 JSONL，再写可读 Markdown，都写成功后才更新玩家状态；写入异常向上传递。
-- `analyze` 读任务日志 JSONL 的 `task`、`context`、`messages`、`request_errors`，改这几个键时同步改 `auction_game/reporting/analyze.py`。
+- `analyze` 读任务日志 JSONL 的 `task`、`context`、`messages`、`request_errors`，改这几个键时同步改 `auction_game/reporting/analyze.py`。回放读 `status`、`title` 和 `result` 里的 `strategy`、`speech`、`memory`、`letters`，按轮次标题认出局和列，改这些键或轮次标题时同步改 `auction_game/reporting/replay.py` 的 `TITLES`。
 - 续跑读成功记录的 `title`、`task`、`messages`、`result`：结果由各种输出的 `from_log` 还原，改 `to_log` 时同步改它；请求文本只在 `tasks.request_prompt` 一处拼，续跑用它和记录里的输入比对。
 - `strategy` 和记忆只对玩家本人可见，私信只对收件人可见，队内信件区的信只对队友可见，对手只看到公开发言。观众总结接着当前对话写，请求补上最新一版之前的各版记忆，结果不写回玩家历史。已完成任务的 thinking 只留在任务日志里，后续请求不带 thinking。
 - 新记忆替换旧记忆和之前的对话，所以提示要让模型保留有效经验、改掉被推翻的判断，只写结论，不写例子和出价记录；事实由程序在下一局规划请求里补回之前各局的完整出价日志，团队赛在下一局讨论第 1 轮的请求里补回。

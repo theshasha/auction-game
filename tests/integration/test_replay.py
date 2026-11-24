@@ -19,18 +19,32 @@ def request_text(entry):
     return [part["content"] for part in entry["messages"][0]["parts"] if part["part_kind"] == "user-prompt"][-1]
 
 
+def reply_text(entry):
+    return "".join(part["content"] for message in entry["messages"] if message["kind"] == "response"
+                   for part in message["parts"] if part["part_kind"] == "text")
+
+
 def check_against_requests(run_dir, data):
-    """页面数据和每条请求原文一致；返回页面里收到的信的总数。"""
+    """页面数据和每条请求原文、模型回复一致；返回页面里收到的信的总数。"""
     paths = RunPaths(run_dir)
     players = paths.read_config()["players"]
     names = [pc["name"] for pc in players]
     last = len(data["matches"])
-    requests = [{where: request_text(entry) for where, entry in round_records(paths, pc["number"], last).items()}
-                for pc in players]
+    records = [round_records(paths, pc["number"], last) for pc in players]
+    requests = [{where: request_text(entry) for where, entry in by_round.items()} for by_round in records]
     letters = 0
     for index, match in enumerate(data["matches"], 1):
         for key in match["cols"]:
             for i, entry in enumerate(match["rounds"][key]):
+                # 策略、发言、记忆和总结都取自这一轮模型的回复，有这一段就进页面。
+                reply = reply_text(records[i][(index, key)])
+                for field in ("strategy", "speech"):
+                    assert (f"<{field}>" in reply) == (field in entry), (names[i], index, key, field)
+                for field in ("strategy", "speech", "memory", "sum"):
+                    if field in entry:
+                        assert entry[field].strip() and entry[field].strip() in reply, (names[i], index, key, field)
+                if key == "mem":
+                    assert set(entry) & {"memory", "sum"}, (names[i], index)
                 prompt = requests[i][(index, key)]
                 received = entry.get("in", [])
                 letters += len(received)
@@ -95,9 +109,14 @@ def test_personal_replay(tmp_path, monkeypatch, config_files, teams_file):
     assert all(match["cols"] == ["d1", "d2", "d3", "sp", "mem"] for match in matches[1:])
     assert matches[3]["note"].startswith("加赛：甲、乙并列第一，各 ")
     assert data["teams"] is None and [player["n"] for player in data["players"]] == ["甲", "乙", "丙", "丁"]
+    assert all(player["persona"] for player in data["players"])
     # 最后一轮是观众总结，只有总结正文。
     assert all(set(entry) == {"sum"} for entry in matches[-1]["rounds"]["mem"])
     assert_private_text_hidden(run_dir, render_replay(data), markers)
+
+    # 模型的文字里有 </script><!-- 时，页面内嵌的数据也完整。
+    matches[0]["rounds"]["d1"][0]["strategy"] += "\n</script><!--<script>alert(1)</script>-->"
+    assert embedded_data(render_replay(data)) == data
 
     # 命令不传目录时选最新的打完了的真实场次：更新的没打完的、离线赛都跳过。
     unfinished = shutil.copytree(run_dir, tmp_path / "20261017_120000_ai")
@@ -112,6 +131,23 @@ def test_personal_replay(tmp_path, monkeypatch, config_files, teams_file):
     assert not (unfinished / "replay.html").exists()
     with pytest.raises(ValueError, match="没打完"):
         build_replay(unfinished)
+
+
+def embedded_data(page):
+    """页面里内嵌的数据：从数据标签开始，到它后面的第一个 </script> 为止，和浏览器取的范围一样。"""
+    start = page.index('<script id="data" type="application/json">') + len('<script id="data" type="application/json">')
+    return json.loads(page[start:page.index("</script>", start)])
+
+
+def test_replay_without_personas_has_no_persona(tmp_path, monkeypatch, config_files, teams_file):
+    config, configs = configure_offline_demo(monkeypatch, config_files, teams_file)
+    config["prompts"]["enable_personas"] = False
+    run_dir = tmp_path / "20261016_120000_offline"
+    generate_demo(run_dir, test_model=True)
+    data = build_replay(run_dir)
+    assert all("persona" not in player for player in data["players"])
+    page = render_replay(data)
+    assert all(pc.profile.persona_title not in page for pc in configs)
 
 
 def test_team_replay(tmp_path, monkeypatch, config_files, teams_file):

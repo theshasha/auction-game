@@ -1,7 +1,6 @@
 """团队赛两队对比的指标，口径见 docs/analyze.md 的"团队赛对比"；打印和命令行入口在 auction_game.cli.team_report。
 
-余额日志里没有，按引擎的顺序重算：每局 initial_coins 起，第 2 天起每天开始先发 daily_salary，当天结束加 coins_delta。
-当天重判都用引擎的 resolve_bids，带阵营。比赛参数一律取局日志里的 game。
+出价前余额用 analyze.balances_before_bids 重算，当天重判都用引擎的 resolve_bids，带阵营。计算用的比赛参数取局日志里的 game；多场合计前比较参数用场次快照的 game 段。
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from pathlib import Path
 from auction_game.game.engine import resolve_bids, team_standings
 from auction_game.game.models import StandingsEntry
 from auction_game.game.settings import GameSettings
-from auction_game.reporting.analyze import collect_team_stats, load_match_logs
+from auction_game.reporting.analyze import balances_before_bids, collect_team_stats, load_match_logs
 from auction_game.reporting.run_paths import RunPaths
 
 # 分析用的分档，不是比赛参数。
@@ -23,6 +22,9 @@ LOW_BALANCE_CEILING = 9     # "余额不超过 9"的人天
 TOP_BID_LEVELS = 3          # 最高的几档正常出价，现行参数下是 10–12
 BOOTSTRAP_ROUNDS = 20000
 BOOTSTRAP_SEED = 0
+# 多场合计前比较的比赛参数：各天奖池（含每局天数）、正赛局数和经济参数。加赛上限不比，各场实际的加赛局数在概况里。
+COMPARED_SETTINGS = ("daily_pool", "regular_matches", "initial_coins", "daily_salary", "max_bid",
+                     "super_cost", "super_bounty", "super_hit_score")
 
 
 @dataclass(frozen=True)
@@ -57,15 +59,24 @@ class TeamRun:
     teams: tuple[str, str]   # 按场次快照里玩家的顺序
     team_of: dict[str, str]
     matches: list[dict]
+    game: dict               # 场次快照的 game 段
 
 
 def load_team_run(run_dir: Path) -> TeamRun:
-    """读场次快照里的阵营和已结束的局；不是团队赛时报 ValueError。"""
-    players = RunPaths(run_dir).read_config()["players"]
+    """读场次快照里的阵营、比赛参数和已结束的局；不是团队赛时报 ValueError。"""
+    config = RunPaths(run_dir).read_config()
+    players = config["players"]
     if not all(pc["team"] for pc in players):
         raise ValueError(f"{run_dir} 不是团队赛场次")
     team_of = {pc["name"]: pc["team"] for pc in players}
-    return TeamRun(run_dir.name, tuple(dict.fromkeys(team_of.values())), team_of, load_match_logs(run_dir))
+    return TeamRun(run_dir.name, tuple(dict.fromkeys(team_of.values())), team_of, load_match_logs(run_dir),
+                   config["game"])
+
+
+def differing_settings(runs: list[TeamRun]) -> dict[str, list]:
+    """各场取值不同的比赛参数：参数名到各场的值，按 COMPARED_SETTINGS 的顺序；都相同时为空。"""
+    return {key: [run.game[key] for run in runs] for key in COMPARED_SETTINGS
+            if any(run.game[key] != runs[0].game[key] for run in runs)}
 
 
 def _days(matches: list[dict]):
@@ -73,13 +84,15 @@ def _days(matches: list[dict]):
     for payload in matches:
         match = payload["match"]
         game = GameSettings.from_dict(match["game"])
-        coins = {result["player"]: game.initial_coins for result in match["days"][0]["players"]}
-        previous = None
+        names = [result["player"] for result in match["days"][0]["players"]]
+        deltas = []
         for day in match["days"]:
-            if day["day"] >= 2:
-                coins = {name: value + game.daily_salary for name, value in coins.items()}
-            yield match["match_index"], game, day, coins, previous
-            coins = {result["player"]: coins[result["player"]] + result["coins_delta"] for result in day["players"]}
+            delta_of = {result["player"]: result["coins_delta"] for result in day["players"]}
+            deltas.append([delta_of[name] for name in names])
+        balances = balances_before_bids(game.initial_coins, game.daily_salary, deltas)
+        previous = None
+        for day, coins in zip(match["days"], balances):
+            yield match["match_index"], game, day, dict(zip(names, coins)), previous
             previous = day
 
 

@@ -246,7 +246,7 @@ function matrix() {
     + groups.map(g => `<th colspan="${g.n}"${g.g ? ' class="grp"' : ''}>${g.g}</th>`).join('') + '</tr><tr><th></th>'
     + M.cols.map(c => `<th${c === st.r ? ' class="on"' : ''}>${colLabel(st.m, c)}</th>`).join('') + '</tr></thead><tbody>';
   P.forEach((pl, i) => {
-    if (TEAM && (i === 0 || P[i - 1].t !== pl.t)) h += `<tr class="team ${tc(i)}"><th colspan="${M.cols.length + 1}">${D.teams[pl.t]}</th></tr>`;
+    if (TEAM && (i === 0 || P[i - 1].t !== pl.t)) h += `<tr class="team ${tc(i)}"><th colspan="${M.cols.length + 1}">${esc(D.teams[pl.t])}</th></tr>`;
     h += `<tr class="${tc(i)}${i === st.p ? ' sel' : ''}"><th class="nm">${pl.n}</th>`;
     M.cols.forEach(c => {
       const on = c === st.r, here = on && i === st.p;
@@ -280,7 +280,7 @@ function mini(m) {
 function teamLine(values) {
   if (!TEAM) return '';
   const sum = t => values.reduce((s, v, i) => s + (P[i].t === t ? v : 0), 0);
-  return `<span>${D.teams[0]} <b class="sa">${sum(0)}</b> : <b class="sb">${sum(1)}</b> ${D.teams[1]}</span>`;
+  return `<span>${esc(D.teams[0])} <b class="sa">${sum(0)}</b> : <b class="sb">${sum(1)}</b> ${esc(D.teams[1])}</span>`;
 }
 function today(day) {
   return `<h3>今日</h3><div class="pool"><span>奖池 <b>${day.pool} 分</b></span>${teamLine(day.score)}</div>`
@@ -319,7 +319,7 @@ function overall() {
 }
 function lineup() {
   return '<h3>阵容</h3><table class="tb lineup">'
-    + P.map((pl, i) => `<tr${i === st.p ? ' class="sel"' : ''}><td class="l">${dot(i)}${pl.n}</td><td class="l">${pl.persona}</td><td class="l">${pl.model}</td></tr>`).join('')
+    + P.map((pl, i) => `<tr${i === st.p ? ' class="sel"' : ''}><td class="l">${dot(i)}${pl.n}</td>${pl.persona == null ? '' : `<td class="l">${esc(pl.persona)}</td>`}<td class="l">${esc(pl.model)}</td></tr>`).join('')
     + '</table>';
 }
 
@@ -366,7 +366,7 @@ function column(label, body, wide) {
 function person() {
   const m = st.m, M = D.matches[m], r = st.r, e = M.rounds[r][st.p], pl = P[st.p], d = dayOf(r);
   const first = m > 0 && r === M.cols[0];
-  let h = `<section class="card"><div class="head"><span class="name">${dot(st.p)}${pl.n}</span><span class="persona">${pl.persona}</span><span class="persona">${pl.model}</span>`;
+  let h = `<section class="card"><div class="head"><span class="name">${dot(st.p)}${pl.n}</span>${pl.persona == null ? '' : `<span class="persona">${esc(pl.persona)}</span>`}<span class="persona">${esc(pl.model)}</span>`;
   if (m > 0 && !first) h += `<a class="link" href="${href(m - 1, 'mem', st.p)}">第 ${m} 局的记忆</a>`;
   if (d) {
     const x = M.days[d - 1].p[st.p];
@@ -430,7 +430,7 @@ function draw() {
   document.title = `${roundTitle(m, r)} ${P[st.p].n} · ${D.run}`;
 }
 function fromHash() {
-  const x = /^#m(\d+)-(\w+)-p(\d+)$/.exec(decodeURIComponent(location.hash));
+  const x = /^#m(\d+)-(\w+)-p(\d+)$/.exec(location.hash);
   if (!x) return;
   const m = x[1] - 1, p = x[3] - 1;
   if (!D.matches[m] || !P[p] || !D.matches[m].cols.includes(x[2])) return;

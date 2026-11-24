@@ -4,7 +4,7 @@
     python -m auction_game.cli.team_report
     python -m auction_game.cli.team_report logs/<目录名> [logs/<目录名> ...]
 
-不传目录时选最新的真实团队赛场次（team 或 team-test），离线赛要显式指定。
+不传目录时选最新的、至少打完一局的真实团队赛场次（team 或 team-test），离线赛要显式指定。
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any, Callable
 import sys
 
 from auction_game.reporting.analyze import find_latest_ai_run
-from auction_game.reporting.team_metrics import Mean, Ratio, collect_team_metrics, load_team_run
+from auction_game.reporting.team_metrics import Mean, Ratio, collect_team_metrics, differing_settings, load_team_run
 
 
 @dataclass(frozen=True)
@@ -196,6 +196,11 @@ def report(run_dirs: list[Path]) -> None:
     print("团队赛对比：格子是 前队:后队，阵营按场次快照里玩家的顺序；比率写成 分子/分母，合计列分子分母各自相加")
     if len(runs) > 1 and not with_total:
         print("各场阵营名或顺序不同，不给合计")
+    differences = differing_settings(runs)
+    if differences:
+        print("各场比赛参数不同：" + "；".join(
+            f"{key} " + "、".join(f"{run.name} {value}" for run, value in zip(runs, values))
+            for key, values in differences.items()))
     overview = [
         ["阵营", *(":".join(run.teams) for run in runs), *([":".join(runs[0].teams)] if with_total else [])],
         ["已结束的局数", *(f"{item['match_count']}（加赛 {item['playoff_count']}）" for item in metrics),
@@ -220,7 +225,7 @@ def report(run_dirs: list[Path]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="团队赛两队对比的指标")
     parser.add_argument("run_dirs", nargs="*", type=Path,
-                        help="团队赛场次目录，可以传多个；不传时选最新的真实团队赛场次")
+                        help="团队赛场次目录，可以传多个；不传时选最新的、至少打完一局的真实团队赛场次")
     args = parser.parse_args()
     try:
         report(args.run_dirs or [find_latest_ai_run(("team", "team-test"))])

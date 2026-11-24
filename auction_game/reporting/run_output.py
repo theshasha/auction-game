@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -28,9 +29,11 @@ def publish_match(paths: RunPaths, log: MatchLog, standings: list[StandingsEntry
         "match": log.to_dict(),
         "standings_after_match": [asdict(entry) for entry in standings],
     }
-    paths.match(log.match_index).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # 先写临时文件再改名，强关不会留下写了一半的局日志。临时文件名不以 .json 结尾，按 *.json 找局日志时不会读到。
+    target = paths.match(log.match_index)
+    partial = target.with_name(target.name + ".tmp")
+    partial.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(partial, target)
     kind = "加赛" if log.is_playoff else "正赛"
     text = (
         f"\n## 第 {log.match_index} 局（{kind}）\n\n"
@@ -89,12 +92,13 @@ def model_label(model: str, effort: str) -> str:
 def reset_reports(paths: RunPaths) -> None:
     """续跑补写之前把公开发言、信、逐局结果和局日志 JSON 清回开场时的样子；README 补写时整份覆盖。
 
-    局日志 JSON 也清掉：强关可能留下写了一半的，补写 README 时会读最新一局的排名。
+    局日志 JSON 由补写重新生成；强关在改名前留下的 .json.tmp 一并清掉。
     """
     paths.speeches.unlink(missing_ok=True)
     paths.letters.unlink(missing_ok=True)
-    for path in (paths.data / "matches").glob("*.json"):
-        path.unlink()
+    for pattern in ("*.json", "*.json.tmp"):
+        for path in (paths.data / "matches").glob(pattern):
+            path.unlink()
     paths.matches_report.write_text(MATCHES_HEADER, encoding="utf-8")
 
 
@@ -119,10 +123,14 @@ def _append(path: Path, text: str) -> None:
         file.write(text)
 
 
+class RunExistsError(FileExistsError):
+    """新开场次时目录已有内容。"""
+
+
 def initialize_run(run_dir, snapshot, rules):
     paths = RunPaths(run_dir)
     if run_dir.exists() and any(run_dir.iterdir()):
-        raise FileExistsError(f"场次已存在，拒绝覆盖：{run_dir}")
+        raise RunExistsError(f"场次已存在，拒绝覆盖：{run_dir}")
     snapshot = {**snapshot,
                 "players": [{"number": index, **pc} for index, pc in enumerate(snapshot["players"], 1)]}
     paths.prepare()

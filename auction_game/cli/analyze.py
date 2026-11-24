@@ -1,4 +1,4 @@
-"""打印场次统计。默认选最新的真实 AI 场次（ai、ai-test、team 或 team-test），也可显式指定其他类型。
+"""打印场次统计。默认选最新的、至少打完一局的真实 AI 场次（ai、ai-test、team 或 team-test），也可显式指定其他类型。
 
 用法：
     python -m auction_game.cli.analyze

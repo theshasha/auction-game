@@ -2,7 +2,7 @@
 
 两个阵营各 3 人对抗。和个人赛的不同有四处：按阵营总分定胜负；超级出价只命中对方阵营的正常出价；没有私信，队友之间用队内信件区；每局开始前有开局讨论。
 
-经济参数的取舍见 `docs/design/rules.md`，没有采用的方案见 `docs/design/rejected.md` 的"团队赛"。阵容写法见 `docs/usage.md` 的"准备配置"，团队赛多出的统计见 `docs/analyze.md` 的"阵营总分"和"阵营配合"。
+经济参数的取舍见 `docs/design/rules.md`，没有采用的方案见 `docs/design/rejected.md` 的"团队赛"。阵容写法见 `docs/usage.md` 的"准备配置"，团队赛多出的统计见 `docs/analyze.md` 的"阵营总分"和"阵营配合"，两队逐项对比用 `python -m auction_game.cli.team_report`，口径见同一文档的"团队赛对比"。
 
 ## 赛制
 

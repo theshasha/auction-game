@@ -3,6 +3,7 @@
 import json
 import re
 import pytest
+import yaml
 
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessagesTypeAdapter
@@ -280,6 +281,29 @@ def test_offline_refuses_non_empty_output(tmp_path, demo_configuration):
     (output / "README.md").write_text("旧场次", encoding="utf-8")
     with pytest.raises(FileExistsError, match="拒绝覆盖"):
         generate_demo(output, test_model=True)
+    assert (output / "README.md").read_text(encoding="utf-8") == "旧场次"
+
+
+def test_cli_reports_configuration_error_in_one_line(tmp_path, monkeypatch, capsys, config_files, demo_configuration):
+    config_path = config_files[0]
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["prompts"]["enable_typo"] = True
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    output = tmp_path / "run"
+    monkeypatch.setattr("sys.argv", ["offline_demo", "--output", str(output)])
+    assert offline_demo.main() == 1
+    printed = capsys.readouterr().out.splitlines()
+    assert len(printed) == 1 and printed[0].startswith("[配置错误] ") and "enable_typo" in printed[0]
+    assert not output.exists()
+
+
+def test_cli_refuses_non_empty_output_without_traceback(tmp_path, monkeypatch, capsys, demo_configuration):
+    output = tmp_path / "existing"
+    output.mkdir()
+    (output / "README.md").write_text("旧场次", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["offline_demo", "--output", str(output)])
+    assert offline_demo.main() == 1
+    assert capsys.readouterr().out.splitlines()[-1] == f"场次已存在，拒绝覆盖：{output}"
     assert (output / "README.md").read_text(encoding="utf-8") == "旧场次"
 
 

@@ -1,6 +1,6 @@
 """把一场打完的比赛整理成对局回放页：按轮次列出每人的策略、信、发言、记忆和每天的出价结果。
 
-页面是给别人看的，配置只取白名单字段：名字、人设、队伍、型号和推理档位、规则参数；任务日志只取结果。
+页面是给别人看的，配置只取白名单字段：名字、人设（开了人设时）、队伍、型号和推理档位、规则参数；任务日志只取结果。
 场次快照里有渠道名和能力快照，任务日志里有 thinking 和提示词原文，这些不公开。命令行入口在 auction_game.cli.replay。
 """
 
@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 from auction_game.agent.log import read_records
+from auction_game.reporting.analyze import balances_before_bids, load_match_logs
 from auction_game.reporting.run_output import is_finished, model_label
 from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths
 
@@ -66,7 +67,7 @@ def build_replay(run_dir: Path) -> dict:
     names = [pc["name"] for pc in players]
     teams = list(dict.fromkeys(pc["team"] for pc in players if pc["team"]))
     team_of = [teams.index(pc["team"]) if pc["team"] else None for pc in players]
-    logs = [json.loads(path.read_text(encoding="utf-8")) for path in sorted((paths.data / "matches").glob("*.json"))]
+    logs = load_match_logs(run_dir)
     last = len(logs)
     results = [{where: entry["result"] for where, entry in round_records(paths, pc["number"], last).items()}
                for pc in players]
@@ -90,19 +91,17 @@ def build_replay(run_dir: Path) -> dict:
     matches = []
     for index, log in enumerate(logs, 1):
         days = []
-        coins = [game["initial_coins"]] * len(names)
         score = list(totals_before)
-        for day_number, day in enumerate(log["match"]["days"], 1):
-            by = {result["player"]: result for result in day["players"]}
-            if day_number > 1:
-                coins = [value + game["daily_salary"] for value in coins]
+        by_day = [{result["player"]: result for result in day["players"]} for day in log["match"]["days"]]
+        balances = balances_before_bids(game["initial_coins"], game["daily_salary"],
+                                        [[by[n]["coins_delta"] for n in names] for by in by_day])
+        for day, by, coins in zip(log["match"]["days"], by_day, balances):
             # coins、score 是当天出价前的金币和累计得分，和这天请求里的表一致。
             days.append({
-                "pool": day["pool"], "void": day["winner"] is None, "coins": list(coins), "score": list(score),
+                "pool": day["pool"], "void": day["winner"] is None, "coins": coins, "score": list(score),
                 "p": [[by[n]["bid"], OUTCOME[by[n]["outcome"]], by[n]["super_bid"], int(by[n]["super_hit"])]
                       for n in names],
             })
-            coins = [value + by[n]["coins_delta"] for value, n in zip(coins, names)]
             score = [value + by[n]["score"] for value, n in zip(score, names)]
         standings = {entry["player"]: entry for entry in log["standings_after_match"]}
 
@@ -138,9 +137,11 @@ def build_replay(run_dir: Path) -> dict:
         totals_before = [standings[n]["total_score"] for n in names]
 
     final = {entry["player"]: entry for entry in logs[-1]["standings_after_match"]}
+    # 关了人设的场次，模型看不到人设，页面也不写。
+    personas = config["prompts"]["enable_personas"]
     return {
         "run": run_dir.name, "teams": teams or None, "maxBid": game["max_bid"], "superHit": game["super_hit_score"],
-        "players": [{"n": pc["name"], "persona": pc["persona_title"], "t": team_of[i],
+        "players": [{"n": pc["name"], **({"persona": pc["persona_title"]} if personas else {}), "t": team_of[i],
                      "model": model_label(pc["execution_model"]["model"],
                                           pc["execution_model"]["capabilities"]["reasoning_status"])}
                     for i, pc in enumerate(players)],

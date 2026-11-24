@@ -14,6 +14,7 @@ from auction_game.game.models import MatchLog
 from auction_game.game.rules import render_rules
 from auction_game.reporting import run_output
 from auction_game.reporting import run_paths
+from auction_game.reporting.analyze import load_match_logs
 from auction_game.reporting.run_output import (SUMMARY_TITLE, find_unfinished_run, initialize_run, is_finished,
                                                print_day_result, print_final_result, publish_match, publish_speeches,
                                                record_letters, reset_reports, write_readme)
@@ -302,12 +303,31 @@ def test_reset_reports_returns_public_files_to_the_start_of_the_run(tmp_path):
     log = run_one_match({name: lambda obs: 0 for name in NAMES})
     publish_match(paths, log, compute_standings(NAMES, [log]), quiet=True)
     assert paths.matches_report.read_bytes() != empty_report
-    # 强关停在写局日志 JSON 的时候。
-    paths.match(1).write_bytes(paths.match(1).read_bytes()[:10])
+    # 强关停在写第 2 局日志的时候，留下写了一半的临时文件。
+    leftover = paths.match(2).with_name(paths.match(2).name + ".tmp")
+    leftover.write_bytes(paths.match(1).read_bytes()[:10])
     reset_reports(paths)
-    assert not paths.speeches.exists() and not paths.letters.exists() and not paths.match(1).exists()
+    assert not paths.speeches.exists() and not paths.letters.exists()
+    assert not paths.match(1).exists() and not leftover.exists()
     assert paths.matches_report.read_bytes() == empty_report
     publish_speeches(paths, "开局发言", {"甲": "发言"}, quiet=True)
+
+
+def test_match_log_killed_while_writing_leaves_no_partial_json(tmp_path, monkeypatch):
+    paths = started_run(tmp_path / "run")
+    first = run_one_match({name: lambda obs: 0 for name in NAMES})
+    publish_match(paths, first, compute_standings(NAMES, [first]), quiet=True)
+    second = run_one_match({name: lambda obs: 0 for name in NAMES}, 2)
+
+    def killed(*_):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(run_output.os, "replace", killed)
+    with pytest.raises(KeyboardInterrupt):
+        publish_match(paths, second, compute_standings(NAMES, [first, second]), quiet=True)
+    monkeypatch.undo()
+    # 按 *.json 读局日志的地方只看到写完的第 1 局。
+    assert [payload["match"]["match_index"] for payload in load_match_logs(paths.root)] == [1]
+    write_readme(paths)
 
 
 def test_latest_unfinished_real_run_is_found_among_finished_offline_and_archived_ones(tmp_path, monkeypatch):

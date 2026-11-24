@@ -7,11 +7,31 @@ from dataclasses import replace
 import pytest
 
 from auction_game.agent.tasks import TASKS
-from auction_game.reporting.analyze import (TASK_LABELS, collect_player_stats, collect_run_stats, collect_team_stats,
-                                             find_latest_ai_run, load_match_logs)
+from auction_game.game.engine import MatchState
+from auction_game.reporting.analyze import (TASK_LABELS, balances_before_bids, collect_player_stats, collect_run_stats,
+                                             collect_team_stats, find_latest_ai_run, load_match_logs)
 from tests.support.analyze_runs import (ANALYZE_GAME, make_match_1, make_match_2, make_matches, make_team_match,
                                         write_matches)
-from tests.support.factories import TEAM_OF, TEST_GAME, make_day, make_log
+from tests.support.factories import NAMES, TEAM_OF, TEST_GAME, make_day, make_log
+
+
+def test_balances_recomputed_from_match_log_equal_engine_coins():
+    """回放和团队赛对比按局日志重算的出价前余额、局日志的局末余额，都和引擎实际的金币一致。"""
+    game = replace(TEST_GAME, daily_pool=(1, 2, 3))
+    match = MatchState(NAMES, 1, False, [], game)
+    # 有撞车、超级出价命中和落空，余额每天各不相同。
+    plan = [([5, 4, 3, 2, 1, 0], {"乙": 5, "丙": 6}), ([3, 3, 1, 2, 0, 4], {"丁": 4}), ([1, 0, 2, 0, 1, 3], {"甲": 3})]
+    engine_balances = []
+    for bids, supers in plan:
+        observations = match.start_day()
+        engine_balances.append([observations[name].my_coins for name in NAMES])
+        match.settle({name: (bid, supers.get(name)) for name, bid in zip(NAMES, bids)})
+    log = match.log.to_dict()
+    deltas = [[result["coins_delta"] for result in day["players"]] for day in log["days"]]
+
+    assert balances_before_bids(game.initial_coins, game.daily_salary, deltas) == engine_balances
+    assert len({tuple(coins) for coins in engine_balances}) == len(plan)
+    assert log["remaining_coins"] == match.coins
 
 
 def rows_by_name(stats: dict) -> dict:

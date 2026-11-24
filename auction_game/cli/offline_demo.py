@@ -7,15 +7,18 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sys
 
 from pydantic_ai.models import override_allow_model_requests
 from pydantic_ai.models.function import FunctionModel
 
+from auction_game.configuration import ConfigurationError
 from auction_game.flow.controller import Controller
 from auction_game.agent.tasks import Task, TaskRunner
 from auction_game.agent.text_output import BOARD, LetterScope, TeamBoard
 from auction_game.game.settings import GameSettings
 from auction_game.runners import execution_calls, make_task_runners, play_ai, prepare_start
+from auction_game.reporting.run_output import RunExistsError
 from auction_game.reporting.run_paths import make_run_dir, run_type as run_type_of
 
 
@@ -230,14 +233,23 @@ def generate_demo(output: Path | None = None, *, test_model=False, team=False):
     return output, factories
 
 
-def main():
+def main() -> int:
+    """配置有误或输出目录不是空的时，打印一行原因、返回 1。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--team", action="store_true", help="团队赛，阵容读 configs/teams.yaml")
     parser.add_argument("--test-model", action="store_true", help="用假模型验证测试配置，不调用真实服务，不收费")
     parser.add_argument("--output", type=Path, help="全新输出目录，默认 logs/<时间戳>_offline 或 _team-offline")
     args = parser.parse_args()
-    generate_demo(args.output, test_model=args.test_model, team=args.team)
+    try:
+        generate_demo(args.output, test_model=args.test_model, team=args.team)
+    except ConfigurationError as exc:
+        print(f"[配置错误] {exc}")
+        return 1
+    except RunExistsError as exc:
+        print(exc)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
