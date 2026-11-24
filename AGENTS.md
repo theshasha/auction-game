@@ -47,7 +47,7 @@
 ## 离线验证
 
 ```bash
-python -m pytest tests/ -q
+python -m pytest tests/ -q -n auto
 python -m auction_game.cli.rules --check
 python -m pip check
 git diff --check
