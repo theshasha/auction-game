@@ -27,7 +27,11 @@ def config_files(tmp_path, monkeypatch):
     writing_style_path = tmp_path / "writing_style.md"
     writing_style_path.write_text("【写作要求】\n合成写作要求。\n", encoding="utf-8")
     monkeypatch.setattr("auction_game.configuration.WRITING_STYLE_PATH", writing_style_path)
-    config_path.write_text(yaml.safe_dump({"test_model": "substitute", "llm": {"channels": CHANNELS}}), encoding="utf-8")
+    config_path.write_text(yaml.safe_dump({
+        "test_model": "substitute",
+        "prompts": {"enable_predictions": True, "enable_personas": True, "enable_writing_style": True},
+        "llm": {"max_concurrency": 10, "timeout_seconds": 60, "channels": CHANNELS},
+    }), encoding="utf-8")
     models_path.write_text(yaml.safe_dump({"models": {
         "first": dict(name="甲", provider="hub", model="test-model-a", protocol="chat",
                       models_dev=dict(provider="official", model="source-a")),

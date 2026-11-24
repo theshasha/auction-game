@@ -57,7 +57,8 @@ def main(argv=None) -> int:
             request = Request(API_URL, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
             with urlopen(request, timeout=60) as response:
                 text = response.read().decode("utf-8")
-        snapshot = build_snapshot(catalog, json.loads(text), str(args.input.resolve()) if args.input else API_URL)
+        # 本地文件只记文件名：快照会提交到公开仓库，也会写进每场的快照。
+        snapshot = build_snapshot(catalog, json.loads(text), args.input.name if args.input else API_URL)
         old = read_snapshot(output)
         # 获取时间不算能力差异；能力和来源都没变时不重写。
         comparison = {key: value for key, value in snapshot.items() if key != "fetched_at"}

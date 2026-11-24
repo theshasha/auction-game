@@ -78,6 +78,23 @@ def test_deeply_nested_decision_gets_correction_and_keeps_audit(tmp_path):
     assert texts[0] == invalid
 
 
+def test_duplicate_decision_field_gets_correction(tmp_path):
+    """JSON 解析默认取重复字段的最后一个值；重复的 bid 要让模型改，不能悄悄按 12 出价。"""
+    from auction_game.agent.tasks import TaskRunner
+    from tests.support.factories import make_ai_obs, make_player
+    from tests.support.wire import Harness, reply
+
+    invalid = GOOD.replace('{"bid": 2, "super_bid": null}', '{"bid": 3, "bid": 12, "super_bid": null}')
+    harness = Harness("chat", [reply(text=invalid), reply()])
+    player = make_player(TaskRunner(harness.factory), tmp_path)
+    assert player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价").submission == (2, None)
+    assert len(harness.requests) == 2
+    entry = task_entries(player.log.path)[-1]
+    retry = next(part["content"] for message in entry["messages"] for part in message["parts"]
+                 if part["part_kind"] == "retry-prompt")
+    assert retry.startswith("decision 含重复字段 bid。")
+
+
 LETTERS = LetterNames("甲", ("乙", "丙", "丁"))
 SPEECH_TEXT = "<strategy>\n策略\n</strategy>\n<speech>\n发言\n</speech>"
 ORDER = "必须先依次提交 strategy 与 decision 两块，标签各占一行且各出现一次，私信块放在最后。"

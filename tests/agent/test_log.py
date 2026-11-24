@@ -1,9 +1,13 @@
 """私人日志的 Markdown 展示和 JSONL 审计记录。"""
 
+from dataclasses import replace
 import json
+import threading
+import time
 
 import pytest
 
+from auction_game.llm.client import RunSignals
 from auction_game.llm.execution import CallFailedError, ExecutionResult, TaskCancelledError
 from auction_game.agent.tasks import SpeechOutput, SummaryOutput, TaskRunner
 from auction_game.agent.text_output import LetterNames, SPEECH, output_requirement
@@ -80,6 +84,49 @@ def test_failures_and_recovery_append_links_to_first_input(tmp_path):
     assert [entry["previous_task"] for entry in entries] == [None, "task-0001", "task-0002"]
     assert all(any(part["part_kind"] == "user-prompt" for msg in entry["messages"]
                    for part in msg["parts"]) for entry in entries)
+
+
+def test_cancelled_rerun_stays_in_the_rerun_chain(tmp_path):
+    """失败、补跑时按 q 取消、续跑后成功：三条记录连在一起，成功的那条不重贴输入。"""
+    signals = RunSignals()
+    h = Harness("chat", [401] * 4 + ["hang", reply()])
+    player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
+    with pytest.raises(CallFailedError):
+        player.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价")
+    def cancel_once_hanging():
+        # 等假服务收到 hang 请求再取消，取消记录里才有输入原文。
+        while len(h.requests) < 5:
+            time.sleep(0.005)
+        signals.cancelled.set()
+
+    threading.Thread(target=cancel_once_hanging, daemon=True).start()
+    with pytest.raises(TaskCancelledError):
+        player.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价")
+    signals.cancelled.clear()
+    assert player.bid(make_ai_obs(day=2), {}, "第 1 局第 2 天出价").submission == (2, None)
+
+    entries = task_entries(player.log.path)
+    assert [(entry["status"], entry["reruns"], entry["first_task"], entry["previous_task"]) for entry in entries] == [
+        ("failed", 0, None, None), ("cancelled", 1, "task-0001", "task-0001"),
+        ("success", 2, "task-0001", "task-0002")]
+    markdown = player.log.readable_path.read_text(encoding="utf-8")
+    assert markdown.count("### 输入原文") == 1 and "记录2" not in markdown
+    assert "## 第1局第2天出价补跑1\n\n补跑时被取消。\n\n输入与[首次输入](#第1局第2天出价)相同；上次失败见" in markdown
+    assert ("## 第1局第2天出价补跑2\n\n补跑后成功。\n\n输入与[首次输入](#第1局第2天出价)相同；"
+            "上次被取消见[第1局第2天出价补跑1](#第1局第2天出价补跑1)。") in markdown
+
+
+def test_first_attempt_cancelled_starts_no_rerun_chain(tmp_path):
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    log = AgentLog("Alpha", tmp_path / "player.jsonl", readable_path=tmp_path / "player.md")
+    entry = {"title": "开局发言", "task": "speech", "context": "开局发言"}
+    request = [ModelRequest(parts=[UserPromptPart("发言输入")])]
+    log.cancelled(entry, TaskCancelledError(messages=request))
+    log.success(entry, ExecutionResult(SpeechOutput("策略", "发言", []), request, []))
+    entries = task_entries(log.path)
+    assert [(entry["reruns"], entry["previous_task"]) for entry in entries] == [(0, None), (0, None)]
+    assert log.readable_path.read_text(encoding="utf-8").count("### 输入原文") == 2
 
 
 def test_output_correction_shows_only_final_strategy_and_keeps_both_audited(tmp_path):

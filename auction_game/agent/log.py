@@ -50,7 +50,7 @@ def _error_reason(entry: dict) -> str:
         return "请求超时"
     if kind == "IncompleteStream":
         return html.escape(f"响应未正常结束（{message}）")
-    if "Connection" in kind or "Network" in kind:
+    if "Connect" in kind or "Network" in kind:
         return "网络连接失败"
     return html.escape(f"{kind}：{' '.join(message.split())[:160]}")
 
@@ -64,9 +64,11 @@ def _correction_reason(entry: dict) -> str:
 
 
 def render_markdown_entry(entry: dict, title: str, first_title: str | None = None,
-                          previous_title: str | None = None, result: list[str] = ()) -> str:
+                          previous_title: str | None = None, result: list[str] = (),
+                          previous_status: str | None = None) -> str:
     """正文只展示输入和最终结果；原始回复及完整错误保存在 JSON 记录中。result 是结果的各个小节。
 
+    补跑记录给出首次和上一次的标题，previous_status 是上一次的状态（failed 或 cancelled）。
     标题只含中文和数字，链接锚点在各 Markdown 阅读器里一致。
     """
     status = entry["status"]
@@ -74,7 +76,8 @@ def render_markdown_entry(entry: dict, title: str, first_title: str | None = Non
     if entry.get("reruns", 0):
         lines.append({"success": "补跑后成功。", "failed": "补跑仍失败。", "cancelled": "补跑时被取消。"}[status])
     if first_title:
-        lines.append(f"输入与[首次输入](#{first_title})相同；上次失败见[{previous_title}](#{previous_title})。")
+        previous = {"failed": "上次失败", "cancelled": "上次被取消"}[previous_status]
+        lines.append(f"输入与[首次输入](#{first_title})相同；{previous}见[{previous_title}](#{previous_title})。")
     else:
         inputs = logged_inputs(entry)
         if inputs:
@@ -109,6 +112,7 @@ class AgentLog:
         self._task_number = 0
         self._failed_tasks: dict[tuple, tuple[str, str, int]] = {}
         self._titles: dict[str, str] = {}
+        self._statuses: dict[str, str] = {}
         self._title_counts: dict[str, int] = {}
         self._recorded: list[dict] = []  # 续跑时待取用的成功记录，按日志顺序
         self._restore: tuple[int, str] | None = None  # 续跑时 JSONL 里完整记录的字节数和可读日志全文
@@ -129,8 +133,7 @@ class AgentLog:
             log._task_number += 1
             title = log._register(entry)
             result = TASKS[entry["task"]].output.from_log(entry["result"]).render() if entry["status"] == "success" else ()
-            markdown.append(render_markdown_entry(entry, title, log._titles.get(entry["first_task"]),
-                                                  log._titles.get(entry["previous_task"]), result))
+            markdown.append(log._render(entry, title, result))
             if entry["status"] == "success":
                 log._recorded.append(entry)
         log._restore = size, "".join(markdown)
@@ -181,8 +184,12 @@ class AgentLog:
         first_task, previous_task, reruns = self._failed_tasks.get(self._rerun_key(entry), (None, None, 0))
         entry.update(first_task=first_task, previous_task=previous_task, reruns=reruns)
         title = self._register(entry)
-        self._append(entry, render_markdown_entry(entry, title, self._titles.get(first_task),
-                                                  self._titles.get(previous_task), result))
+        self._append(entry, self._render(entry, title, result))
+
+    def _render(self, entry: dict, title: str, result) -> str:
+        previous = entry["previous_task"]
+        return render_markdown_entry(entry, title, self._titles.get(entry["first_task"]), self._titles.get(previous),
+                                     result, self._statuses.get(previous))
 
     @staticmethod
     def _rerun_key(entry: dict) -> tuple:
@@ -197,9 +204,10 @@ class AgentLog:
         self._title_counts[title] = count
         title = title if count == 1 else f"{title}记录{count}"
         self._titles[entry["task_id"]] = title
-        # 只关联相同输入的连续失败；成功后结束关联。
+        self._statuses[entry["task_id"]] = entry["status"]
+        # 只关联相同输入的连续失败，补跑被取消也接在后面；成功后结束关联。首次就被取消的不开始关联。
         key = self._rerun_key(entry)
-        if entry["status"] == "failed":
+        if entry["status"] == "failed" or (entry["status"] == "cancelled" and key in self._failed_tasks):
             self._failed_tasks[key] = (entry["first_task"] or entry["task_id"], entry["task_id"], entry["reruns"] + 1)
         else:
             self._failed_tasks.pop(key, None)

@@ -126,6 +126,26 @@ def test_probe_transport_failure_has_no_retry(protocol, config_files, monkeypatc
     assert len(harness.requests) == harness.closes == 1
 
 
+def test_program_error_is_reported_apart_and_next_target_is_checked(config_files, monkeypatch, capsys, fixed_code):
+    monkeypatch.setattr(check_llm, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
+    runner = fake_task_runner([CODE, "好", "好"])
+    real_executor = check_llm.AgentExecutor
+
+    def broken(*args, **kwargs):
+        raise AttributeError("程序里的错")
+
+    monkeypatch.setattr(check_llm, "AgentExecutor",
+                        lambda factory: broken if factory is None else real_executor(factory))
+    monkeypatch.setattr(check_llm, "make_model_factory",
+                        lambda **kwargs: None if kwargs["model"] == "test-model-a" else runner.executor.factory)
+    assert check_llm.main(["--model", "first", "--model", "substitute", *SERIAL]) == 1
+    captured = capsys.readouterr()
+    assert "[程序错误] first（" in captured.out and "AttributeError: 程序里的错" in captured.out
+    assert "[调用失败]" not in captured.out and "Traceback" in captured.err
+    assert "[通过] substitute（" in captured.out and len(runner.calls) == 3
+    assert "失败 1 个" in captured.out
+
+
 def test_cache_report_looks_at_the_second_request():
     hit = check_llm.cache_report("m", RequestUsage(input_tokens=5000), RequestUsage(input_tokens=5000, cache_read_tokens=4096))
     assert hit == "[缓存] m  第 1 次输入 5000、命中 0；第 2 次输入 5000、命中 4096"

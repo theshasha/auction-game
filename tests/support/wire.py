@@ -150,6 +150,8 @@ class Harness:
         item = self.script.pop(0)
         if item == "connect":
             raise http.ConnectError("offline", request=request)
+        if item == "timeout":
+            raise http.ReadTimeout("timed out", request=request)
         if item == "hang":  # 模拟进行中的请求，只能被取消
             await asyncio.Event().wait()
         if isinstance(item, int):

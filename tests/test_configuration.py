@@ -13,7 +13,7 @@ from auction_game.reporting.run_paths import RunPaths
 from tests.support.factories import CHANNELS, rewrite_yaml
 
 
-def test_defaults_and_preserved_values(config_files):
+def test_values_are_read_as_written(config_files):
     config, players = load_configuration(*config_files)
     assert config["llm"] == {"max_concurrency": 10, "timeout_seconds": 60, "channels": CHANNELS}
     assert config["test_model"] == "substitute"
@@ -31,21 +31,40 @@ def test_predicted_win_rate_required_only_when_predictions_enabled(config_files)
         load_configuration(*config_files)
     assert str(exc.value) == (f"{players_path}：players[1] 缺少 predicted_win_rate；"
                               f"{config_path} 开启了 prompts.enable_predictions")
-    rewrite_yaml(config_path, lambda data: data.update(prompts={"enable_predictions": False}))
+    rewrite_yaml(config_path, lambda data: data["prompts"].update(enable_predictions=False))
     _, players = load_configuration(*config_files)
     assert [player.profile.predicted_win_rate for player in players] == [23, None]
 
 
-def test_missing_prompt_switch_defaults_to_true(config_files):
-    rewrite_yaml(config_files[0], lambda data: data.update(prompts={"enable_predictions": False}))
-    config, _ = load_configuration(*config_files)
-    assert config["prompts"] == {"enable_predictions": False, "enable_personas": True,
-                                 "enable_writing_style": True}
+@pytest.mark.parametrize("change,field", [
+    (lambda data: data.pop("prompts"), "prompts"),
+    (lambda data: data["prompts"].pop("enable_predictions"), "prompts.enable_predictions"),
+    (lambda data: data["prompts"].pop("enable_personas"), "prompts.enable_personas"),
+    (lambda data: data["prompts"].pop("enable_writing_style"), "prompts.enable_writing_style"),
+    (lambda data: data.pop("llm"), "llm"),
+    (lambda data: data["llm"].pop("max_concurrency"), "llm.max_concurrency"),
+    (lambda data: data["llm"].pop("timeout_seconds"), "llm.timeout_seconds"),
+])
+def test_missing_required_config_field(config_files, change, field):
+    config_path = config_files[0]
+    rewrite_yaml(config_path, change)
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value) == f"{config_path}：缺少 {field}"
+
+
+@pytest.mark.parametrize("field", ["max_concurrency", "timeout_seconds"])
+def test_resume_settings_require_llm_limits(config_files, field):
+    config_path = config_files[0]
+    rewrite_yaml(config_path, lambda data: data["llm"].pop(field))
+    with pytest.raises(ConfigurationError) as exc:
+        load_llm_settings(config_path)
+    assert str(exc.value) == f"{config_path}：缺少 llm.{field}"
 
 
 def test_disabled_writing_style_skips_file(config_files, tmp_path):
     (tmp_path / "writing_style.md").unlink()
-    rewrite_yaml(config_files[0], lambda data: data.update(prompts={"enable_writing_style": False}))
+    rewrite_yaml(config_files[0], lambda data: data["prompts"].update(enable_writing_style=False))
     config, _ = load_configuration(*config_files)
     assert config["writing_style"] is None
 
@@ -66,7 +85,7 @@ def test_default_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("change,field", [
-    (lambda data: data.update(prompts={"enable_personas": "false"}), "prompts.enable_personas"),
+    (lambda data: data["prompts"].update(enable_personas="false"), "prompts.enable_personas"),
     (lambda data: data["llm"].update(timeout_seconds="60"), "llm.timeout_seconds"),
     (lambda data: data["llm"].update(max_concurrency=0), "llm.max_concurrency"),
     (lambda data: data["llm"]["channels"]["hub"].update(base_url="ftp://host"), "base_url"),
@@ -83,7 +102,7 @@ def test_invalid_config_values(config_files, change, field):
 
 @pytest.mark.parametrize("change,message", [
     (lambda data: data.update(prompt={"enable_personas": False}), "不支持字段：prompt"),
-    (lambda data: data.update(prompts={"enable_persona": False}), "prompts 不支持字段：enable_persona"),
+    (lambda data: data["prompts"].update(enable_persona=False), "prompts 不支持字段：enable_persona"),
     (lambda data: data["llm"].update(timeout_second=900), "llm 不支持字段：timeout_second"),
     (lambda data: data["llm"]["channels"]["hub"].update(api_key="sk"), "llm.channels.hub 不支持字段：api_key"),
 ], ids=["root", "prompts", "llm", "channel"])
@@ -292,7 +311,7 @@ def test_missing_file(tmp_path):
 @pytest.mark.parametrize("entry", [runners, check_llm])
 def test_entries_report_configuration_errors(config_files, monkeypatch, capsys, entry):
     config_path = config_files[0]
-    config_path.write_text("llm: null", encoding="utf-8")
+    rewrite_yaml(config_path, lambda data: data.update(llm=None))
     monkeypatch.setattr(entry, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
     monkeypatch.setattr(entry, "make_model_factory", lambda **kwargs: pytest.fail("配置错误时不应创建客户端"))
     if entry is runners:

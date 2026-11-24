@@ -36,6 +36,7 @@ class IncompleteStream(RuntimeError):
 # 请求失败的异常：HTTP 错误、SDK 调用错误、网络错误、截断、为空或未正常结束的流。其余异常是程序错误。
 REQUEST_ERRORS = (ModelAPIError, IncompleteStream, openai.APIError, anthropic.APIError, http.TransportError)
 POLL_SECONDS = 0.1
+REQUEST_ATTEMPTS = 4  # 比赛每个请求首次加重发 3 次；连通检查只请求一次。
 
 
 @dataclass(frozen=True)
@@ -121,8 +122,10 @@ class BufferedRequest(WrapperModel):
                     raise IncompleteStream(f"finish_reason={response.finish_reason!r}（{detail}）")
                 break
             except REQUEST_ERRORS as exc:
+                # pydantic-ai 把连接失败和超时都包成 ModelAPIError，记下被包的异常才分得出是哪一种。
+                cause = exc.__cause__ if type(exc) is ModelAPIError and exc.__cause__ is not None else exc
                 self.request_errors.append({"request": request_number, "attempt": attempt,
-                                            "type": type(exc).__name__, "message": str(exc)})
+                                            "type": type(cause).__name__, "message": str(exc)})
                 if attempt == self.attempts or not await wait_before_retry(self.retry_delay, self.signals):
                     raise
         # yield 在重试范围外：Agent 要求纠错时发新请求，不重发已完成的请求。
@@ -143,7 +146,7 @@ class ModelFactory:
     timeout: float
     max_tokens: int
     transport: http.AsyncBaseTransport | None = None
-    request_attempts: int = 4  # 比赛每个请求首次加重发 3 次；连通检查只请求一次。
+    request_attempts: int = REQUEST_ATTEMPTS
     model_settings: dict = field(default_factory=dict)
     retry_delay: float = 10
     signals: RunSignals | None = None  # 比赛由控制器提供；连通检查和离线赛不需要
@@ -202,7 +205,7 @@ def _require_env(name: str, provider: str) -> str:
 
 def make_model_factory(*, provider: str, channel: dict, model: str, protocol: str,
                        timeout: float, max_tokens: int, model_settings: dict,
-                       request_attempts: int = 4, signals: RunSignals | None = None) -> ModelFactory:
+                       request_attempts: int = REQUEST_ATTEMPTS, signals: RunSignals | None = None) -> ModelFactory:
     """启动时读取密钥和写在 .env 里的渠道地址，缺了在创建日志前报错。"""
     base_url = channel["base_url"] if "base_url" in channel else _require_env(channel["base_url_env"], provider)
     return ModelFactory(protocol, model, base_url,

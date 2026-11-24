@@ -7,11 +7,12 @@ import time
 import argparse
 import hashlib
 import secrets
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from auction_game.configuration import ConfigurationError, load_configuration
 from auction_game.llm.client import MissingEnvError, make_model_factory
-from auction_game.llm.execution import AgentExecutor
+from auction_game.llm.execution import AgentExecutor, CallFailedError
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 from pydantic_ai.usage import RequestUsage, UsageLimits
@@ -34,6 +35,12 @@ def cache_report(label: str, first: RequestUsage, second: RequestUsage) -> str:
     tag = "[缓存]" if second.cache_read_tokens else "[无缓存]"
     return (f"{tag} {label}  第 1 次输入 {first.input_tokens}、命中 {first.cache_read_tokens}；"
             f"第 2 次输入 {second.input_tokens}、命中 {second.cache_read_tokens}")
+
+
+def program_error(label: str, exc: Exception) -> None:
+    """程序自身出错：打印调用栈，和渠道的调用失败分开报，免得当成渠道问题反复重查。"""
+    traceback.print_exception(exc)
+    print(f"[程序错误] {label}: {type(exc).__name__}: {exc}")
 
 
 def concurrency_report(label: str, single: float, total: float, durations: list[float]) -> str:
@@ -108,8 +115,12 @@ def main(argv=None) -> int:
 
         try:
             result, elapsed = probe()
-        except Exception as exc:
+        except CallFailedError as exc:
             print(f"[调用失败] {label}: {type(exc).__name__}: {exc}")
+            failures += 1
+            continue
+        except Exception as exc:
+            program_error(label, exc)
             failures += 1
             continue
         preview = " ".join(result.output.split())[:80]
@@ -124,14 +135,20 @@ def main(argv=None) -> int:
             continue
         print(f"[通过] {label}  {detail}")
 
-        # 并发和缓存各查各的，一项失败不影响另一项；目标只记一次失败。
+        # 并发和缓存各查各的，一项失败不影响另一项；程序错误时跳过这个目标剩下的检查。目标只记一次失败。
         failed = False
         if concurrency > 1:
             started = time.monotonic()
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
                 futures = [pool.submit(probe) for _ in range(concurrency)]
             total = time.monotonic() - started
-            errors = [f"{type(exc).__name__}: {exc}" for f in futures if (exc := f.exception())]
+            exceptions = [exc for f in futures if (exc := f.exception())]
+            bug = next((exc for exc in exceptions if not isinstance(exc, CallFailedError)), None)
+            if bug is not None:
+                program_error(label, bug)
+                failures += 1
+                continue
+            errors = [f"{type(exc).__name__}: {exc}" for exc in exceptions]
             errors += ["回复里没有核对码" for f in futures
                        if not f.exception() and code not in f.result()[0].output]
             if errors:
@@ -142,9 +159,13 @@ def main(argv=None) -> int:
         try:
             usages = [executor(PROBE_AGENT, CACHE_PROMPT, [ModelRequest(parts=[SystemPromptPart(CACHE_SYSTEM)])],
                                usage_limits=UsageLimits(request_limit=1)).messages[-1].usage for _ in range(2)]
-        except Exception as exc:
+        except CallFailedError as exc:
             print(f"[缓存检查失败] {label}: {type(exc).__name__}: {exc}")
             failed = True
+        except Exception as exc:
+            program_error(label, exc)
+            failures += 1
+            continue
         else:
             print(cache_report(label, *usages))
         failures += failed

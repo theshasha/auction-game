@@ -53,6 +53,16 @@ def test_failed_flow_keeps_history_and_audits_no_partial_reply(protocol, fault, 
     assert all(s.closed for s in h.streams)
 
 
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("fault,reason", [("connect", "网络连接失败"), ("timeout", "请求超时")])
+def test_connect_and_timeout_failures_are_named_in_readable_log(protocol, fault, reason, tmp_path):
+    h = Harness(protocol, [fault] * 4)
+    player = make_player(TaskRunner(h.factory), tmp_path)
+    with pytest.raises(CallFailedError):
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
+    assert f"> 失败原因：{reason}。" in player.log.readable_path.read_text(encoding="utf-8")
+
+
 def test_anthropic_delta_without_usage_is_resent(tmp_path):
     empty = [chunk for chunk in sse("anthropic", text="") if b"content_block" not in chunk]
     empty = [chunk.replace(b', "usage": {"output_tokens": 3}', b"") for chunk in empty]

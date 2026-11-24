@@ -102,12 +102,16 @@ def load_configuration(
     config_path = ROOT_DIR / config_path
     players_path = ROOT_DIR / players_path
     config = _read_config(config_path)
-    prompts = config.setdefault("prompts", {})
+    if "prompts" not in config:
+        raise ConfigurationError(f"{config_path}：缺少 prompts")
+    prompts = config["prompts"]
     if not isinstance(prompts, dict):
         raise ConfigurationError(f"{config_path}：prompts 必须是键值配置")
     _reject_unknown(config_path, "prompts", prompts, PROMPT_FLAGS)
     for field in PROMPT_FLAGS:
-        if type(prompts.setdefault(field, True)) is not bool:
+        if field not in prompts:
+            raise ConfigurationError(f"{config_path}：缺少 prompts.{field}")
+        if type(prompts[field]) is not bool:
             raise ConfigurationError(f"{config_path}：prompts.{field} 必须是布尔值")
     config["writing_style"] = None
     if prompts["enable_writing_style"]:
@@ -146,15 +150,20 @@ def load_llm_settings(config_path: str | Path = CONFIG_PATH) -> dict:
 
 
 def _llm_settings(config: dict, config_path: Path) -> dict:
-    """给 config 的 llm 段补上默认值并校验，返回这一段。"""
-    llm = config.setdefault("llm", {})
+    """校验 config 的 llm 段并返回它。"""
+    if "llm" not in config:
+        raise ConfigurationError(f"{config_path}：缺少 llm")
+    llm = config["llm"]
     if not isinstance(llm, dict):
         raise ConfigurationError(f"{config_path}：llm 必须是键值配置")
     _reject_unknown(config_path, "llm", llm, LLM_FIELDS)
-    max_concurrency = llm.setdefault("max_concurrency", 10)
+    for field in ("max_concurrency", "timeout_seconds"):
+        if field not in llm:
+            raise ConfigurationError(f"{config_path}：缺少 llm.{field}")
+    max_concurrency = llm["max_concurrency"]
     if type(max_concurrency) is not int or max_concurrency <= 0:
         raise ConfigurationError(f"{config_path}：llm.max_concurrency 必须是正整数")
-    timeout = llm.setdefault("timeout_seconds", 60)
+    timeout = llm["timeout_seconds"]
     if type(timeout) not in (int, float) or not timeout > 0:
         raise ConfigurationError(f"{config_path}：llm.timeout_seconds 必须是大于 0 的数字")
 
