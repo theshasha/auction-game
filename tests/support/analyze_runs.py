@@ -25,6 +25,14 @@ from auction_game.reporting.run_paths import RunPaths
 from tests.support.factories import TEAM_OF, TEST_GAME, make_day, make_log, make_standings
 
 ANALYZE_GAME = replace(TEST_GAME, daily_pool=(1, 1))
+# 合成单价（每百万 token 的美元价）取得大，几百 token 的回复就有几角钱，金额好手算。
+SYNTHETIC_COST = {"input": 1000, "output": 10000, "cache_read": 200, "cache_write": 1250}
+
+
+def execution_model(**overrides) -> dict:
+    """场次快照里的 execution_model，只含统计读的字段。"""
+    return {"key": "synthetic", "protocol": "chat", "model": "synthetic-execution", "price_multiplier": 1,
+            "capabilities": {"reasoning_status": "default", "cost": SYNTHETIC_COST}, **overrides}
 
 
 def make_match_1() -> dict:
@@ -56,7 +64,7 @@ def write_matches(run_dir, matches, *, run_type="offline", players=None, team_of
     roster = deepcopy(players) if players is not None else [{"name": name} for name in first["auction_scores"]]
     for player in roster:
         player.setdefault("identity_model", {"model": "synthetic-identity"})
-        player.setdefault("execution_model", {"protocol": "chat", "model": "synthetic-execution"})
+        player.setdefault("execution_model", execution_model())
         player["team"] = team_of[player["name"]] if team_of is not None else None
     paths = initialize_run(run_dir, {"run_type": run_type,
                                      "mode": "test_model" if run_type.endswith("-test") else "regular",

@@ -14,7 +14,7 @@ from auction_game.model_capabilities import effective_capabilities, read_snapsho
 from auction_game.paths import (ROOT_DIR, CONFIG_PATH, PLAYERS_PATH, TEAMS_PATH, MODELS_PATH, GAME_PATH,
                                 CAPABILITIES_PATH, WRITING_STYLE_PATH)
 PROTOCOLS = ("chat", "responses", "anthropic", "vertex")
-MODEL_FIELDS = ("name", "model", "provider", "protocol", "reasoning_effort", "models_dev")
+MODEL_FIELDS = ("name", "model", "provider", "protocol", "reasoning_effort", "models_dev", "price_multiplier")
 CONFIG_FIELDS = ("test_model", "prompts", "llm")
 PROMPT_FLAGS = ("enable_predictions", "enable_personas", "enable_writing_style")
 LLM_FIELDS = ("max_concurrency", "timeout_seconds", "channels")
@@ -32,13 +32,17 @@ class ConfigurationError(ValueError):
 
 @dataclass(frozen=True, kw_only=True)
 class ModelEntry:
-    """模型目录的一个条目：key 是目录键，其余是 YAML 里的字段，可选字段没写时为 None。"""
+    """模型目录的一个条目：key 是目录键，其余是 YAML 里的字段，可选字段没写时为 None。
+
+    price_multiplier 是渠道实收美元与官方美元价之比，没写时由 load_model_entries 填 1。
+    """
 
     key: str
     model: str
     provider: str
     protocol: str
     models_dev: dict
+    price_multiplier: int | float
     name: str | None = None
     reasoning_effort: str | None = None
 
@@ -239,7 +243,11 @@ def load_model_entries(path: str | Path = MODELS_PATH) -> dict[str, ModelEntry]:
             raise ConfigurationError(f"{path}：{field}.models_dev 必须指定精确 provider/model")
         if "name" in model and (not isinstance(model["name"], str) or not model["name"].strip()):
             raise ConfigurationError(f"{path}：{field}.name 必须是非空字符串")
-        entries[key] = ModelEntry(key=key, **model)
+        # 写 0 会让花费静默变成 0。
+        multiplier = model.get("price_multiplier", 1)
+        if type(multiplier) not in (int, float) or not multiplier > 0:
+            raise ConfigurationError(f"{path}：{field}.price_multiplier 必须是大于 0 的数字")
+        entries[key] = ModelEntry(key=key, **{**model, "price_multiplier": multiplier})
     return entries
 
 

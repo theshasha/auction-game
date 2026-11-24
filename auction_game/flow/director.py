@@ -28,19 +28,28 @@ Bid = tuple[int, int | None]  # (正常出价, 超级出价或 None)
 class AIDirector:
     """每个环节由全员并发完成一轮任务，经过 controller 的单步与暂停控制。"""
 
-    def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path, *, game: GameSettings,
-                 team_of: dict[str, str] | None = None, resuming: bool = False):
-        """team_of 是团队赛的玩家到阵营，交给结算和排名；个人赛为 None。resuming 时玩家带着已有日志，先重放。"""
+    def __init__(self, players: list[AIPlayer], controller: Controller, log_dir: Path | None, *, game: GameSettings,
+                 team_of: dict[str, str] | None = None, resuming: bool = False,
+                 new_run_dir: Callable[[], Path] | None = None, write_new_run: Callable[[Path], None] | None = None):
+        """team_of 是团队赛的玩家到阵营，交给结算和排名；个人赛为 None。resuming 时玩家带着已有日志，先重放。
+
+        新开的场次 log_dir 为 None，第一轮放行后先调用 new_run_dir 建场次目录，再调用 write_new_run 往里写快照、
+        规则和玩家日志；放行前按 q 退出，不建场次目录。files_ready 在场次文件写全后为真，续跑的场次一开始就是。
+        """
         self.players = players
         self.controller = controller
-        self.paths = RunPaths(log_dir)
+        self.paths = None if log_dir is None else RunPaths(log_dir)
         self.game = game
         self.team_of = team_of
         self.team = team_of is not None
         # 待送达的信：收件人到 {写信人: 正文}，写信人按配置顺序。
         self.mailbox: dict[str, dict[str, str]] = {}
-        # 重放期间记下的公开文件写入，第一轮新请求放行后按顺序补写；不在重放时为 None。
-        self._deferred: list[Callable[[bool], None]] | None = [] if resuming else None
+        self._new_run_dir = new_run_dir
+        self._write_new_run = write_new_run
+        self._resuming = resuming
+        self.files_ready = new_run_dir is None
+        # 第一轮放行前记下的公开文件写入，放行后按顺序补写；之后为 None。
+        self._deferred: list[Callable[[bool], None]] | None = [] if resuming or new_run_dir else None
 
     def run(self) -> TournamentResult:
         """按顺序跑完整场比赛，返回最终结果。
@@ -69,26 +78,32 @@ class AIDirector:
                 break
             day1_bids = self.match_end(logs, standings)
         self.final(standings, logs[-1])
-        self._end_replay()  # 最后一轮全员成功、还没发布就被关掉的场次，重放一直走到这里。
+        self._open_files()  # 最后一轮全员成功、还没发布就被关掉的场次，重放一直走到这里。
         return TournamentResult(logs, standings)
 
     def _report(self, write: Callable[[bool], None]) -> None:
-        """write(quiet) 写公开文件并打印。重放期间先记下：重放结束前不动这场已有的文件。"""
+        """write(quiet) 写公开文件并打印。第一轮放行前先记下：新开的还没有场次目录，续跑的不动已有文件。"""
         if self._deferred is None:
             write(False)
         else:
             self._deferred.append(write)
 
-    def _end_replay(self) -> None:
-        """重放的记录都核对通过、第一轮新请求放行后，把场次文件补到重放结束时的样子，不打印。
+    def _open_files(self) -> None:
+        """第一轮放行后调用一次，把场次文件写到这一轮开始时的样子，补写时不打印。
 
-        截掉任务日志的半行，重写私人对话，公开发言、信和逐局结果清空后按记下的顺序补写。
+        新开的场次先建目录，记下位置后再写快照和玩家日志，写到一半出错时调用方能说出目录在哪。
+        续跑的记录都已核对通过，截掉任务日志的半行，重写私人对话，公开发言、信和逐局结果清空后按记下的顺序补写。
         """
         if self._deferred is None:
             return
-        for player in self.players:
-            player.log.restore_files()
-        reset_reports(self.paths)
+        if self._new_run_dir is not None:
+            self.paths = RunPaths(self._new_run_dir())
+            self._write_new_run(self.paths.root)
+            self.files_ready = True
+        else:
+            for player in self.players:
+                player.log.restore_files()
+            reset_reports(self.paths)
         for write in self._deferred:
             write(True)
         self._deferred = None
@@ -120,9 +135,10 @@ class AIDirector:
             if self._deferred is None:
                 results.update(self.controller.run_round(tasks, label))
             else:
-                # 放行这一轮后才改场次文件：放行前按 q，场次文件不动。
-                print(f"已恢复到：{label}（{len(self.players)} 人中 {len(results)} 人已完成）")
-                results.update(self.controller.run_round(tasks, label, on_start=self._end_replay))
+                # 放行这一轮后才建或改场次文件：放行前按 q，什么都不动。
+                if self._resuming:
+                    print(f"已恢复到：{label}（{len(self.players)} 人中 {len(results)} 人已完成）")
+                results.update(self.controller.run_round(tasks, label, on_start=self._open_files))
         outputs = {player.name: results[player.name] for player in self.players}
         letters = [(sender, letter["to"], letter["text"]) for sender, output in outputs.items()
                    for letter in output.letters]

@@ -14,7 +14,7 @@ from auction_game.agent import prompts
 from auction_game.agent.log import AgentLog
 from auction_game.agent.player import AIPlayer
 from auction_game.agent.text_output import BOARD, LetterNames, TeamBoard
-from auction_game.flow.controller import Controller
+from auction_game.flow.controller import Controller, TournamentAborted
 from auction_game.reporting.run_output import initialize_run
 from auction_game.game.engine import MatchState, compute_standings, settle_day
 from auction_game.game.lineup import Lineup, PlayerProfile
@@ -353,6 +353,13 @@ def continuous_controller():
             raise AssertionError("\n".join(messages))
 
     return Controller(mode="continuous", announce=announce)
+
+
+def release_then_quit(controller, tasks, label, *, on_start=None):
+    """替换 Controller.run_round：第一轮一放行就按 q。新开的场次这时已建好场次文件，还没有请求模型。"""
+    if on_start is not None:
+        on_start()
+    raise TournamentAborted
 
 
 def task_entries(path):

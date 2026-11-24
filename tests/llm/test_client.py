@@ -440,7 +440,7 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
     monkeypatch.setattr(check_llm.secrets, "token_hex", lambda nbytes: "c0de")
     h = Harness("responses", [response, reply(text="好"), reply(text="好")])
     model = ResolvedModel(key="fake", provider="fake", model="alias", protocol="responses",
-                          models_dev={"provider": "fake", "model": "alias"}, max_tokens=4096,
+                          models_dev={"provider": "fake", "model": "alias"}, price_multiplier=1, max_tokens=4096,
                           model_settings={"openai_reasoning_effort": "high"},
                           capabilities={"reasoning_status": "high", "reasoning_detail": "synthetic"})
     pc = PlayerConfig(PlayerProfile("甲", "人设", "正文", 0), model, model)

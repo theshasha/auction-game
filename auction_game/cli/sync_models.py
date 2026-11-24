@@ -14,14 +14,28 @@ from auction_game.model_capabilities import effective_capabilities, read_snapsho
 from auction_game.paths import CAPABILITIES_PATH
 
 API_URL = "https://models.dev/api.json"
+# models.dev 的单价是每百万 token 的美元价；音频单价用不上，context_over_200k 和 tiers 重复。
+COST_FIELDS = ("input", "output", "cache_read", "cache_write", "reasoning")
 
 
 def positive_integer(value):
     return value if type(value) is int and value > 0 else None
 
 
+def official_cost(item: dict) -> dict | None:
+    """models.dev 条目里的官方单价，只留计价用的键，缺的不写；条目没有 cost 时为 None。"""
+    cost = item.get("cost")
+    if cost is None:
+        return None
+    result = {field: cost[field] for field in COST_FIELDS if field in cost}
+    if cost.get("tiers"):
+        result["tiers"] = [{"tier": tier["tier"], **{field: tier[field] for field in COST_FIELDS if field in tier}}
+                           for tier in cost["tiers"]]
+    return result
+
+
 def build_snapshot(catalog: dict[str, ModelEntry], data: dict, retrieved_from: str) -> dict:
-    """按 models.yaml 的精确来源取条目；数值上限规范成正整数或 None。"""
+    """按 models.yaml 的精确来源取条目；数值上限规范成正整数或 None，没有单价的条目不写 cost。"""
     entries = {}
     for key, model in catalog.items():
         source = model.models_dev
@@ -36,6 +50,9 @@ def build_snapshot(catalog: dict[str, ModelEntry], data: dict, retrieved_from: s
                                 for field in ("context", "input", "output")},
                          reasoning=item.get("reasoning"),
                          reasoning_options=item.get("reasoning_options") or [])
+            cost = official_cost(item)
+            if cost is not None:
+                entry["cost"] = cost
         entries[key] = entry
     return {"schema_version": 1, "retrieved_from": retrieved_from,
             "fetched_at": datetime.now(timezone.utc).isoformat(), "models": entries}

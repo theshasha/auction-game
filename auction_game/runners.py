@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import traceback
+from collections import Counter
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -20,13 +21,17 @@ from auction_game.game.lineup import Lineup, PlayerProfile
 from auction_game.game.rules import rules_document
 from auction_game.game.settings import GameSettings
 from auction_game.paths import CONFIG_PATH, ROOT_DIR, RULES_PATH, TEAM_RULES_PATH
+from auction_game.reporting.analyze import played_runs
+from auction_game.reporting.estimate import SeatModel, collect_history, estimate, format_estimate
 from auction_game.reporting.run_output import (find_unfinished_run, initialize_run, is_finished, model_label,
                                                print_final_result)
 from auction_game.reporting.run_paths import (OFFLINE_RUN_TYPES, RUN_TYPES, RunPaths, make_run_dir,
                                               run_type as run_type_of)
 
-# 场次快照里实际调用的模型只记这些字段，来源和推理档位已在 capabilities 里。
-EXECUTION_SNAPSHOT_FIELDS = ("key", "model", "provider", "protocol", "max_tokens", "model_settings", "capabilities")
+# 场次快照里实际调用的模型只记这些字段，来源、推理档位和官方单价已在 capabilities 里。
+# 价格倍率按开赛时记下，续跑换渠道或改倍率也不变。
+EXECUTION_SNAPSHOT_FIELDS = ("key", "model", "provider", "protocol", "max_tokens", "model_settings", "capabilities",
+                             "price_multiplier")
 
 
 def execution_calls(player_configs) -> dict[str, dict]:
@@ -103,7 +108,6 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
         print(f"[配置错误] {exc}")
         return 1
     run_type = run_type_of(team=team, test_model=test_model)
-    run_dir = make_run_dir(run_type)
     if test_model:
         test_key = config["test_model"]
         print(f"测试模型：{test_key} / {call_label(player_configs[0].execution)}（全员使用，调用真实服务，可能收费）")
@@ -120,13 +124,29 @@ def run_ai(test_model: bool = False, team: bool = False) -> int:
     if warned:
         print("请运行 python -m auction_game.cli.sync_models --write 更新模型能力信息；"
               "仍有提醒时检查 configs/models.yaml 的 models_dev 来源。")
-    return play_ai(setup, task_runners, controller,
-                   run_dir=run_dir, run_type=run_type, test_model=test_model, interactive=True)
+    for line in estimate_lines(player_configs, setup.game, team=team):
+        print(line)
+    return play_ai(setup, task_runners, controller, run_type=run_type, test_model=test_model, interactive=True)
 
 
-def play_ai(setup: StartSetup, task_runners, controller, *, run_dir, run_type, test_model,
+def estimate_lines(player_configs: list[PlayerConfig], game: GameSettings, *, team: bool) -> list[str]:
+    """按阵容和比赛参数预估花费的打印行；单价取当前能力快照，倍率取当前 models.yaml，用量取 logs/ 下的历史场次。"""
+    seats = Counter((pc.execution.key, pc.execution.capabilities["reasoning_status"]) for pc in player_configs)
+    executions = {(pc.execution.key, pc.execution.capabilities["reasoning_status"]): pc.execution
+                  for pc in player_configs}
+    models = [SeatModel(key, effort, call_label(executions[key, effort]), count,
+                        executions[key, effort].capabilities.get("cost"), executions[key, effort].price_multiplier)
+              for (key, effort), count in seats.items()]
+    history = collect_history(played_runs())
+    return format_estimate(estimate(models, game, team=team, history=history), game, team=team)
+
+
+def play_ai(setup: StartSetup, task_runners, controller, *, run_type, test_model, run_dir: Path | None = None,
             interactive=False) -> int:
-    """写场次快照并跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。"""
+    """跑完整场 AI 比赛；离线演示传入假模型的任务入口和不交互的控制器。
+
+    场次目录、快照、规则、README 和玩家日志都在第一轮放行后才写；run_dir 为 None 时这时在 logs/ 下新建目录。
+    """
     config, player_configs, game = setup.config, setup.player_configs, setup.game
     lineup = Lineup(tuple(pc.profile for pc in player_configs))
     calls = execution_calls(player_configs)
@@ -142,20 +162,25 @@ def play_ai(setup: StartSetup, task_runners, controller, *, run_dir, run_type, t
             "execution_model": calls[pc.profile.name],
         } for pc in player_configs],
     }
-    paths = initialize_run(run_dir, snapshot, setup.rules)
-
+    # 系统提示先记在日志里，建好目录后写出。
+    logs = [AgentLog(profile.name) for profile in lineup.profiles]
     players = [
         _make_player(
-            profile, lineup, game, task_runners[profile.name],
-            AgentLog(profile.name, paths.player(number), readable_path=paths.player(number, readable=True)),
+            profile, lineup, game, task_runners[profile.name], log,
             build_system_prompt(
                 profile, lineup, game,
                 enable_predictions=config["prompts"]["enable_predictions"],
                 enable_personas=config["prompts"]["enable_personas"],
                 writing_style=config["writing_style"],
             ))
-        for number, profile in enumerate(lineup.profiles, 1)
+        for profile, log in zip(lineup.profiles, logs)
     ]
+
+    def write_new_run(target: Path) -> None:
+        paths = initialize_run(target, snapshot, setup.rules)
+        for number, log in enumerate(logs, 1):
+            log.bind(paths.player(number), paths.player(number, readable=True))
+
     _print_llm_limits(controller.max_concurrency, config["llm"]["timeout_seconds"])
     prompt_options = config["prompts"]
     if lineup.teams:
@@ -165,7 +190,10 @@ def play_ai(setup: StartSetup, task_runners, controller, *, run_dir, run_type, t
     print(f"提示设置：赛前预测{predictions}，"
           f"人设{'开启' if prompt_options['enable_personas'] else '关闭'}，"
           f"写作要求{'开启' if prompt_options['enable_writing_style'] else '关闭'}")
-    return _play(players, controller, run_dir, game, lineup, resuming=False, interactive=interactive)
+    director = AIDirector(players, controller, None, game=game, team_of=lineup.team_of,
+                          new_run_dir=lambda: make_run_dir(run_type) if run_dir is None else run_dir,
+                          write_new_run=write_new_run)
+    return _play(director, interactive=interactive)
 
 
 def resume_ai(run_dir: Path | None = None) -> int:
@@ -225,7 +253,8 @@ def continue_run(run_dir: Path, task_runners: dict, controller, *, interactive: 
     # 系统提示用日志里的：中途改过人设或写作要求，前后半场仍是同一份。
     players = [_make_player(profile, lineup, game, task_runners[profile.name], log, log.system_text)
                for profile, log in zip(lineup.profiles, logs)]
-    return _play(players, controller, run_dir, game, lineup, resuming=True, interactive=interactive)
+    return _play(AIDirector(players, controller, run_dir, game=game, team_of=lineup.team_of, resuming=True),
+                 interactive=interactive)
 
 
 def _print_llm_limits(max_concurrency: int, timeout_seconds: int | float) -> None:
@@ -244,18 +273,27 @@ def _make_player(profile: PlayerProfile, lineup: Lineup, game: GameSettings, tas
     )
 
 
-def _play(players: list[AIPlayer], controller, run_dir: Path, game: GameSettings, lineup: Lineup, *,
-          resuming: bool, interactive: bool) -> int:
-    """interactive 是真实比赛：读终端命令，程序错误时打印报错和续跑命令；离线赛和测试把程序错误抛出去。"""
+def _play(director: AIDirector, *, interactive: bool) -> int:
+    """interactive 是真实比赛：读终端命令，程序错误时打印报错和续跑命令；离线赛和测试把程序错误抛出去。
+
+    新开的场次在第一轮放行前退出时还没有场次目录，场次文件没写全就出错时目录不完整，这两种都不给续跑命令。
+    """
     if interactive:
-        controller.start_terminal_input()
+        director.controller.start_terminal_input()
         print("操作：回车=下一轮 / c=连续 / s=单步 / p=暂停 / q 或 Ctrl+C=退出比赛")
 
-    resume_command = f'python main.py --resume "{run_dir}"'
+    def resume_note() -> str:
+        if director.paths is None:
+            # 按 q 时控制器说过"已成功的结果续跑时沿用"，这里说明这次没有可续的。
+            return "还没建场次，没有可续跑的内容。"
+        if not director.files_ready:
+            return f"场次目录没写完，删掉 {director.paths.root} 后重新开一场。"
+        return f'续跑：python main.py --resume "{director.paths.root}"'
+
     try:
-        result = AIDirector(players, controller, run_dir, game=game, team_of=lineup.team_of, resuming=resuming).run()
+        result = director.run()
     except TournamentAborted:
-        print(f"\n已退出比赛。续跑：{resume_command}")
+        print(f"\n已退出比赛。{resume_note()}")
         return 0
     except ResumeError as exc:
         print(f"\n[无法续跑] {exc}")
@@ -264,7 +302,8 @@ def _play(players: list[AIPlayer], controller, run_dir: Path, game: GameSettings
         if not interactive:
             raise
         traceback.print_exc()
-        print(f"\n[程序错误] 已退出比赛，成功的结果续跑时沿用。续跑：{resume_command}")
+        kept = "成功的结果续跑时沿用。" if director.paths is not None and director.files_ready else ""
+        print(f"\n[程序错误] 已退出比赛，{kept}{resume_note()}")
         return 1
     print_final_result(result)
     return 0

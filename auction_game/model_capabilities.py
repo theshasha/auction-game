@@ -54,15 +54,15 @@ def effective_capabilities(model: ModelEntry, snapshot: dict) -> dict:
         settings.update(anthropic_thinking={"type": "adaptive"}, anthropic_effort=status)
     elif status != "default":
         settings["openai_reasoning_effort"] = status
-    return {
-        "max_tokens": output or DEFAULT_MAX_TOKENS,
-        "model_settings": settings,
-        "capabilities": {
-            "source": model.models_dev, "retrieved_from": snapshot.get("retrieved_from"),
-            "fetched_at": snapshot.get("fetched_at"), "status": entry.get("status", "unknown"),
-            "matched_id": entry.get("matched_id"), "limit": limit,
-            "reasoning": entry.get("reasoning"), "reasoning_options": options,
-            "output_fallback_reason": reason or (None if output else "来源缺少有效最大输出"),
-            "reasoning_status": status, "reasoning_detail": detail,
-        },
+    capabilities = {
+        "source": model.models_dev, "retrieved_from": snapshot.get("retrieved_from"),
+        "fetched_at": snapshot.get("fetched_at"), "status": entry.get("status", "unknown"),
+        "matched_id": entry.get("matched_id"), "limit": limit,
+        "reasoning": entry.get("reasoning"), "reasoning_options": options,
+        "output_fallback_reason": reason or (None if output else "来源缺少有效最大输出"),
+        "reasoning_status": status, "reasoning_detail": detail,
     }
+    # 官方单价随 capabilities 进场次快照，统计花费只读快照；来源没有单价时不写。
+    if "cost" in entry:
+        capabilities["cost"] = entry["cost"]
+    return {"max_tokens": output or DEFAULT_MAX_TOKENS, "model_settings": settings, "capabilities": capabilities}

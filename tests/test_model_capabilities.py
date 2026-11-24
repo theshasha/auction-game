@@ -157,6 +157,22 @@ def test_vertex_default_effort_still_asks_for_thoughts(config_files):
     assert effective["capabilities"]["reasoning_status"] == "default"
 
 
+def test_official_cost_keeps_pricing_fields_and_reaches_capabilities(config_files):
+    catalog = load_model_entries(config_files[2])
+    data = public_data()
+    tier = {"input": 4, "output": 12, "cache_read": 1, "input_audio": 9, "tier": {"type": "context", "size": 200000}}
+    data["official"]["models"]["source-c"]["cost"] = {
+        "input": 2, "output": 6, "cache_read": 0.5, "reasoning": 6, "input_audio": 9,
+        "tiers": [tier], "context_over_200k": {"input": 4, "output": 12, "cache_read": 1}}
+    snapshot = build_snapshot(catalog, data, "synthetic")
+    expected = {"input": 2, "output": 6, "cache_read": 0.5, "reasoning": 6,
+                "tiers": [{"tier": {"type": "context", "size": 200000}, "input": 4, "output": 12, "cache_read": 1}]}
+    assert snapshot["models"]["substitute"]["cost"] == expected
+    assert effective_capabilities(catalog["substitute"], snapshot)["capabilities"]["cost"] == expected
+    assert "cost" not in snapshot["models"]["first"]
+    assert "cost" not in effective_capabilities(catalog["first"], snapshot)["capabilities"]
+
+
 def test_output_budget_is_not_reduced_by_input_or_context(config_files):
     catalog = load_model_entries(config_files[2])
     data = public_data()

@@ -16,6 +16,7 @@ from auction_game.game.engine import team_standings
 from auction_game.game.models import StandingsEntry
 from auction_game.reporting.analyze import (TASK_LABELS, collect_player_stats, collect_run_stats, collect_team_stats,
                                             collect_usage, find_latest_ai_run, load_match_logs, match_setup)
+from auction_game.reporting.cost import dollars
 from auction_game.reporting.run_output import is_finished
 from auction_game.reporting.run_paths import OFFLINE_RUN_TYPES, RunPaths, RUN_TYPES
 
@@ -75,28 +76,47 @@ def print_team_sections(snapshot: dict, matches: list[dict], match_labels: list[
     print()
 
 
-def _usage_text(totals: Counter) -> str:
+def _usage_text(totals: Counter, *, cache_write: bool = False, cost: str | None = None) -> str:
     text = f"请求 {totals['requests']} 次，输入 {totals['input']:,}"
     if totals["input"]:
-        text += f"（缓存命中 {totals['cache_read']:,}，{totals['cache_read'] / totals['input']:.0%}）"
+        text += f"（缓存命中 {totals['cache_read']:,}，{totals['cache_read'] / totals['input']:.0%}"
+        if cache_write:
+            text += f"；缓存写入 {totals['cache_write']:,}"
+        text += "）"
     text += f"，输出 {totals['output']:,}"
+    if cost is not None:
+        text += f"，花费 {cost}"
     if totals["failed_requests"]:
         text += f"；另有 {totals['failed_requests']} 次请求失败"
     return text
 
 
 def print_usage(usage: dict) -> None:
+    unpriced = [model["label"] for model in usage["models"] if not model["priced"]]
+    excluded = f"（不含无单价的 {'、'.join(unpriced)}）" if unpriced else ""
     print("模型用量（token）")
     print("  输入含缓存命中，输出含推理；失败的请求没有用量记录，只计次数")
     for name, totals in usage["players"].items():
         print(f"  {name}：{_usage_text(totals)}")
-    print("  按任务：")
+    print("  按模型：")
+    for model in usage["models"]:
+        totals = model["totals"]
+        cost = dollars(totals["cost"]) if model["priced"] else "无单价"
+        print(f"    {model['label']}（{totals['seats']} 席）：{_usage_text(totals, cache_write=True, cost=cost)}")
+    print(f"  按任务{excluded}：")
     for task, totals in usage["tasks"].items():
-        line = f"    {TASK_LABELS[task]}：{_usage_text(totals)}"
+        line = f"    {TASK_LABELS[task]}：{_usage_text(totals, cost=dollars(totals['cost']))}"
         if task in usage["largest_inputs"]:
             tokens, name, context = usage["largest_inputs"][task]
             line += f"；最大单次输入 {tokens:,}，来自 {name} {context}"
         print(line)
+    total = sum(model["totals"]["cost"] for model in usage["models"])
+    print(f"  全场花费：{dollars(total)}{excluded}")
+    print("  按开赛时快照里的官方单价和价格倍率计；失败、超时、被取消和强关时进行中的请求没有用量记录，"
+          "但可能已经收费，所以花费是下限")
+    for model in usage["models"]:
+        if model["reasoning_apart"]:
+            print(f"  {model['label']} 的推理另有单价，这里按输出价计")
 
 
 def analyze(run_dir: Path) -> None:

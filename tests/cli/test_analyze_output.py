@@ -12,8 +12,8 @@ from auction_game.cli.analyze import analyze, main
 from auction_game.llm.execution import CallFailedError, ExecutionResult
 from auction_game.reporting.run_output import SUMMARY_TITLE, initialize_run, publish_speeches
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.analyze_runs import (ANALYZE_GAME, make_match_1, make_match_2, make_matches, make_team_match,
-                                        player_log, write_matches)
+from tests.support.analyze_runs import (ANALYZE_GAME, execution_model, make_match_1, make_match_2, make_matches,
+                                        make_team_match, player_log, write_matches)
 from tests.support.factories import TEAM_OF, TEST_GAME, make_day, make_log
 
 
@@ -98,11 +98,18 @@ def test_usage_sums_every_reply_by_player_and_task(tmp_path, capsys):
         "  丁：请求 0 次，输入 0，输出 0",
         "  戊：请求 0 次，输入 0，输出 0",
         "  己：请求 0 次，输入 0，输出 0",
+        "  按模型：",
+        "    synthetic-execution（6 席）：请求 5 次，输入 1,850（缓存命中 190，10%；缓存写入 0），输出 90，花费 $2.60；"
+        "另有 3 次请求失败",
         "  按任务：",
-        "    发言：请求 1 次，输入 100（缓存命中 40，40%），输出 10；最大单次输入 100，来自 甲 开局发言",
-        "    出价：请求 3 次，输入 750（缓存命中 150，20%），输出 75；另有 3 次请求失败；"
+        "    发言：请求 1 次，输入 100（缓存命中 40，40%），输出 10，花费 $0.17；最大单次输入 100，来自 甲 开局发言",
+        "    出价：请求 3 次，输入 750（缓存命中 150，20%），输出 75，花费 $1.38；另有 3 次请求失败；"
         "最大单次输入 300，来自 甲 第 1 局第 2 天",
-        "    观众总结：请求 1 次，输入 1,000（缓存命中 0，0%），输出 5；最大单次输入 1,000，来自 乙 观众总结（仅观众可见）",
+        "    观众总结：请求 1 次，输入 1,000（缓存命中 0，0%），输出 5，花费 $1.05；"
+        "最大单次输入 1,000，来自 乙 观众总结（仅观众可见）",
+        "  全场花费：$2.60",
+        "  按开赛时快照里的官方单价和价格倍率计；失败、超时、被取消和强关时进行中的请求没有用量记录，"
+        "但可能已经收费，所以花费是下限",
     ]
 
 
@@ -117,8 +124,8 @@ def test_usage_lists_discussion_after_speech(tmp_path, capsys):
     analyze(run_dir)
     usage = capsys.readouterr().out.split("  按任务：\n", 1)[1]
     assert usage.splitlines()[:2] == [
-        "    发言：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局发言",
-        "    讨论：请求 1 次，输入 100（缓存命中 0，0%），输出 10；最大单次输入 100，来自 甲 开局讨论第 1 轮",
+        "    发言：请求 1 次，输入 100（缓存命中 0，0%），输出 10，花费 $0.20；最大单次输入 100，来自 甲 开局发言",
+        "    讨论：请求 1 次，输入 100（缓存命中 0，0%），输出 10，花费 $0.20；最大单次输入 100，来自 甲 开局讨论第 1 轮",
     ]
 
 
@@ -131,7 +138,7 @@ def test_usage_lists_failed_only_task_without_largest_input(tmp_path, capsys):
         CallFailedError("请求失败", messages=[ModelRequest(parts=[UserPromptPart("请总结")])],
                         request_errors=[request_error(1)]))
     analyze(run_dir)
-    assert "    观众总结：请求 0 次，输入 0，输出 0；另有 1 次请求失败\n" in capsys.readouterr().out
+    assert "    观众总结：请求 0 次，输入 0，输出 0，花费 $0；另有 1 次请求失败\n" in capsys.readouterr().out
 
 
 def test_usage_ignores_unfinished_last_line_and_keeps_line_separators(tmp_path, capsys):
@@ -150,11 +157,42 @@ def test_usage_ignores_unfinished_last_line_and_keeps_line_separators(tmp_path, 
     assert "  甲：请求 1 次，输入 100（缓存命中 0，0%），输出 10\n" in capsys.readouterr().out
 
 
+def test_usage_by_model_prices_with_multiplier_and_marks_unpriced(tmp_path, capsys):
+    run_dir = tmp_path / "20260909_120000_team"
+    cheap = execution_model(key="cheap", model="cheap-model", price_multiplier=0.5,
+                            capabilities={"reasoning_status": "high",
+                                          "cost": {"input": 1000, "output": 10000, "reasoning": 20000}})
+    unpriced = execution_model(key="unpriced", model="unpriced-model",
+                               capabilities={"reasoning_status": "default"})
+    players = [{"name": name, "execution_model": cheap if name in "甲乙丙" else unpriced}
+               for name in make_match_1()["auction_scores"]]
+    write_matches(run_dir, make_matches(), run_type="team", players=players, team_of=TEAM_OF)
+    jia, ding = (RunPaths(run_dir).read_config()["players"][index] for index in (0, 3))
+    for pc in (jia, ding):
+        player_log(run_dir, pc).success(
+            {"title": "开局发言", "task": "speech", "context": "开局发言"},
+            ExecutionResult(SpeechOutput("策略", "发言", []), [ModelRequest(parts=[UserPromptPart("请发言")]),
+                                                                model_reply(300, 20)], []))
+    analyze(run_dir)
+    usage = capsys.readouterr().out.split("  按模型：\n", 1)[1]
+    # 甲：(300 × 1000 + 20 × 10000) × 0.5 ÷ 10^6 = 0.25 美元；推理也按输出价计。
+    assert usage.splitlines() == [
+        "    cheap-model · high（3 席）：请求 1 次，输入 300（缓存命中 0，0%；缓存写入 0），输出 20，花费 $0.25",
+        "    unpriced-model（3 席）：请求 1 次，输入 300（缓存命中 0，0%；缓存写入 0），输出 20，花费 无单价",
+        "  按任务（不含无单价的 unpriced-model）：",
+        "    发言：请求 2 次，输入 600（缓存命中 0，0%），输出 40，花费 $0.25；最大单次输入 300，来自 甲 开局发言",
+        "  全场花费：$0.25（不含无单价的 unpriced-model）",
+        "  按开赛时快照里的官方单价和价格倍率计；失败、超时、被取消和强关时进行中的请求没有用量记录，"
+        "但可能已经收费，所以花费是下限",
+        "  cheap-model · high 的推理另有单价，这里按输出价计",
+    ]
+
+
 def test_default_cli_keeps_test_run_type_and_actual_models(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path)
     monkeypatch.setattr("sys.argv", ["analyze"])
     players = [{"name": name, "identity_model": {"model": f"identity-{index}"},
-                "execution_model": {"protocol": "responses", "model": "actual-test-model"}}
+                "execution_model": execution_model(protocol="responses", model="actual-test-model")}
                for index, name in enumerate(make_match_1()["auction_scores"], 1)]
     write_matches(tmp_path / "20261016_120000_ai-test", make_matches(), run_type="ai-test", players=players)
     main()

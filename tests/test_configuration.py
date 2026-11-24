@@ -10,7 +10,7 @@ from auction_game.configuration import ConfigurationError, load_configuration, l
 from auction_game.game.lineup import Lineup
 from auction_game.model_capabilities import DEFAULT_MAX_TOKENS
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.factories import CHANNELS, rewrite_yaml
+from tests.support.factories import CHANNELS, release_then_quit, rewrite_yaml
 
 
 def test_values_are_read_as_written(config_files):
@@ -288,6 +288,22 @@ def test_unknown_catalog_field_rejected(config_files, field):
     assert str(exc.value) == f"{models_path}：models.first 不支持字段：{field}"
 
 
+def test_price_multiplier_defaults_to_one(config_files):
+    rewrite_yaml(config_files[2], lambda data: data["models"]["second"].update(price_multiplier=0.075))
+    config, players = load_configuration(*config_files)
+    assert [player.execution.price_multiplier for player in players] == [1, 0.075]
+    assert runners.execution_calls(players)["乙"]["price_multiplier"] == 0.075
+
+
+@pytest.mark.parametrize("value", [0, -1, "0.5", True])
+def test_invalid_price_multiplier(config_files, value):
+    models_path = config_files[2]
+    rewrite_yaml(models_path, lambda data: data["models"]["first"].update(price_multiplier=value))
+    with pytest.raises(ConfigurationError) as exc:
+        load_configuration(*config_files)
+    assert str(exc.value) == f"{models_path}：models.first.price_multiplier 必须是大于 0 的数字"
+
+
 def test_invalid_catalog_protocol(config_files):
     rewrite_yaml(config_files[2], lambda data: data["models"]["first"].update(protocol="invalid"))
     with pytest.raises(ConfigurationError, match="models.first.protocol"):
@@ -363,15 +379,13 @@ def test_team_startup_records_teams_and_hands_them_to_director(
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / mode)
     monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
+    monkeypatch.setattr(runners.Controller, "run_round", release_then_quit)
     directors = []
-
-    def stop(director):
-        directors.append(director)
-        raise runners.TournamentAborted
-
-    monkeypatch.setattr(runners.AIDirector, "run", stop)
+    run = runners.AIDirector.run
+    monkeypatch.setattr(runners.AIDirector, "run", lambda director: directors.append(director) or run(director))
     assert runners.run_ai(test_model=test_model, team=True) == 0
-    assert "提示设置：赛前预测不用于团队赛，" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "提示设置：赛前预测不用于团队赛，" in output
     run_type = "team-test" if test_model else "team"
     paths = RunPaths(tmp_path / run_type)
     snapshot = paths.read_config()
@@ -382,6 +396,40 @@ def test_team_startup_records_teams_and_hands_them_to_director(
     assert "红队有 甲、乙、丙，蓝队有 丁、戊、己" in (paths.root / "RULES.md").read_text(encoding="utf-8")
     system = json.loads(paths.player(1).read_text(encoding="utf-8").splitlines()[0])["content"]
     assert "你叫 甲，属于红队。" in system
+    readme = (paths.root / "README.md").read_text(encoding="utf-8")
+    assert "### 红队\n\n- [甲](players/001.md)" in readme and "- [己](players/006.md)" in readme
+    assert output.rstrip().endswith(f'已退出比赛。续跑：python main.py --resume "{paths.root}"')
+
+
+def test_quitting_before_the_first_round_leaves_no_run(config_files, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
+    monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
+    wait = runners.Controller.wait_for_turn
+
+    def quit_at_first_prompt(controller, label, **kwargs):
+        controller.offer_command("q")
+        return wait(controller, label, **kwargs)
+
+    monkeypatch.setattr(runners.Controller, "wait_for_turn", quit_at_first_prompt)
+    assert runners.run_ai() == 0
+    output = capsys.readouterr().out
+    assert "预估花费" in output and "本场日志目录" not in output
+    assert output.rstrip().endswith("已退出比赛。还没建场次，没有可续跑的内容。")
+    assert not (tmp_path / "logs").exists()
+
+
+def test_error_while_writing_a_new_run_names_the_incomplete_directory(config_files, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: load_configuration(*config_files, **kwargs))
+    monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: None)
+    monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
+    monkeypatch.setattr(runners.Controller, "run_round", release_then_quit)
+    monkeypatch.setattr(runners, "initialize_run", lambda *args: (_ for _ in ()).throw(OSError("磁盘已满")))
+    assert runners.run_ai() == 1
+    captured = capsys.readouterr()
+    [run_dir] = (tmp_path / "logs").iterdir()
+    assert "OSError: 磁盘已满" in captured.err
+    assert captured.out.rstrip().endswith(f"[程序错误] 已退出比赛，场次目录没写完，删掉 {run_dir} 后重新开一场。")
 
 
 def test_missing_key_stops_before_logs(config_files, monkeypatch, capsys):
@@ -410,8 +458,7 @@ def test_ai_startup_prints_lineup_and_budget_warning_once_per_model(
     monkeypatch.setattr(runners, "make_model_factory", lambda **kwargs: factories.append(kwargs))
     monkeypatch.setattr(runners, "make_run_dir", lambda mode: tmp_path / mode)
     monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
-    monkeypatch.setattr(runners.AIDirector, "run",
-                        lambda self: (_ for _ in ()).throw(runners.TournamentAborted))
+    monkeypatch.setattr(runners.Controller, "run_round", release_then_quit)
     assert runners.run_ai(test_model=test_model) == 0
     output = capsys.readouterr().out
     if test_model:

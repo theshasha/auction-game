@@ -16,6 +16,12 @@ def isolated_root_rules(tmp_path, monkeypatch):
     monkeypatch.setattr(runners, "RULES_PATH", tmp_path / "root-RULES.md")
     monkeypatch.setattr(runners, "TEAM_RULES_PATH", tmp_path / "root-RULES_TEAM.md")
 
+
+@pytest.fixture(autouse=True)
+def isolated_logs(tmp_path, monkeypatch):
+    """开赛预估读 logs/ 下的历史场次，新开的场次也建在这里；测试用各自的空目录。"""
+    monkeypatch.setattr("auction_game.reporting.run_paths.LOG_DIR", tmp_path / "logs")
+
 @pytest.fixture
 def config_files(tmp_path, monkeypatch):
     """合成目录覆盖不同协议/预算与无角色名的测试替身，不绑定生产名单。"""

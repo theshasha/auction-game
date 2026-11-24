@@ -9,6 +9,8 @@ from pathlib import Path
 from auction_game.agent.log import read_records
 from auction_game.game.engine import resolve_bids
 from auction_game.game.settings import GameSettings
+from auction_game.reporting.cost import reasoning_priced_apart, response_cost
+from auction_game.reporting.run_output import model_label
 from auction_game.reporting.run_paths import REAL_RUN_TYPES, RunPaths, find_runs
 
 # 按任务列用量时的顺序和标签，键和 agent.tasks.TASKS 相同。
@@ -16,9 +18,14 @@ TASK_LABELS = {"speech": "发言", "discussion": "讨论", "plan": "规划", "bi
                "summary": "观众总结"}
 
 
+def played_runs(run_types: tuple[str, ...] = REAL_RUN_TYPES) -> list[Path]:
+    """logs/ 下这几种类型里至少完成一局的场次，从旧到新；归档目录不算。"""
+    return [path for path in find_runs(run_types) if any((RunPaths(path).data / "matches").glob("*.json"))]
+
+
 def find_latest_ai_run(run_types: tuple[str, ...] = REAL_RUN_TYPES) -> Path:
     """logs/ 下这几种类型里最新的、至少完成一局的场次；没有时报 ValueError。"""
-    runs = [path for path in find_runs(run_types) if any((RunPaths(path).data / "matches").glob("*.json"))]
+    runs = played_runs(run_types)
     if not runs:
         raise ValueError(f"logs/ 下没有已完成至少一局的真实 AI 场次（{'、'.join(run_types)}）；"
                          "离线模拟赛请显式指定目录")
@@ -230,34 +237,48 @@ def collect_team_stats(matches: list[dict], team_of: dict[str, str]) -> dict[str
 
 
 def collect_usage(run_dir: Path, players: list[dict]) -> dict:
-    """逐条累加任务日志中模型回复的用量，含纠错往返和失败、取消任务里已收到的回复。
+    """逐条累加任务日志中模型回复的用量和花费，含纠错往返和失败、取消任务里已收到的回复。
 
-    失败的请求在日志里只有报错，没有用量，只计次数。
+    失败的请求在日志里只有报错，没有用量，只计次数。按模型汇总的是执行模型的目录键加推理档位，
+    单价和倍率取自快照里的 execution_model；来源没有单价的模型 priced 为假，花费不计入任何合计。
+    reasoning_apart 表示来源给推理另标了单价，这里仍按输出价计。
     """
     paths = RunPaths(run_dir)
     by_player: dict[str, Counter] = {}
+    by_model: dict[tuple[str, str], dict] = {}
     by_task: dict[str, Counter] = {}
     largest_inputs: dict[str, tuple[int, str, str]] = {}
     for pc in players:
         name = pc["name"]
+        execution = pc["execution_model"]
+        effort = execution["capabilities"]["reasoning_status"]
+        cost = execution["capabilities"].get("cost")
+        model = by_model.setdefault((execution["key"], effort), {
+            "label": model_label(execution["model"], effort), "priced": cost is not None,
+            "reasoning_apart": reasoning_priced_apart(cost), "totals": Counter()})
+        model["totals"]["seats"] += 1
         player_totals = by_player[name] = Counter()
         for entry in read_records(paths.player(pc["number"]))[0]:
             if entry["task"] == "system":
                 continue
-            task_totals = by_task.setdefault(entry["task"], Counter())
-            for totals in (player_totals, task_totals):
+            groups = (player_totals, model["totals"], by_task.setdefault(entry["task"], Counter()))
+            for totals in groups:
                 totals["failed_requests"] += len(entry["request_errors"])
             for message in entry["messages"]:
                 if message["kind"] != "response":
                     continue
                 usage = message["usage"]
-                for totals in (player_totals, task_totals):
+                dollars = response_cost(usage, cost, execution["price_multiplier"])
+                for totals in groups:
                     totals["requests"] += 1
                     totals["input"] += usage["input_tokens"]
                     totals["cache_read"] += usage["cache_read_tokens"]
+                    totals["cache_write"] += usage["cache_write_tokens"]
                     totals["output"] += usage["output_tokens"]
+                    if dollars is not None:
+                        totals["cost"] += dollars
                 if usage["input_tokens"] > largest_inputs.get(entry["task"], (-1,))[0]:
                     largest_inputs[entry["task"]] = (usage["input_tokens"], name, entry["context"])
-    return {"players": by_player,
+    return {"players": by_player, "models": list(by_model.values()),
             "tasks": {task: by_task[task] for task in TASK_LABELS if task in by_task},
             "largest_inputs": largest_inputs}

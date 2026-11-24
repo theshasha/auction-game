@@ -104,10 +104,12 @@ def _system_markdown(text: str) -> str:
 class AgentLog:
     """同步写 JSONL 后写 Markdown；写入异常向上传递。"""
 
-    def __init__(self, name: str, path: Path, *, readable_path: Path):
+    def __init__(self, name: str, path: Path | None = None, *, readable_path: Path | None = None):
+        """path 为 None 是还没建场次目录的新场次：写入先记在内存里，bind 时按顺序写出。"""
         self.name = name
         self.path = path
         self.readable_path = readable_path
+        self._unwritten: list[tuple[dict, str]] | None = [] if path is None else None
         self.system_text: str | None = None  # 续跑时日志里的系统提示；新日志为 None
         self._task_number = 0
         self._failed_tasks: dict[tuple, tuple[str, str, int]] = {}
@@ -156,6 +158,13 @@ class AgentLog:
             file.truncate(size)
         self.readable_path.parent.mkdir(parents=True, exist_ok=True)
         self.readable_path.write_text(markdown, encoding="utf-8")
+
+    def bind(self, path: Path, readable_path: Path) -> None:
+        """新场次建好目录后调用一次：定下日志位置，写出之前记下的内容。"""
+        unwritten, self._unwritten = self._unwritten, None
+        self.path, self.readable_path = path, readable_path
+        for record, markdown in unwritten:
+            self._append(record, markdown)
 
     def system_prompt(self, text: str) -> None:
         """在任务记录之前写一次系统提示原文。"""
@@ -217,6 +226,9 @@ class AgentLog:
         return f"# {self.name} · 私人对话（含私有策略）\n\n"
 
     def _append(self, record: dict, markdown: str) -> None:
+        if self._unwritten is not None:
+            self._unwritten.append((record, markdown))
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")

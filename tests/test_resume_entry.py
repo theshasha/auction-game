@@ -9,7 +9,7 @@ from auction_game.configuration import load_configuration, load_llm_settings
 from auction_game.game.settings import GameSettings
 from auction_game.reporting.run_output import SUMMARY_TITLE, publish_speeches
 from auction_game.reporting.run_paths import RunPaths
-from tests.support.factories import rewrite_yaml
+from tests.support.factories import release_then_quit, rewrite_yaml
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def started_run(config_files, teams_file, monkeypatch, tmp_path):
     monkeypatch.setattr(runners.Controller, "start_terminal_input", lambda self: None)
     with monkeypatch.context() as patch:
         patch.setattr(runners, "make_model_factory", lambda **kwargs: None)
-        patch.setattr(runners.AIDirector, "run", lambda self: (_ for _ in ()).throw(runners.TournamentAborted))
+        patch.setattr(runners.Controller, "run_round", release_then_quit)
         assert runners.run_ai(test_model=True, team=True) == 0
     return tmp_path / "20261101_100000_team-test"
 

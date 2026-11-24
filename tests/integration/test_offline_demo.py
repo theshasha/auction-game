@@ -71,7 +71,7 @@ def test_complete_ai_tournament(tmp_path, monkeypatch, capsys, config_files, tea
     snapshot = paths.read_config()
     assert snapshot["run_type"] == "offline" and snapshot["mode"] == "test_model"
     assert snapshot["prompts"] == config["prompts"]
-    capability_fields = ("max_tokens", "model_settings", "capabilities")
+    capability_fields = ("max_tokens", "model_settings", "capabilities", "price_multiplier")
     for pc, saved in zip(configs, snapshot["players"]):
         identity, execution = pc.identity, pc.execution
         # 合成目录没写 reasoning_effort，快照里也没有这一项。

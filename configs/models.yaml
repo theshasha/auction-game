@@ -1,5 +1,6 @@
 # 目录键供 players.yaml、teams.yaml 和 config.yaml 的 test_model 引用；models_dev 是该模型在 models.dev 里的条目，可能和渠道的 model ID 不同。
 # 推理档位的确定方法见 docs/usage.md 的"接入模型"。
+# 可选 price_multiplier：渠道实收美元 ÷ 官方美元价，不写为 1；人民币或额度的换算见 docs/usage.md 的"准备配置"。
 models:
   gpt_astra:
     name: GPT姐姐
