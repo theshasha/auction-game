@@ -283,6 +283,38 @@ def test_cancel_interrupts_task_and_logs_cancelled(script, texts, tmp_path):
     assert markdown.rstrip().endswith("> 已取消：用户按 q 退出比赛，请求被中断。\n\n---")
 
 
+class LeakyHarness(Harness):
+    """脚本项 "leak" 让传输层抛出 asyncio.CancelledError，模拟 SDK 内部漏出的取消。"""
+
+    async def handle(self, request):
+        if self.script and self.script[0] == "leak":
+            self.script.pop(0)
+            self.requests.append(None)
+            raise asyncio.CancelledError()
+        return await super().handle(request)
+
+
+@pytest.mark.parametrize("signals", [None, RunSignals()], ids=["no-signals", "not-cancelled"])
+def test_cancel_without_quit_is_program_error(signals, tmp_path):
+    h = LeakyHarness("chat", ["leak", reply()])
+    player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
+    before = deepcopy(player.messages)
+    with pytest.raises(RuntimeError, match="意外取消"):
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
+    assert len(h.requests) == 1 and player.messages == before
+    assert task_entries(player.log.path) == []
+
+
+def test_cancel_after_quit_is_still_task_cancelled(tmp_path):
+    signals = RunSignals()
+    signals.cancelled.set()
+    h = LeakyHarness("chat", ["leak"])
+    player = make_player(TaskRunner(replace(h.factory, signals=signals)), tmp_path)
+    with pytest.raises(TaskCancelledError):
+        player.bid(make_ai_obs(), {}, "第 1 局第 2 天出价")
+    assert [entry["status"] for entry in task_entries(player.log.path)] == ["cancelled"]
+
+
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_player_task_chain_replays_native_text_history_on_wire(protocol, tmp_path):
     long_summary = "观众总结" * 200

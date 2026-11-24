@@ -87,7 +87,10 @@ class AgentExecutor:
                            if signals is not None else None)
                 try:
                     result = await run
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as exc:
+                    if signals is None or not signals.cancelled.is_set():
+                        # 没按 q 却被取消，是 SDK 或传输层的问题，按程序错误停下，不当作 q 补跑。
+                        raise RuntimeError("请求被意外取消（没有按 q）") from exc
                     raise TaskCancelledError(messages=_audit(captured),
                                              request_errors=model.request_errors) from None
                 except (*REQUEST_ERRORS, UnexpectedModelBehavior, UsageLimitExceeded) as exc:

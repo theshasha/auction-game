@@ -39,7 +39,7 @@ class AIDirector:
         self.team = team_of is not None
         # 待送达的信：收件人到 {写信人: 正文}，写信人按配置顺序。
         self.mailbox: dict[str, dict[str, str]] = {}
-        # 重放期间记下的公开文件写入，核对通过后按顺序补写；不在重放时为 None。
+        # 重放期间记下的公开文件写入，第一轮新请求放行后按顺序补写；不在重放时为 None。
         self._deferred: list[Callable[[bool], None]] | None = [] if resuming else None
 
     def run(self) -> TournamentResult:
@@ -73,26 +73,25 @@ class AIDirector:
         return TournamentResult(logs, standings)
 
     def _report(self, write: Callable[[bool], None]) -> None:
-        """write(quiet) 写公开文件并打印。重放期间先记下：核对通过前不动这场已有的文件。"""
+        """write(quiet) 写公开文件并打印。重放期间先记下：重放结束前不动这场已有的文件。"""
         if self._deferred is None:
             write(False)
         else:
             self._deferred.append(write)
 
-    def _end_replay(self) -> bool:
-        """重放的记录都核对通过后，把场次文件补到重放结束时的样子，不打印；返回这次是否结束了重放。
+    def _end_replay(self) -> None:
+        """重放的记录都核对通过、第一轮新请求放行后，把场次文件补到重放结束时的样子，不打印。
 
         截掉任务日志的半行，重写私人对话，公开发言、信和逐局结果清空后按记下的顺序补写。
         """
         if self._deferred is None:
-            return False
+            return
         for player in self.players:
             player.log.restore_files()
         reset_reports(self.paths)
         for write in self._deferred:
             write(True)
         self._deferred = None
-        return True
 
     def _run_round(self, label: str, run: Callable[[AIPlayer, dict[str, str]], TaskOutput]) -> dict[str, TaskOutput]:
         """全员执行 run(玩家, 收到的信)；按配置中的玩家顺序返回各人的输出。
@@ -118,9 +117,12 @@ class AIDirector:
                 tasks.append(RoundTask(key=player.name, participant=player,
                                        fn=lambda player=player: run(player, inbox.get(player.name, {}))))
         if tasks:
-            if self._end_replay():
+            if self._deferred is None:
+                results.update(self.controller.run_round(tasks, label))
+            else:
+                # 放行这一轮后才改场次文件：放行前按 q，场次文件不动。
                 print(f"已恢复到：{label}（{len(self.players)} 人中 {len(results)} 人已完成）")
-            results.update(self.controller.run_round(tasks, label))
+                results.update(self.controller.run_round(tasks, label, on_start=self._end_replay))
         outputs = {player.name: results[player.name] for player in self.players}
         letters = [(sender, letter["to"], letter["text"]) for sender, output in outputs.items()
                    for letter in output.letters]

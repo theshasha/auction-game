@@ -23,10 +23,10 @@ def test_offline_all_rounds_use_configured_concurrency(config_files, tmp_path, m
 
     run_round = Controller.run_round
 
-    def run(controller, tasks, label):
+    def run(controller, tasks, label, **kwargs):
         assert controller.max_concurrency == 1
         controllers["bid" if label.endswith("出价") else "speech"].add(id(controller))
-        return run_round(controller, tasks, label)
+        return run_round(controller, tasks, label, **kwargs)
 
     monkeypatch.setattr(Controller, "run_round", run)
     run_dir = tmp_path / "offline"

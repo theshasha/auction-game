@@ -69,8 +69,8 @@ def complete_records(path):
     return [json.loads(line) for line in data[:data.rfind(b"\n") + 1].decode("utf-8").split("\n") if line.strip()]
 
 
-def resume_demo(run_dir, switch=None, histories=None, max_concurrency=1):
-    """用假模型接着跑一场离线赛，返回 continue_run 的退出码。
+def resume_demo(run_dir, switch=None, histories=None, max_concurrency=1, controller=None):
+    """用假模型接着跑一场离线赛，返回 continue_run 的退出码；controller 没给时用连续模式的离线控制器。
 
     假模型按调用次数推算局、天和信件编号，这里接着日志里的成功记录往下数。
     """
@@ -93,7 +93,8 @@ def resume_demo(run_dir, switch=None, histories=None, max_concurrency=1):
                 factory.letters_written += len(entry["result"].get("letters", ()))
         runners[pc["name"]] = runner
     with override_allow_model_requests(False):
-        return continue_run(run_dir, runners, OfflineController(mode="continuous", max_concurrency=max_concurrency))
+        return continue_run(run_dir, runners, controller or OfflineController(mode="continuous",
+                                                                               max_concurrency=max_concurrency))
 
 
 def run_files(run_dir):

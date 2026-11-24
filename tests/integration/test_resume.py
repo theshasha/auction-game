@@ -164,6 +164,31 @@ def test_half_written_record_and_missing_markdown_section_are_repaired(team_demo
     assert_same_run(run_dir, baseline)
 
 
+def test_quit_at_first_prompt_of_resume_changes_nothing(team_demo, tmp_path, monkeypatch, capsys):
+    """单步续跑显示恢复位置后按 q：半行和缺节的可读日志都留着，场次文件一个字节不动。"""
+    run_dir = tmp_path / "run"
+    with pytest.raises(Killed):
+        start_demo(monkeypatch, run_dir, KillSwitch(20), **team_demo)
+    paths = RunPaths(run_dir)
+    with paths.player(1).open("ab") as file:
+        file.write(b'{"task_id": "task-0005", "title": "\xe7\xac\xac 1 \xe5\xb1\x80')
+    readable = paths.player(2, readable=True)
+    text = readable.read_bytes()
+    readable.write_bytes(text[:text.rindex(b"## ")])
+    before = raw_files(run_dir)
+    capsys.readouterr()
+
+    def announce(message):
+        if message.startswith("[单步]"):
+            controller.offer_command("q")
+
+    controller = OfflineController(mode="step", announce=announce, max_concurrency=1)
+    assert resume_demo(run_dir, KillSwitch(0), controller=controller) == 0
+    output = capsys.readouterr().out
+    assert "已恢复到：" in output and "已退出比赛" in output
+    assert raw_files(run_dir) == before
+
+
 @pytest.mark.parametrize("damage", ["input", "order"])
 def test_log_that_differs_from_the_replay_stops_before_any_request_and_changes_nothing(
         damage, team_demo, tmp_path, monkeypatch, capsys):

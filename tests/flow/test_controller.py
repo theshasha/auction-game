@@ -90,10 +90,10 @@ def test_scoring_waits_for_round_confirmation_and_commits_once(monkeypatch, caps
         settlements.append(True)
         return settle(*args, **kwargs)
 
-    def record_round_start(tasks, label):
+    def record_round_start(tasks, label, **kwargs):
         if label == "第 1 局第 2 天出价":
             round_start.update((task.key, task.participant.checkpoint()) for task in tasks)
-        return run_round(tasks, label)
+        return run_round(tasks, label, **kwargs)
 
     monkeypatch.setattr(engine, "settle_day", count_settlement)
     monkeypatch.setattr(controller, "run_round", record_round_start)
@@ -363,6 +363,84 @@ class TestController:
         with running(controller, lambda: controller.wait_for_turn("测试轮")) as (thread, outcome):
             assert gate.wait(timeout=5)
             assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert "result" in outcome
+
+    @pytest.mark.parametrize("stop", ["failure", "pause"])
+    def test_enter_after_stop_returns_to_continuous_mode(self, stop):
+        gates = []
+        gate = threading.Event()
+
+        def announce(message):
+            if message.startswith("[单步]"):
+                gates.append(message)
+                gate.set()
+
+        controller = Controller(mode="continuous", announce=announce)
+        calls = []
+
+        def task():
+            calls.append(1)
+            if len(calls) == 1:
+                if stop == "failure":
+                    raise CallFailedError("测试失败")
+                controller.offer_command("p")
+            return "ok"
+
+        def run_two_rounds():
+            controller.run_round([RoundTask("t", task)], "第1轮")
+            controller.wait_for_turn("第2轮")
+
+        with running(controller, run_two_rounds) as (thread, outcome):
+            assert gate.wait(timeout=5)
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert "result" in outcome
+        assert len(gates) == 1 and "第1轮" in gates[0]
+
+    @pytest.mark.parametrize("mode,commands", [("continuous", ["s", ""]), ("step", [""])],
+                             ids=["s-at-stop", "step-before-pause"])
+    def test_enter_after_pause_stays_in_step_mode_when_step_was_chosen(self, mode, commands):
+        second_gate = threading.Event()
+        first_gate = threading.Event()
+
+        def announce(message):
+            if message.startswith("[单步]"):
+                (second_gate if "第2轮" in message else first_gate).set()
+
+        controller = Controller(mode=mode, announce=announce)
+        controller.offer_command("p")
+
+        def run_two_rounds():
+            controller.wait_for_turn("第1轮")
+            controller.wait_for_turn("第2轮")
+
+        with running(controller, run_two_rounds) as (thread, outcome):
+            assert first_gate.wait(timeout=5)
+            for command in commands:
+                controller.offer_command(command)
+            assert second_gate.wait(timeout=5)
+            assert "result" not in outcome
+            controller.offer_command("")
+            thread.join(timeout=5)
+            assert "result" in outcome
+
+    def test_pause_after_enter_while_paused_stops_at_next_round(self):
+        gates = []
+        controller = Controller(mode="continuous", announce=lambda m: m.startswith("[单步]") and gates.append(m))
+        for command in ("p", "", "p"):
+            controller.offer_command(command)
+
+        def run_two_rounds():
+            controller.wait_for_turn("第1轮")
+            controller.wait_for_turn("第2轮")
+
+        with running(controller, run_two_rounds) as (thread, outcome):
+            deadline = time.monotonic() + 5
+            while not gates and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert gates and "第2轮" in gates[0]
             controller.offer_command("")
             thread.join(timeout=5)
             assert "result" in outcome

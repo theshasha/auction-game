@@ -40,6 +40,8 @@ class Controller:
                  *, max_concurrency: int = 10):
         self.max_concurrency = max_concurrency
         self._mode = mode
+        # 暂停或失败切到单步前的模式，回车放行时恢复；c、s 明确选了模式后作废。
+        self._mode_before_stop: str | None = None
         self._pause_requested = False
         self._resume_requested = False
         self._quit_requested = False
@@ -56,16 +58,24 @@ class Controller:
         else:
             self.signals.paused.clear()
 
+    def _stop_to_step(self) -> None:
+        """暂停或失败时停下等确认：切到单步，记下原来的模式；已记下时不覆盖。"""
+        if self._mode_before_stop is None:
+            self._mode_before_stop = self._mode
+        self._mode = "step"
+
     def offer_command(self, command: str) -> None:
         message = None
         with self._changed:
             if command == "p":
-                # 已暂停时重复 p 不清除恢复意图。
+                # 已暂停时重复 p 不清除恢复意图，但回车恢复的连续模式作废，这一轮结束后停下。
                 if self._pause_requested:
+                    self._mode = "step"
+                    self._mode_before_stop = None
                     return
                 self._set_paused(True)
                 self._resume_requested = False
-                self._mode = "step"
+                self._stop_to_step()
                 self._gate.set()
                 message = ("[暂停] 停止新任务和失败请求的重发，等进行中的请求结束。成功结果保留。"
                            "回车或 c：等请求结束后继续；q：马上取消已启动的任务并退出比赛，已成功的结果续跑时沿用。")
@@ -75,9 +85,13 @@ class Controller:
                 if command == "c":
                     self._mode = "continuous"
                     message = "[控制] 切换到连续模式"
+                elif self._mode_before_stop is not None:
+                    self._mode = self._mode_before_stop
+                self._mode_before_stop = None
                 self._gate.set()
             elif command == "s":
                 self._mode = "step"
+                self._mode_before_stop = None
                 message = "[控制] 切换到单步模式"
             elif command == "q":
                 if self._quit_requested:
@@ -125,7 +139,7 @@ class Controller:
                 raise TournamentAborted
             if require_confirmation:
                 # 失败前的快速恢复命令不能代替失败后的补跑确认。
-                self._mode = "step"
+                self._stop_to_step()
                 self._resume_requested = False
             wait = True
             if self._pause_requested and self._resume_requested:
@@ -155,11 +169,13 @@ class Controller:
                 self._resume_requested = False
                 return
 
-    def run_round(self, tasks: list[RoundTask], label: str) -> dict[str, Any]:
+    def run_round(self, tasks: list[RoundTask], label: str, *,
+                  on_start: Callable[[], None] | None = None) -> dict[str, Any]:
         """运行一轮输入已固定的任务；全部成功，且暂停过时用户已确认继续，才返回结果。
 
         同时最多运行 max_concurrency 项。派发和暂停共用一把锁；即使 p 后立即恢复，
         也先等已启动任务结束并收集结果，再决定补跑或提交。
+        on_start 在这一轮放行后、派发任务前调用一次；放行前按 q 退出时不调用。
         """
         checkpoints = {task.key: task.participant.checkpoint()
                        for task in tasks if task.participant is not None}
@@ -177,6 +193,8 @@ class Controller:
         gate_label = label
         try:
             self.wait_for_turn(gate_label)
+            if on_start is not None:
+                on_start()
             while True:
                 if not pending:
                     with self._lock:
@@ -215,7 +233,7 @@ class Controller:
                                 failed[task.key] = str(exc)
                                 rollback(task)
                             except TaskCancelledError:
-                                rollback(task)  # 只在 q 之后发生，下面随即中止比赛
+                                rollback(task)  # 执行器只在按 q 之后抛出，下面随即中止比赛
                             except Exception as exc:
                                 if error is None:
                                     error = exc
