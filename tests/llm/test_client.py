@@ -438,7 +438,7 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
     from auction_game.configuration import PlayerConfig, ResolvedModel
     from auction_game.game.lineup import PlayerProfile
     monkeypatch.setattr(check_llm.secrets, "token_hex", lambda nbytes: "c0de")
-    h = Harness("responses", [response, reply(text="好"), reply(text="好")])
+    h = Harness("responses", [response, reply(text="1\n2"), reply(text="好"), reply(text="好")])
     model = ResolvedModel(key="fake", provider="fake", model="alias", protocol="responses",
                           models_dev={"provider": "fake", "model": "alias"}, price_multiplier=1, max_tokens=4096,
                           model_settings={"openai_reasoning_effort": "high"},
@@ -449,18 +449,19 @@ def test_probe_single_streamed_text_request_never_retries(response, status, monk
         [pc, pc],
     ))
     def factory(**kwargs):
-        assert kwargs["request_attempts"] == 1 and kwargs["max_tokens"] == 2048
+        # 核对用默认探测预算，测速用比赛预算以内的宽预算。
+        assert kwargs["request_attempts"] == 1 and kwargs["max_tokens"] in (2048, 4096)
         return replace(h.factory, request_attempts=kwargs["request_attempts"], max_tokens=kwargs["max_tokens"],
                        model_settings=kwargs["model_settings"])
     monkeypatch.setattr(check_llm, "make_model_factory", factory)
-    assert check_llm.main(["--concurrency", "1"]) == status
-    # 通过后还有两次缓存检查请求。
-    assert len(h.requests) == h.closes == (3 if status == 0 else 1)
+    assert check_llm.main(["--concurrency", "1", "--verbose"]) == status
+    # 通过后还有一次测速和两次缓存检查请求。
+    assert len(h.requests) == h.closes == (4 if status == 0 else 1)
     body = h.requests[0][1]
     assert body["stream"] is True
     assert body["reasoning"]["effort"] == "high"
     output = capsys.readouterr().out
-    assert "比赛预算=4096" in output and "本次探测预算=2048" in output
+    assert "比赛预算 4096" in output and "本次探测预算 2048" in output
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import re
 from dataclasses import dataclass
 
 import pydantic_ai
@@ -31,6 +32,32 @@ class CallFailedError(Exception):
         super().__init__(message)
         self.messages = list(messages)
         self.request_errors = list(request_errors)
+
+
+def request_status(message: str) -> int | None:
+    """请求失败的报错文字里的 HTTP 状态码。"""
+    status = re.search(r"(?:status_code[=: ]+|Error code: )(\d{3})", message)
+    return int(status[1]) if status else None
+
+
+def request_error_category(kind: str, message: str) -> str | None:
+    """把一次请求失败（request_errors 里的 type 和 message）归成一句中文原因；归不了类时返回 None。"""
+    code = request_status(message)
+    if code is not None:
+        reason = {400: "请求被拒绝", 401: "鉴权失败", 403: "访问被拒绝", 408: "请求超时",
+                  429: "服务限流或额度不足"}.get(code, "服务端故障" if code >= 500 else "请求失败")
+        return f"{reason}（HTTP {code}）"
+    if "Timeout" in kind or "Timeout" in message:
+        return "请求超时"
+    if kind == "IncompleteStream":
+        return f"响应未正常结束（{message}）"
+    if "Connect" in kind or "Network" in kind:
+        return "网络连接失败"
+    return None
+
+
+def request_error_reason(kind: str, message: str) -> str:
+    return request_error_category(kind, message) or f"{kind}：{' '.join(message.split())[:160]}"
 
 
 class OutputFailedError(CallFailedError):

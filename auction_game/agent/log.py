@@ -10,7 +10,7 @@ import re
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from auction_game.agent.tasks import TASKS
-from auction_game.llm.execution import CallFailedError, ExecutionResult, TaskCancelledError
+from auction_game.llm.execution import CallFailedError, ExecutionResult, TaskCancelledError, request_error_reason
 
 
 class ResumeError(Exception):
@@ -39,20 +39,7 @@ def _error_reason(entry: dict) -> str:
     if error["type"] == "OutputFailedError":
         return "输出校验失败（OutputFailedError）"
     latest = entry["request_errors"][-1] if entry["request_errors"] else error
-    kind, message = latest["type"], latest["message"]
-    status = re.search(r"(?:status_code[=: ]+|Error code: )(\d{3})", message)
-    if status:
-        code = int(status[1])
-        reason = {400: "请求被拒绝", 401: "鉴权失败", 403: "访问被拒绝", 408: "请求超时",
-                  429: "服务限流或额度不足"}.get(code, "服务端故障" if code >= 500 else "请求失败")
-        return f"{reason}（HTTP {code}）"
-    if "Timeout" in kind or "Timeout" in message:
-        return "请求超时"
-    if kind == "IncompleteStream":
-        return html.escape(f"响应未正常结束（{message}）")
-    if "Connect" in kind or "Network" in kind:
-        return "网络连接失败"
-    return html.escape(f"{kind}：{' '.join(message.split())[:160]}")
+    return html.escape(request_error_reason(latest["type"], latest["message"]))
 
 
 def _correction_reason(entry: dict) -> str:
