@@ -119,6 +119,7 @@ def estimate(models: list[SeatModel], game: GameSettings, *, team: bool,
 
     用量优先取这个模型同赛制的历史平均，没有时借用另一种赛制；都没有时输入、缓存命中率和回复条数取全部模型
     同任务的中位数，输出取全部模型同任务平均输出的最小到最大，给出区间。所有模型都没有的任务不计入。
+    团队赛的请求带队内信件区，输入偏大，所以团队赛借来的个人赛数据会偏低，个人赛借来的团队赛数据会偏高。
     """
     counts = task_counts(game, team=team)
     results = []

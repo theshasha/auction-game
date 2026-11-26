@@ -36,7 +36,7 @@ def test_resume_builds_lineup_and_models_from_snapshot_and_channels_from_current
     config_files[2].unlink()
     monkeypatch.setattr(runners, "load_configuration", lambda **kwargs: pytest.fail("续跑不读阵容和模型目录"))
     monkeypatch.setattr(runners, "load_game_settings", lambda **kwargs: pytest.fail("续跑不读当前比赛参数"))
-    monkeypatch.setattr(runners, "sync_root_rules", lambda *args, **kwargs: pytest.fail("续跑不生成根目录规则"))
+    monkeypatch.setattr(runners, "sync_root_rules", lambda *args, **kwargs: pytest.fail("续跑不生成 rules/ 下的规则"))
 
     def change(config):
         config["llm"]["channels"]["hub"]["base_url"] = "https://relay.invalid/v1"

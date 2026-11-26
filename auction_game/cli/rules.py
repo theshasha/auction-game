@@ -1,4 +1,4 @@
-"""生成或检查项目根目录的 RULES.md 和 RULES_TEAM.md；比赛启动时也会同步自己那份。"""
+"""生成或检查 rules/ 下的 RULES.md 和 RULES_TEAM.md；比赛启动时也会同步自己那份。"""
 
 from __future__ import annotations
 

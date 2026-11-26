@@ -1,15 +1,15 @@
 # 玩家和模型调用
 
-发言、讨论、出价、记忆和规划的轮次以及信的送达在 `auction_game/flow/`，改之前读 `auction_game/flow/AGENTS.md`；改重发和取消前读其中的"暂停、补跑、退出和续跑"。改私信或信件格式前读 `docs/letters.md`，改队内信件区前读 `docs/team-mode.md`。
+发言、讨论、出价、记忆和规划的轮次以及信的送达在 `auction_game/flow/`，改之前读 `auction_game/flow/AGENTS.md`；改重发和取消前读其中的"暂停、补跑、退出和续跑"。改私信或信件格式前读 `docs/design/letters.md`，改队内信件区前读 `docs/design/team.md`。
 
 ## 原则
 
 - 模型直接回复文本，请求不带工具或 JSON schema。格式错误和出价违规共用一次纠错机会，仍失败就让任务失败，由控制器等用户确认补跑。
-- 请求失败（HTTP 错误、网络错误、输出截断、流为空或没有正常结束）后等 10 秒重发，最多重发 3 次；暂停后不再重发。`vertex` 协议的例外见 `docs/usage.md` 的"接入模型"。程序错误原样抛出，不重发。
+- 请求失败（HTTP 错误、网络错误、输出截断、流为空或没有正常结束）后等 10 秒重发，最多重发 3 次；暂停后不再重发。`vertex` 协议的 SDK 会自己续接，见 `auction_game/llm/client.py` 的注释。程序错误原样抛出，不重发。
 - 客户端在任务自己的事件循环中创建和关闭。
 - 每个任务先写 JSONL，再写可读 Markdown，都写成功后才更新玩家状态；写入异常向上传递。
 - `analyze` 读任务日志 JSONL 的 `task`、`context`、`messages`、`request_errors`，改这几个键时同步改 `auction_game/reporting/analyze.py`。回放读 `status`、`title` 和 `result` 里的 `strategy`、`speech`、`memory`、`letters`，按轮次标题认出局和列，改这些键或轮次标题时同步改 `auction_game/reporting/replay.py` 的 `TITLES`。
-- 续跑读成功记录的 `title`、`task`、`messages`、`result`：结果由各种输出的 `from_log` 还原，改 `to_log` 时同步改它；请求文本只在 `tasks.request_prompt` 一处拼，续跑用它和记录里的输入比对。
+- 续跑读成功记录的 `title`、`task`、`messages`、`result`，用 `tasks.request_prompt` 重新拼出请求文本，和记录里的输入比对；请求文本只在这一处拼，别处另拼会让续跑对不上。
 - `strategy` 和记忆只对玩家本人可见，私信只对收件人可见，队内信件区的信只对队友可见，对手只看到公开发言。观众总结接着当前对话写，请求补上最新一版之前的各版记忆，结果不写回玩家历史。已完成任务的 thinking 只留在任务日志里，后续请求不带 thinking。
 - 新记忆替换旧记忆和之前的对话，所以提示要让模型保留有效经验、改掉被推翻的判断，只写结论，不写例子和出价记录；事实由程序在下一局规划请求里补回之前各局的完整出价日志，团队赛在下一局讨论第 1 轮的请求里补回。
 - 发言 300 字、私信 200 字左右、队内信件区的信 300 字左右、记忆 1000 字只写在提示里，程序不检查：检查会占用唯一一次纠错机会，失败还会让整场暂停。最终感言有意不设上限。

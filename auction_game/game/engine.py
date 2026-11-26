@@ -111,7 +111,10 @@ def compute_standings(names: list[str], logs: list[MatchLog], current: MatchLog 
 
 
 def team_standings(standings: list[StandingsEntry]) -> list[TeamStandingsEntry] | None:
-    """把个人排名按阵营汇总成阵营排名，同分并列、按阵营名排；个人赛的排名没有阵营，返回 None。"""
+    """把个人排名按阵营汇总成阵营排名，同分并列、按阵营名排；个人赛的排名没有阵营，返回 None。
+
+    阵营排名只在这里汇总，提示、排名表、终端和统计都调用它，判断第一名是否并列用 tournament.ranking。
+    """
     if not standings or standings[0].team is None:
         return None
     teams: dict[str, TeamStandingsEntry] = {}

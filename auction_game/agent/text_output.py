@@ -23,7 +23,7 @@ MAX_LETTERS = 2
 BRIEF_DISCUSSION_FORMAT = "请按上一轮的格式提交：strategy 和队内信件区两块。"
 # 固定块的标签，出现在附加块的位置就报块顺序错误；队内信件区在团队赛是附加块，所以不在其中。
 FIXED_TAGS = ("strategy", DECISION, SPEECH)
-# 读取阵容时，玩家名不能是这些标签，原因见 docs/letters.md 的"名字"。
+# 读取阵容时，玩家名不能是这些标签，原因见 docs/design/letters.md 的"名字"。
 RESERVED_NAMES = (*FIXED_TAGS, BOARD)
 
 
@@ -83,6 +83,7 @@ class TeamBoard:
     brief_bid = "请按本局规划时的格式提交：strategy 和 decision 两块，队内信件区的信可以不写。"
     order_note = "队内信件区的信放在最后"
     pair_error = f"队内信件区的信以 <{BOARD}> 开始、以 </{BOARD}> 结束，标签各占一行。"
+    # 提示和空信块的报错都写明不写信时省略整个块，否则纠错时会逼模型补一封空话。
     hint = "队内信件区的信可以不写，不写时省略整个块，最多 1 封，约 300 字。"
     outside_error = f"协议块外只允许空白。给队友的信只能写在 <{BOARD}> 块里。"
 

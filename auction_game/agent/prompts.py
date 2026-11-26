@@ -21,7 +21,7 @@ from auction_game.game.tables import (
 BID_HINT = "请分析局势并提交今日出价。"
 # 局末发言和最终感言收到的信写于本局最后一天出价时；一天一局时就是规划，规划请求同时交了这一天的出价。
 LAST_DAY_LETTERS = "在本局最后一天出价时"
-# 可以写信的请求在任务提示后写明这次的信什么时候送到，原因见 docs/letters.md 的"写信时的提醒"。
+# 可以写信的请求在任务提示后写明这次的信什么时候送到，原因见 docs/design/letters.md 的"送达时机"。
 NEXT_DAY_LETTER_DELIVERY = "这封信明天公布结果后才到，赶不上今天的出价。"
 OPENING_LETTER_DELIVERY = "现在写的私信，收件人在第 1 天出价时收到。"
 TEAM_OPENING_LETTER_DELIVERY = "现在写的信，队友在开局讨论第 1 轮看到。"
@@ -82,7 +82,7 @@ def _received_letters(received: dict[str, str] | None, written: str, team: bool)
     """收到的信接在事实信息之后、任务提示之前；没有信时不出现。received 是写信人到正文。
 
     written 说明信是在哪一环节写的：每次送到的信都来自收件人上一次行动的那一轮，
-    信里的"今日"指写信那天。
+    信里的"今日"指写信那天。团队赛只有队内信件区这一个渠道，标题不写渠道名。
     """
     if not received:
         return []
@@ -150,7 +150,7 @@ def past_matches_info(past_logs: list[MatchLog], standings: list[StandingsEntry]
 
 def discussion_request(match_index: int, round_number: int, *, others_speeches: dict[str, str] | None = None,
                        past_matches: str | None = None, received: dict[str, str] | None = None) -> str:
-    """团队赛开局讨论的一轮；讨论的机制在规则里，这里只写第几轮和这一轮的信什么时候到。
+    """团队赛开局讨论的一轮；讨论的机制在规则里，这里只写第几轮和这一轮的信什么时候到，规则不写具体送达时间。
 
     第 1 轮先列第 1 局的其他玩家开局发言，或之后各局的 past_matches_info，之后留在对话里。
     收到的信来自上一环节；第 2 局起第 1 轮的上一环节是整理记忆，收不到信。
@@ -179,7 +179,10 @@ def opening_plan_request(others_speeches: dict[str, str], game: GameSettings, *,
 
 
 def _teammate_miss_note(obs: Observation) -> list[str]:
-    """落空而价位上有正常出价，只会是团队赛里这个价只有队友出了；照规则例子的说法写明原因。"""
+    """落空而价位上有正常出价，只会是团队赛里这个价只有队友出了；照规则例子的说法写明原因。
+
+    同一张表里明明有人出了这个价，只靠规则，模型可能以为结算出错，或以为对方没出这个价。
+    """
     yesterday = obs.today_history[-1]
     mine = yesterday.result_of(obs.my_name)
     teammates = [result.player for result in yesterday.players if result.bid == mine.super_bid]

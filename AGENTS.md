@@ -17,7 +17,7 @@
 - 玩家名单和分组只在 `configs/players.yaml`、`configs/teams.yaml` 中维护。
 - 字段含义见 `docs/usage.md`。
 
-规则正文以 `RULES.template.md` 为准，团队赛另有 `RULES_TEAM.template.md`；改规则时两份模板和代码一起改。根目录的 `RULES.md`、`RULES_TEAM.md` 由程序生成，不手改。
+规则正文以 `rules/RULES.template.md` 为准，团队赛另有 `rules/RULES_TEAM.template.md`；改规则时两份模板和代码一起改。`rules/` 下的 `RULES.md`、`RULES_TEAM.md` 由程序生成，不手改。
 
 ## 入口
 
@@ -28,13 +28,13 @@
 - 规则或经济参数：`docs/design/rules.md`。
 - 整场流程、各阶段的轮次，暂停、补跑、退出和续跑：`auction_game/flow/AGENTS.md`。
 - 模型调用、提示、对话历史和发言：`auction_game/agent/AGENTS.md`。
-- 私信和信件格式：`docs/letters.md`。
-- 团队赛：`docs/team-mode.md`。
+- 私信和信件格式：`docs/design/letters.md`。
+- 团队赛：`docs/design/team.md`。
 - 人设：`docs/design/personas.md`。
 - 日志和统计：`auction_game/reporting/AGENTS.md`，统计口径见 `docs/analyze.md`。
 - 用户命令和日志说明：`docs/usage.md`。
 
-以上改动都先看 `docs/design/rejected.md` 的相关条目。
+设计文档各篇末尾的"没采用的方案"列着讨论过、被否掉的做法，改动前先看相关条目。测试赛里观察到的模型行为在 `docs/design/findings.md`。
 
 ## 费用边界
 

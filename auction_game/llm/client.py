@@ -171,7 +171,9 @@ class ModelFactory:
         if self.protocol == "vertex":
             # 快速模式密钥。COLLECTION 让 SDK 把渠道地址原样当作 publishers/... 的前缀，版本、项目和区域都由渠道地址决定。
             # 不给 retry_options 时 SDK 不重发被拒的请求；不注入 httpx2 客户端时 SDK 在装了 aiohttp 的环境里改用 aiohttp，
-            # 传输错误就不再是 httpx2 的。SDK 的自动续接保留，影响见 docs/usage.md 的"接入模型"。
+            # 传输错误就不再是 httpx2 的。SDK 的自动续接保留：输出写到 Vertex 单次上限还没写完或流中途断开时，
+            # SDK 带续接令牌自己接着请求。这些请求不记入任务日志的请求错误，暂停时也会跑完，每次续接单独计费，
+            # 用量里的输入也包括续接重发的部分。
             sdk = genai.Client(vertexai=True, api_key=self.api_key, http_options=HttpOptions(
                 base_url=self.base_url, base_url_resource_scope=ResourceScope.COLLECTION,
                 httpx_async_client=client))

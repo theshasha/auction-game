@@ -142,6 +142,8 @@ class AIDirector:
         outputs = {player.name: results[player.name] for player in self.players}
         letters = [(sender, letter["to"], letter["text"]) for sender, output in outputs.items()
                    for letter in output.letters]
+        # 信只写进 letters.md，不打印到终端：个人赛一天最多 12 封私信，太长。
+        # 队内信件区的信沿用私信的数据，to 是固定标签，放进写信人每名队友的邮箱。
         logged = [(sender, self.team_of[sender] if to == BOARD else to, text) for sender, to, text in letters]
         self._report(lambda quiet: record_letters(self.paths, label, logged, team=self.team))
         mailbox: dict[str, dict[str, str]] = {}

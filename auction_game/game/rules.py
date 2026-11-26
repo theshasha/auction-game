@@ -7,7 +7,7 @@ from auction_game.game.settings import DISCUSSION_ROUNDS, GameSettings
 from auction_game.paths import TEAM_TEMPLATE_PATH, TEMPLATE_PATH
 
 def rules_document(game: GameSettings, lineup: Lineup, *, root: bool) -> str:
-    """规则文件的全文：一行生成说明加正文。root 为项目根目录那份，否则是场次目录里的本场规则。"""
+    """规则文件的全文：一行生成说明加正文。root 为 rules/ 下那份，否则是场次目录里的本场规则。"""
     template = TEAM_TEMPLATE_PATH.name if lineup.teams else TEMPLATE_PATH.name
     if root:
         mode = "团队赛" if lineup.teams else "个人赛"

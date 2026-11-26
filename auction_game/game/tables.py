@@ -65,7 +65,8 @@ def render_match_log(log: MatchLog) -> str:
 def render_standings(standings: list[StandingsEntry]) -> str:
     """按总分展示累计排名及已结束局分数，拍卖分和命中分作为辅助信息。
 
-    总分只由拍卖分和命中分组成，命中分用两者之差得出。团队赛先列阵营排名，玩家表多一列阵营。
+    总分只由拍卖分和命中分组成，命中分用两者之差得出。团队赛先列阵营排名，玩家表多一列阵营；
+    玩家表保留个人名次，规则没写"没有个人排名"，两者不矛盾。
     """
     match_count = len(standings[0].scores_per_match) if standings else 0
     score_headers = ["总分", *(f"第{i + 1}局" for i in range(match_count)), "拍卖分", "命中分"]

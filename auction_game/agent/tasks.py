@@ -28,6 +28,7 @@ def _strategy_and_letters(strategy: str, letters: list[dict], result: str) -> li
     return lines
 
 
+# 各种输出的 to_log 写进任务日志的 result，续跑由同一类的 from_log 还原，改一边时同步改另一边。
 @dataclass(frozen=True)
 class BidOutput:
     """出价和规划的结果；规划交的是本局第 1 天的出价。

@@ -38,6 +38,7 @@ def effective_capabilities(model: ModelEntry, snapshot: dict) -> dict:
     has_high = any(option.get("type") == "effort" and "high" in option.get("values", [])
                    for option in options)
     # 比赛一轮常超过 5 分钟。消息级缓存点是兼容网关用的写法，不依赖请求顶层的 cache_control。
+    # 实际时长由渠道决定：hub_anthropic 实测按 5 分钟写入。其他协议由渠道自行缓存，vertex 是隐式缓存。
     settings = {"anthropic_cache_messages": "1h"} if model.protocol == "anthropic" else {}
     if model.reasoning_effort is not None:
         status, detail = model.reasoning_effort, "models.yaml 指定"

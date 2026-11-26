@@ -1,3 +1,4 @@
+# 改经济参数时一起改 docs/design/rules.md 的"当前参数的关系"。
 initial_coins: 12
 daily_salary: 6
 daily_pool: [3, 3, 3, 3, 3]

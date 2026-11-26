@@ -17,7 +17,7 @@ def main(argv=None) -> int:
     parser.add_argument("--team", action="store_true", help="团队赛，阵容读 configs/teams.yaml")
     parser.add_argument("--test-model", action="store_true", help="全员用 config.yaml 的 test_model，按测试参数")
     args = parser.parse_args(argv)
-    # 不走 prepare_start：它会改写根目录的规则文件。
+    # 不走 prepare_start：它会改写 rules/ 下的规则文件。
     try:
         _, player_configs = load_configuration(test_model=args.test_model, team=args.team)
         game = load_game_settings(test_model=args.test_model)

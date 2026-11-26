@@ -1,6 +1,8 @@
 """按官方单价和价格倍率算模型回复的花费（美元），口径见 docs/analyze.md 的"模型用量"。
 
 单价是能力快照里 models.dev 的 cost，每百万 token 的美元价；本模块只接收用量、单价和倍率，不读配置。
+日志里回复的 usage.cost 是 pydantic-ai 按它自带的价表算的，只有 Anthropic 协议有，所以不用。
+hub_anthropic 的回复不区分 5 分钟和 1 小时缓存写入，全部按 cache_write（5 分钟价）计。
 """
 
 from __future__ import annotations

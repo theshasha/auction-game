@@ -21,7 +21,7 @@ LLM_FIELDS = ("max_concurrency", "timeout_seconds", "channels")
 CHANNEL_FIELDS = ("base_url", "base_url_env", "api_key_env")
 # 阵容里每名玩家的字段；players.yaml 另有 predicted_win_rate，团队赛没有。
 PLAYER_FIELDS = ("name", "model", "persona_title", "persona_text")
-# 团队赛固定 2 个阵营、每队 3 人，原因见 docs/team-mode.md 的"赛制"。
+# 团队赛固定 2 个阵营、每队 3 人，原因见 docs/design/team.md 的"赛制"。
 TEAM_COUNT = 2
 TEAM_SIZE = 3
 
@@ -333,7 +333,7 @@ def _lineup_player(path, field, player, entries, names, allowed) -> tuple[str, s
 
 
 def _player_name(path, field, player, model_key, catalog_name) -> str:
-    """阵容写了 name 就用它，否则用目录里的角色名。限制的原因见 docs/letters.md 的"名字"。"""
+    """阵容写了 name 就用它，否则用目录里的角色名。限制的原因见 docs/design/letters.md 的"名字"。"""
     if "name" in player:
         name = player["name"]
         if not isinstance(name, str) or not name:

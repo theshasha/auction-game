@@ -63,13 +63,13 @@ def make_task_runners(llm: dict, calls: dict[str, dict], model_factory, runner=T
 
 
 def root_rules(game: GameSettings, *, team: bool) -> tuple[Path, str]:
-    """根目录规则的路径和内容：个人赛是 RULES.md，团队赛是 RULES_TEAM.md，角色名取自阵容配置，不读能力快照。"""
+    """rules/ 下规则的路径和内容：个人赛是 RULES.md，团队赛是 RULES_TEAM.md，角色名取自阵容配置，不读能力快照。"""
     lineup = Lineup(tuple(profile for profile, _ in (load_teams() if team else load_players())))
     return TEAM_RULES_PATH if team else RULES_PATH, rules_document(game, lineup, root=True)
 
 
 def sync_root_rules(game: GameSettings, *, team: bool) -> None:
-    """内容变了才重写根目录规则。"""
+    """内容变了才重写 rules/ 下的规则。"""
     path, text = root_rules(game, team=team)
     if not path.exists() or path.read_text(encoding="utf-8") != text:
         path.write_text(text, encoding="utf-8")
@@ -200,7 +200,7 @@ def resume_ai(run_dir: Path | None = None) -> int:
     """接着跑一场没打完的真实模型比赛；run_dir 没给时取 logs/ 下最新一场没打完的。
 
     参数、阵容和每个席位调用的模型取自场次快照，渠道地址、超时、并发和密钥取自当前配置。
-    根目录的规则反映当前配置，和这一场无关，续跑不生成。
+    rules/ 下的规则反映当前配置，和这一场无关，续跑不生成。
     """
     try:
         if run_dir is None:
