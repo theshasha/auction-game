@@ -18,6 +18,14 @@ models:
     models_dev:
       provider: openai
       model: gpt-6.2-sol
+  gpt_terra:
+    name: GPT妹妹
+    model: gpt-6.1-terra
+    provider: hub
+    protocol: responses
+    models_dev:
+      provider: openai
+      model: gpt-6.1-terra
   gpt_luna:
     name: GPT小妹妹
     model: gpt-6-luna
@@ -132,6 +140,14 @@ models:
     models_dev:
       provider: moonshotai
       model: kimi-k3.1-pro
+  kimi_k26:
+    name: Kimi妹妹
+    model: kimi-k2.6
+    provider: hub
+    protocol: chat
+    models_dev:
+      provider: moonshotai
+      model: kimi-k2.6
   qwen_flash:
     name: 千问妹妹
     model: qwen3.8-flash

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-11-27T05:19:46.570836+00:00",
+  "fetched_at": "2026-11-27T07:56:28.267142+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -87,6 +87,51 @@
             "output": 15,
             "cache_read": 0.2,
             "cache_write": 5
+          }
+        ]
+      }
+    },
+    "gpt_terra": {
+      "source": {
+        "provider": "openai",
+        "model": "gpt-6.1-terra"
+      },
+      "status": "matched",
+      "matched_id": "gpt-6.1-terra",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "effort",
+          "values": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      ],
+      "cost": {
+        "input": 1,
+        "output": 5,
+        "cache_read": 0.05,
+        "cache_write": 1.25,
+        "tiers": [
+          {
+            "tier": {
+              "type": "context",
+              "size": 272000
+            },
+            "input": 2,
+            "output": 7.5,
+            "cache_read": 0.1,
+            "cache_write": 2.5
           }
         ]
       }
@@ -559,6 +604,30 @@
         "output": 10,
         "cache_read": 0.2,
         "cache_write": 2
+      }
+    },
+    "kimi_k26": {
+      "source": {
+        "provider": "moonshotai",
+        "model": "kimi-k2.6"
+      },
+      "status": "matched",
+      "matched_id": "kimi-k2.6",
+      "limit": {
+        "context": 262144,
+        "input": null,
+        "output": 262144
+      },
+      "reasoning": true,
+      "reasoning_options": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "cost": {
+        "input": 0.95,
+        "output": 4,
+        "cache_read": 0.16
       }
     },
     "qwen_flash": {
