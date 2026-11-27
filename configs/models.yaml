@@ -34,22 +34,22 @@ models:
     models_dev:
       provider: deepseek
       model: deepseek-flash
-  gemini_hydrogen:
+  gemini_flash:
     name: 双子妹妹
-    model: gemini-4-hydrogen
+    model: gemini-3.8-flash
     provider: vertex
     protocol: vertex
     models_dev:
       provider: google-vertex
-      model: gemini-4-hydrogen
-  gemini_neon:
+      model: gemini-3.8-flash
+  gemini_pro:
     name: 双子姐姐
-    model: gemini-4-neon
+    model: gemini-3.1-pro-preview
     provider: vertex
     protocol: vertex
     models_dev:
       provider: google-vertex
-      model: gemini-4-neon
+      model: gemini-3.1-pro-preview
   glm_pro:
     name: GLM姐姐
     model: glm-5.3

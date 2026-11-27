@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_from": "https://models.dev/api.json",
-  "fetched_at": "2026-11-24T07:34:40.269884+00:00",
+  "fetched_at": "2026-11-27T05:19:46.570836+00:00",
   "models": {
     "gpt_astra": {
       "source": {
@@ -169,13 +169,13 @@
         "reasoning": 0.6
       }
     },
-    "gemini_hydrogen": {
+    "gemini_flash": {
       "source": {
         "provider": "google-vertex",
-        "model": "gemini-4-hydrogen"
+        "model": "gemini-3.8-flash"
       },
       "status": "matched",
-      "matched_id": "gemini-4-hydrogen",
+      "matched_id": "gemini-3.8-flash",
       "limit": {
         "context": 1048576,
         "input": null,
@@ -188,24 +188,23 @@
           "values": [
             "low",
             "medium",
-            "high",
-            "xhigh"
+            "high"
           ]
         }
       ],
       "cost": {
-        "input": 1.5,
-        "output": 7.5,
+        "input": 0.75,
+        "output": 3.75,
         "cache_read": 0.075
       }
     },
-    "gemini_neon": {
+    "gemini_pro": {
       "source": {
         "provider": "google-vertex",
-        "model": "gemini-4-neon"
+        "model": "gemini-3.1-pro-preview"
       },
       "status": "matched",
-      "matched_id": "gemini-4-neon",
+      "matched_id": "gemini-3.1-pro-preview",
       "limit": {
         "context": 1048576,
         "input": null,
@@ -218,15 +217,25 @@
           "values": [
             "low",
             "medium",
-            "high",
-            "xhigh"
+            "high"
           ]
         }
       ],
       "cost": {
-        "input": 3,
-        "output": 15,
-        "cache_read": 0.15
+        "input": 2,
+        "output": 12,
+        "cache_read": 0.2,
+        "tiers": [
+          {
+            "tier": {
+              "type": "context",
+              "size": 200000
+            },
+            "input": 4,
+            "output": 18,
+            "cache_read": 0.4
+          }
+        ]
       }
     },
     "glm_pro": {
