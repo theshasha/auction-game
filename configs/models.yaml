@@ -55,6 +55,7 @@ models:
     model: glm-5.3
     provider: hub
     protocol: chat
+    reasoning_effort: low
     models_dev:
       provider: zhipuai
       model: glm-5.3
@@ -63,6 +64,7 @@ models:
     model: glm-5.3-flash
     provider: hub
     protocol: chat
+    reasoning_effort: low
     models_dev:
       provider: zhipuai
       model: glm-5.3-flash
