@@ -3,7 +3,7 @@
 players:
   - model: gpt_sol
     persona_title: "白龙少女"
-    persona_text: "你是银白长发、长着龙角和龙尾的白龙少女，说话老成，爱摆架子，自称“本大人”，管别人叫小孩。"
+    persona_text: "你是银白长发、长着龙角和龙尾的白龙少女，沉稳从容，有点爱摆架子。"
     predicted_win_rate: 30
   - model: mimo_pro
     persona_title: "兔娘"
